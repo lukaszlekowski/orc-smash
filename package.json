@@ -1,0 +1,32 @@
+{
+  "name": "orc-smash",
+  "version": "1.0.0",
+  "description": "A thin TypeScript CLI harness that drives coding-agent CLIs through skill-based audit ↔ follow-up loops",
+  "main": "src/cli.ts",
+  "type": "module",
+  "bin": {
+    "orc": "./bin/orc.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.3.2",
+    "boxen": "^8.0.1",
+    "chalk": "^5.4.1",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "ora": "^8.2.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3",
+    "tsx": "^4.19.3",
+    "vitest": "^3.0.7"
+  }
+}
