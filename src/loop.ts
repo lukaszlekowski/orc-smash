@@ -1,14 +1,15 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve, relative } from 'node:path';
 import ora from 'ora';
 import chalk from 'chalk';
-import { scan, type HistoryEntry } from './state.js';
+import { scan, parseOutcome, type Step, type StepStatus } from './state.js';
 import { getAdapter } from './adapters/types.js';
 import { composePrompt } from './prompt-composer.js';
-import { stampProvenance } from './provenance.js';
+import { writeArtifactWithMeta, type ArtifactMeta } from './provenance.js';
 import { parseVerdict } from './verdict.js';
 import { renderStatusPanel } from './status.js';
 import { promptSecondOpinionDecision, promptSecondOpinionRunner } from './interactive.js';
+import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
 import type { LoopSpec } from './manifest.js';
 
@@ -28,8 +29,8 @@ export async function runLoop(
   options: LoopOptions
 ): Promise<{ success: boolean; verdict: string; message: string; lastAuditPath: string | null }> {
   // 1. Initial State scan
-  const initialScan = scan(projectRoot, loopSpec.auditPattern);
-  if (initialScan.latestVerdict === 'unknown' && initialScan.history.length > 0) {
+  const initialScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
+  if (initialScan.latestVerdict === 'unknown' && initialScan.auditSteps.length > 0) {
     throw new Error(`latest audit is unparseable; resolve or delete it before smashing`);
   }
 
@@ -48,9 +49,15 @@ export async function runLoop(
     pendingFollowUp = false;
   }
 
-  const history = [...initialScan.history];
+  const steps: Step[] = [...initialScan.timeline];
   let iteration = 0;
-  let lastAuditPath: string | null = history[history.length - 1]?.filePath || null;
+  let lastAuditPath: string | null = steps.filter(s => s.kind === 'audit').pop()?.artifactPath ?? null;
+
+  const latestAuditStep = () => steps.filter(s => s.kind === 'audit').pop() ?? null;
+  /** Relativize an artifact path to projectRoot for portable front matter (m5).
+   *  Mirrors resolveInput's priorAudit logic in prompt-composer.ts. */
+  const priorAuditRel = (root: string, p: string | null | undefined): string =>
+    p ? (p.startsWith(root) ? relative(root, p) : p) : 'none';
 
   while (iteration < options.maxIterations) {
     // --- Step A: Follow-up ---
@@ -75,7 +82,7 @@ export async function runLoop(
           currentIteration: iteration,
           maxIterations: options.maxIterations,
           activeSkillRunner: { skillId: followUpSkillId, agent: runner.agent, model: runner.model },
-          history,
+          timeline: steps,
           nextStepMessage: `Executing follow-up on version ${N - 1} rejection...`
         })
       );
@@ -85,7 +92,8 @@ export async function runLoop(
         throw new Error(`Role file '${followUpSkill.role}' not found in roles list`);
       }
 
-      const priorAuditPath = history[history.length - 1]?.filePath || null;
+      const priorAuditPath = latestAuditStep()?.artifactPath ?? null;
+      const followUpVersion = N - 1;
       const prompt = composePrompt(
         followUpSkillId,
         roleFile,
@@ -93,9 +101,10 @@ export async function runLoop(
         loopSpec,
         {
           targetRoot: projectRoot,
-          version: N,
+          version: followUpVersion,
           priorAuditPath,
-          agentName: runner.agent
+          agentName: runner.agent,
+          kind: 'follow-up'
         }
       );
 
@@ -108,15 +117,39 @@ export async function runLoop(
         cwd: projectRoot
       });
 
-      if (result.exitCode !== 0) {
-        spinner.fail(`Follow-up execution failed with exit code ${result.exitCode}`);
+      if (result.error || result.exitCode !== 0) {
+        spinner.fail(`Follow-up ${result.error?.kind ?? 'failed'}`);
         return {
           success: false,
           verdict: 'unknown',
-          message: `Follow-up failed with exit code ${result.exitCode}. Output: ${result.stdout}`,
+          message: structuredMessage(result, { label: 'Follow-up', model: runner.model }),
           lastAuditPath
         };
       }
+
+      const relFollowUpPath = loopSpec.followUpPattern
+        .replace('{n}', String(followUpVersion))
+        .replace('{agent}', runner.agent);
+      const absFollowUpPath = resolve(projectRoot, relFollowUpPath);
+      const followUpStatus: StepStatus = (result.error || result.exitCode !== 0) ? 'failed' : 'done';
+      let followUpOutcome: 'patched' | 'blocked' = 'patched';
+      if (existsSync(absFollowUpPath)) {
+        const body = readFileSync(absFollowUpPath, 'utf-8');
+        followUpOutcome = parseOutcome(body);   // single parser shared with scan — no inline regex (m2)
+        const meta: ArtifactMeta = {
+          loop: loopName, skill: followUpSkillId, kind: 'follow-up', role: followUpSkill.role,
+          version: followUpVersion, agent: runner.agent, model: runner.model,
+          target: loopSpec.target,
+          priorAudit: priorAuditRel(projectRoot, latestAuditStep()?.artifactPath),  // relativized (m5)
+          timestamp: new Date().toISOString()
+        };
+        writeArtifactWithMeta(absFollowUpPath, body, meta);
+      }
+      steps.push({
+        kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
+        version: followUpVersion, status: followUpStatus, outcome: followUpOutcome,
+        artifactPath: absFollowUpPath, mtime: Date.now()
+      });
 
       spinner.succeed(`Follow-up completed successfully`);
       pendingFollowUp = false;
@@ -143,7 +176,7 @@ export async function runLoop(
         currentIteration: iteration,
         maxIterations: options.maxIterations,
         activeSkillRunner: { skillId: auditSkillId, agent: runner.agent, model: runner.model },
-        history,
+        timeline: steps,
         nextStepMessage: `Running audit for version ${N}...`
       })
     );
@@ -153,7 +186,7 @@ export async function runLoop(
       throw new Error(`Role file '${auditSkill.role}' not found in roles list`);
     }
 
-    const priorAuditPath = history[history.length - 1]?.filePath || null;
+    const priorAuditPath = latestAuditStep()?.artifactPath ?? null;
     const prompt = composePrompt(
       auditSkillId,
       roleFile,
@@ -163,7 +196,8 @@ export async function runLoop(
         targetRoot: projectRoot,
         version: N,
         priorAuditPath,
-        agentName: runner.agent
+        agentName: runner.agent,
+        kind: 'audit'
       }
     );
 
@@ -175,6 +209,16 @@ export async function runLoop(
       model: runner.model,
       cwd: projectRoot
     });
+
+    if (result.error) {
+      spinner.fail(`Audit ${result.error.kind}`);
+      return {
+        success: false,
+        verdict: 'unknown',
+        message: structuredMessage(result, { label: 'Audit', model: runner.model }),
+        lastAuditPath
+      };
+    }
 
     spinner.succeed(`Audit execution completed`);
 
@@ -201,7 +245,7 @@ export async function runLoop(
           currentIteration: iteration,
           maxIterations: options.maxIterations,
           activeSkillRunner: null,
-          history,
+          timeline: steps,
           nextStepMessage: chalk.red(`Terminal: unknown verdict on version ${N}`)
         })
       );
@@ -215,18 +259,21 @@ export async function runLoop(
 
     // Write provenance stamp to audit file
     if (fileContent !== null) {
-      const stamp = stampProvenance(runner.agent, runner.model, N);
-      writeFileSync(absOutputPath, fileContent + stamp);
+      const meta: ArtifactMeta = {
+        loop: loopName, skill: auditSkillId, kind: 'audit', role: auditSkill.role,
+        version: N, agent: runner.agent, model: runner.model,
+        target: loopSpec.target,
+        priorAudit: priorAuditRel(projectRoot, latestAuditStep()?.artifactPath),  // relativized (m5)
+        timestamp: new Date().toISOString()
+      };
+      writeArtifactWithMeta(absOutputPath, fileContent, meta);
     }
 
     lastAuditPath = absOutputPath;
-    history.push({
-      version: N,
-      agent: runner.agent,
-      model: runner.model,
-      verdict,
-      filePath: absOutputPath,
-      mtime: Date.now()
+    steps.push({
+      kind: 'audit', role: auditSkill.role, agent: runner.agent, model: runner.model,
+      version: N, status: 'done', verdict,
+      artifactPath: absOutputPath, mtime: Date.now()
     });
 
     // Display Updated Status
@@ -238,7 +285,7 @@ export async function runLoop(
         currentIteration: iteration,
         maxIterations: options.maxIterations,
         activeSkillRunner: null,
-        history,
+        timeline: steps,
         nextStepMessage: `Completed iteration ${iteration} with verdict: ${verdict}`
       })
     );

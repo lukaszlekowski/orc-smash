@@ -2,7 +2,7 @@ import type { Config } from './config.js';
 
 export function isValidModelForAgent(agent: string, model: string): boolean {
   if (agent === 'opencode') {
-    return model.startsWith('opencode/');
+    return /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(model);
   }
   if (agent === 'claude') {
     return model.startsWith('claude-');

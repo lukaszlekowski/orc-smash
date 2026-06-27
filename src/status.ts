@@ -1,7 +1,7 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
 import chalk from 'chalk';
-import type { HistoryEntry } from './state.js';
+import type { Step } from './state.js';
 
 export interface PanelContext {
   projectRoot: string;
@@ -9,7 +9,7 @@ export interface PanelContext {
   currentIteration: number;
   maxIterations: number;
   activeSkillRunner: { skillId: string; agent: string; model: string } | null;
-  history: HistoryEntry[];
+  timeline: Step[];
   nextStepMessage: string;
 }
 
@@ -27,28 +27,53 @@ export function renderStatusPanel(context: PanelContext): string {
 
   // Create table
   const table = new Table({
-    head: ['Ver', 'Agent', 'Model', 'Verdict', 'Status'],
+    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Status'],
     style: { head: ['cyan'], border: ['gray'] }
   });
 
-  const latestIndex = context.history.length - 1;
-  context.history.forEach((h, index) => {
-    let verdictStr: string = h.verdict;
-    if (h.verdict === 'APPROVED') {
-      verdictStr = chalk.bold.green(h.verdict);
-    } else if (h.verdict === 'REJECTED') {
-      verdictStr = chalk.bold.red(h.verdict);
+  const latestIndex = context.timeline.length - 1;
+  context.timeline.forEach((s, index) => {
+    let resultStr = '';
+    if (s.kind === 'audit') {
+      const v = s.verdict;
+      if (v === 'APPROVED') {
+        resultStr = chalk.bold.green(v);
+      } else if (v === 'REJECTED') {
+        resultStr = chalk.bold.red(v);
+      } else {
+        resultStr = chalk.bold.yellow(v ?? 'unknown');
+      }
     } else {
-      verdictStr = chalk.bold.yellow(h.verdict);
+      const o = s.outcome;
+      if (o === 'patched') {
+        resultStr = chalk.green(o);
+      } else if (o === 'blocked') {
+        resultStr = chalk.yellow(o);
+      } else {
+        resultStr = o ?? '';
+      }
     }
 
-    const marker = index === latestIndex ? chalk.blue('◀ latest') : '';
+    if (index === latestIndex) {
+      resultStr += ` ${chalk.blue('◀ latest')}`;
+    }
+
+    let statusStr = '';
+    if (s.status === 'running') {
+      statusStr = chalk.yellow('running');
+    } else if (s.status === 'failed') {
+      statusStr = chalk.red('failed');
+    } else {
+      statusStr = chalk.gray('done');
+    }
+
     table.push([
-      String(h.version),
-      h.agent,
-      h.model,
-      verdictStr,
-      marker
+      String(s.version),
+      s.role,
+      s.agent,
+      s.model,
+      resultStr,
+      statusStr
     ]);
   });
 
@@ -59,7 +84,7 @@ export function renderStatusPanel(context: PanelContext): string {
     `Active Runner:    ${activeStr}`,
     `Next Step:        ${chalk.white(context.nextStepMessage)}`,
     '',
-    chalk.bold('Audit History:'),
+    chalk.bold('Timeline:'),
     table.toString()
   ].join('\n');
 

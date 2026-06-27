@@ -10,25 +10,25 @@ skills:
     role: auditor
     kind: audit
     agent: opencode
-    model: opencode/deepseek-v4-flash
+    model: opencode-go/deepseek-v4-flash
   plan-follow-up:
     file: skills/22-simple-plans-follow-up/SKILL.md
     role: planner
     kind: follow-up
     agent: opencode
-    model: opencode/deepseek-v4-flash
+    model: opencode-go/deepseek-v4-flash
   review:
     file: skills/40-simple-review/SKILL.md
     role: reviewer
     kind: audit
     agent: opencode
-    model: opencode/deepseek-v4-flash
+    model: opencode-go/deepseek-v4-flash
   review-follow-up:
     file: skills/42-simple-review-follow-up/SKILL.md
     role: implementer
     kind: follow-up
     agent: opencode
-    model: opencode/deepseek-v4-flash
+    model: opencode-go/deepseek-v4-flash
 
 loops:
   plan:
@@ -38,6 +38,7 @@ loops:
     audit: plan-audit
     follow-up: plan-follow-up
     auditPattern: "docs/dev/plan-audit-v{n}-{agent}.md"
+    followUpPattern: "docs/dev/plan-followup-v{n}-{agent}.md"
     inputs:
       - { label: "Target document",      source: target }
       - { label: "Audit version",        source: version }
@@ -52,6 +53,7 @@ loops:
     audit: review
     follow-up: review-follow-up
     auditPattern: "docs/dev/review-v{n}-{agent}.md"
+    followUpPattern: "docs/dev/review-followup-v{n}-{agent}.md"
     inputs:
       - { label: "Plan document",          source: planPath }
       - { label: "Feature checklist",      source: checklistPath }

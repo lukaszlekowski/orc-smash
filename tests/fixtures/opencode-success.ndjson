@@ -1,0 +1,5 @@
+{"type":"step_start","part":{"type":"step-start"}}
+{"type":"tool_use","part":{"type":"tool","tool":"write","callID":"call_123","state":{"status":"completed","input":{},"output":"Wrote file successfully.","title":"write"}}}
+{"type":"step_finish","part":{"type":"step-finish","reason":"tool-calls","tokens":{"prompt":100,"completion":50,"total":150},"cost":0}}
+{"type":"text","part":{"type":"text","text":"Done."}}
+{"type":"step_finish","part":{"type":"step-finish","reason":"stop"}}

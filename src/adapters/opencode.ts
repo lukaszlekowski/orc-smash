@@ -1,5 +1,5 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
-import { spawnAgentProcess } from './utils.js';
+import { spawnOpencode } from './utils.js';
 
 export const opencodeAdapter: AgentAdapter = {
   name: 'opencode',
@@ -22,7 +22,7 @@ export const opencodeAdapter: AgentAdapter = {
   },
 
   async run(input: RunInput): Promise<RunResult> {
-    const { command, args } = this.buildRun(input);
-    return spawnAgentProcess(command, args, input.cwd);
+    const { args } = this.buildRun(input);
+    return spawnOpencode(input, args);
   }
 };

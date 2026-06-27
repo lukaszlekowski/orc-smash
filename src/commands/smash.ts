@@ -48,8 +48,8 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     let defaultLoop = loopKeys[0] || 'plan';
     for (const key of loopKeys) {
       const spec = config.manifest.loops[key]!;
-      const stateScan = scan(projectRoot, spec.auditPattern);
-      if (stateScan.history.length > 0) {
+      const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern, followUpPattern: spec.followUpPattern });
+      if (stateScan.auditSteps.length > 0) {
         defaultLoop = key;
         break;
       }
@@ -65,8 +65,8 @@ export async function smashAction(options: SmashOptions): Promise<void> {
   const loopSpec = config.manifest.loops[loopName]!;
 
   // 2. Scan state
-  const stateScan = scan(projectRoot, loopSpec.auditPattern);
-  if (stateScan.latestVerdict === 'unknown' && stateScan.history.length > 0) {
+  const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
+  if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
     console.error(chalk.red(`latest audit is unparseable; resolve or delete it before smashing`));
     process.exit(1);
   }
@@ -77,7 +77,7 @@ export async function smashAction(options: SmashOptions): Promise<void> {
   if (isInteractive) {
     const allowed: string[] = [];
     let defaultSP = 'fresh';
-    if (stateScan.history.length === 0) {
+    if (stateScan.auditSteps.length === 0) {
       allowed.push('fresh');
       defaultSP = 'fresh';
     } else if (stateScan.latestVerdict === 'REJECTED') {
@@ -92,7 +92,7 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     startPoint = sp as any;
   } else {
     // Non-interactive start point determination
-    if (stateScan.history.length === 0) {
+    if (stateScan.auditSteps.length === 0) {
       startPoint = 'fresh';
     } else if (stateScan.latestVerdict === 'REJECTED') {
       startPoint = 'resume';
@@ -111,7 +111,7 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     console.error(chalk.red(`Error: start-point 'new-round' is invalid for latest verdict ${latestVerdict || 'null'}`));
     process.exit(1);
   }
-  if (startPoint === 'fresh' && stateScan.history.length > 0) {
+  if (startPoint === 'fresh' && stateScan.auditSteps.length > 0) {
     console.error(chalk.red(`Error: start-point 'fresh' is invalid for latest verdict ${latestVerdict || 'null'}`));
     process.exit(1);
   }

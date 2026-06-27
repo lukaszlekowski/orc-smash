@@ -1,12 +1,15 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import type { AgentAdapter, RunInput, RunResult } from './types.js';
+import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
 
 export const fakeAdapterState = {
   verdicts: [] as ('APPROVED' | 'REJECTED' | 'unknown')[],
   stdout: '',
   exitCode: 0,
-  writeVerdictFile: true
+  writeVerdictFile: true,
+  auditError: undefined as RunError | undefined,
+  followUpError: undefined as RunError | undefined,
+  stderr: undefined as string | undefined
 };
 
 export const fakeAdapter: AgentAdapter = {
@@ -17,44 +20,56 @@ export const fakeAdapter: AgentAdapter = {
   },
 
   async run(input: RunInput): Promise<RunResult> {
-    const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';
-
-    // Parse the output path from prompt
-    // Write your output to: docs/dev/plan-audit-v1-fake.md
-    // OR: Write your output to: docs/dev/review-v1-fake.md
+    // The harness composes the output path; read it back to (a) know where to write
+    // and (b) decide kind. kind comes from the harness-controlled path token
+    // (`followup-v{n}-`), NEVER from prompt prose — the old `includes('follow-up')`
+    // match was dead-code-by-token + fragile (any audit-skill prose mentioning
+    // "follow-up" would have flipped detection) (M1).
     const match = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-    if (match && match[1] && fakeAdapterState.writeVerdictFile) {
-      const relativePath = match[1].trim();
+    const relativePath = match?.[1]?.trim() ?? '';
+    const isFollowUp = /followup-v\d+-/.test(relativePath);   // token, not prose
+
+    const err = isFollowUp ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
+    if (err) {
+      return {
+        stdout: fakeAdapterState.stdout ?? '',
+        exitCode: fakeAdapterState.exitCode,
+        stderr: fakeAdapterState.stderr,
+        error: err
+      };
+    }
+
+    if (!isFollowUp) {
+      // --- Audit path: consume exactly one verdict, write the audit artifact. ---
+      const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';   // shift() ONLY here (m6)
+      if (relativePath && fakeAdapterState.writeVerdictFile) {
+        const absolutePath = resolve(input.cwd, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        const heading = verdict === 'unknown' ? 'MALFORMED_OR_MISSING' : verdict;
+        writeFileSync(absolutePath, `# Plan Audit\n\n## Verdict\n\n${heading}\n`);  // no self-reported `Auditor:` line
+      }
+      return {
+        stdout: fakeAdapterState.stdout || `Fake run completed with verdict ${verdict}`,
+        exitCode: fakeAdapterState.exitCode
+      };
+    }
+
+    // --- Follow-up path: shift NO verdict; write the follow-up artifact, then patch the target. ---
+    if (relativePath && fakeAdapterState.writeVerdictFile) {
       const absolutePath = resolve(input.cwd, relativePath);
       mkdirSync(dirname(absolutePath), { recursive: true });
-
-      let content = '';
-      if (verdict === 'APPROVED') {
-        content = `# Plan Audit\n\nAuditor: fake-${input.model}\n\n## Verdict\n\nAPPROVED\n`;
-      } else if (verdict === 'REJECTED') {
-        content = `# Plan Audit\n\nAuditor: fake-${input.model}\n\n## Verdict\n\nREJECTED\n`;
-      } else {
-        content = `# Plan Audit\n\nAuditor: fake-${input.model}\n\n## Verdict\n\nMALFORMED_OR_MISSING\n`;
-      }
-      writeFileSync(absolutePath, content);
+      writeFileSync(absolutePath,
+        `# Plan Follow-up\n\n## Follow-up Outcome\n\npatched\n\nFiles patched: docs/dev/plan.md\n`);
     }
-
-    // For follow-up skills (which don't write an output path file, but patch the target file):
-    // Let's modify the target file so we show it was patched!
-    const isFollowUp = input.prompt.includes('follow-up');
-    if (isFollowUp) {
-      const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
-      if (targetMatch && targetMatch[1]) {
-        const relTarget = targetMatch[1].trim();
-        if (relTarget !== '.' && relTarget !== 'none') {
-          const absTarget = resolve(input.cwd, relTarget);
-          writeFileSync(absTarget, `\n# Patched by follow-up\n`, { flag: 'a' });
-        }
+    const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
+    if (targetMatch?.[1]) {
+      const relTarget = targetMatch[1].trim();
+      if (relTarget !== '.' && relTarget !== 'none') {
+        writeFileSync(resolve(input.cwd, relTarget), `\n# Patched by follow-up\n`, { flag: 'a' });
       }
     }
-
     return {
-      stdout: fakeAdapterState.stdout || `Fake run completed with verdict ${verdict}`,
+      stdout: fakeAdapterState.stdout || `Fake follow-up completed`,
       exitCode: fakeAdapterState.exitCode
     };
   }

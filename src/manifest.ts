@@ -39,6 +39,7 @@ export const LoopSchema = z.object({
   audit: z.string(),
   'follow-up': z.string(),
   auditPattern: z.string(),
+  followUpPattern: z.string(),
   inputs: z.array(InputSchema)
 });
 
@@ -117,6 +118,16 @@ export const ManifestSchema = z.object({
           code: z.ZodIssueCode.custom,
           path: ['loops', loopId, 'inputs', i],
           message: `Input source 'checklistPath' is used, but checklistPath is not specified in loop '${loopId}'.`
+        });
+      }
+    }
+
+    for (const pat of [loop.auditPattern, loop.followUpPattern]) {
+      if (!pat.includes('{n}') || !pat.includes('{agent}')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['loops', loopId],
+          message: `Loop '${loopId}' pattern '${pat}' must contain both {n} and {agent}.`
         });
       }
     }

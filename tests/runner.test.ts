@@ -5,9 +5,9 @@ import type { Config } from '../src/config.js';
 describe('Runner selection and verification', () => {
   const dummyConfig: Config = {
     defaultAgent: 'opencode',
-    defaultModel: 'opencode/deepseek-v4-flash',
+    defaultModel: 'opencode-go/deepseek-v4-flash',
     agentDefaultModels: {
-      opencode: 'opencode/deepseek-v4-flash',
+      opencode: 'opencode-go/deepseek-v4-flash',
       codex: 'gpt-5-codex',
       claude: 'claude-sonnet-4-6'
     },
@@ -20,7 +20,7 @@ describe('Runner selection and verification', () => {
           role: 'auditor',
           kind: 'audit',
           agent: 'opencode',
-          model: 'opencode/deepseek-v4-flash'
+          model: 'opencode-go/deepseek-v4-flash'
         }
       },
       loops: {}
@@ -28,6 +28,9 @@ describe('Runner selection and verification', () => {
   };
 
   it('verifies valid models for agents', () => {
+    // Note: full model-level validity is resolved at runtime via stream error; this is just a sync shape check.
+    expect(isValidModelForAgent('opencode', 'opencode-go/deepseek-v4-flash')).toBe(true);
+    expect(isValidModelForAgent('opencode', 'zai-coding-plan/glm-5.2')).toBe(true);
     expect(isValidModelForAgent('opencode', 'opencode/deepseek')).toBe(true);
     expect(isValidModelForAgent('opencode', 'gpt-5-codex')).toBe(false);
 

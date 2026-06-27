@@ -30,7 +30,7 @@ describe('Real-provider contract tests', () => {
   });
 
   it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode spawn', async () => {
-    const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode/deepseek-v4-flash-free';
+    const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
     const outputPath = 'docs/dev/plan-audit-v1-opencode.md';
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
@@ -42,12 +42,31 @@ describe('Real-provider contract tests', () => {
       cwd: tempDir
     });
 
+    expect(result.error).toBeUndefined();
     expect(result.exitCode).toBe(0);
+    expect(typeof result.stdout).toBe('string');
 
     const filePath = join(tempDir, outputPath);
     expect(existsSync(filePath)).toBe(true);
     const content = readFileSync(filePath, 'utf-8');
     expect(parseVerdict(content)).toBe('APPROVED');
+  }, 60000);
+
+  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode error path', async () => {
+    // Known bad model that should prompt server error immediately
+    const model = 'opencode/deepseek-v4-flash';
+    const result = await opencodeAdapter.run({
+      prompt: 'return hi',
+      model,
+      cwd: tempDir
+    });
+
+    expect(result.error).toBeDefined();
+    expect(result.error?.kind).toBe('server');
+    expect(result.error?.ref).toBeDefined();
+    expect(typeof result.stdout).toBe('string');
+    // Note: The actual exit code for bad model is recorded here
+    expect(typeof result.exitCode).toBe('number');
   }, 60000);
 
   it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex spawn', async () => {

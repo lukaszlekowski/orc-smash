@@ -34,10 +34,11 @@ export function loadConfig(projectRoot: string = process.cwd()): Config {
   const manifest = loadManifest(manifestPath);
 
   const defaultAgent = process.env['DEFAULT_AGENT'] || 'opencode';
-  const defaultModel = process.env['DEFAULT_MODEL'] || 'opencode/deepseek-v4-flash';
+  // Note: opencode-go/deepseek-v4-flash is the paid provider model, which bills the user's plan.
+  const defaultModel = process.env['DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
 
   const agentDefaultModels: Record<string, string> = {
-    opencode: process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode/deepseek-v4-flash',
+    opencode: process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash',
     codex: process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5-codex',
     claude: process.env['CLAUDE_DEFAULT_MODEL'] || 'claude-sonnet-4-6',
     fake: 'fake-model'
