@@ -14,7 +14,7 @@ pnpm install
 cp .env.example .env        # DEFAULT_AGENT/DEFAULT_MODEL + per-agent default models (+ keys)
 ```
 
-Default runner: `opencode/deepseek-v4-flash` (cheapest). Each agent has its own default model
+Default runner: `opencode-go/deepseek-v4-flash`. Each agent has its own default model
 (`CODEX_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`); switching a skill's agent re-defaults its model.
 
 ## Commands
@@ -22,7 +22,7 @@ Default runner: `opencode/deepseek-v4-flash` (cheapest). Each agent has its own 
 ```bash
 orc smash --project <path>          # run the audit↔follow-up loop (interactive if flags omitted)
 orc smash --project <path> \        # run-wide runner override, non-interactive
-  --loop plan --agent opencode --model opencode/deepseek-v4-flash --max-iterations 5
+  --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
 orc status --project <path>         # read-only: detect where we are, render the status panel
 ```
 

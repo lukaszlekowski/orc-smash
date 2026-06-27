@@ -85,6 +85,18 @@ Do not mark the repair complete when:
 
 ## Required Output Shape
 
+Write your follow-up report to the output path given in Inputs (the follow-up output path), not the audit path.
+
+Do not write a `## Verdict` section — follow-ups do not produce verdicts.
+
+Always include this section to indicate outcome:
+```markdown
+## Follow-up Outcome
+
+patched
+```
+(use `blocked` instead of `patched` only when a finding cannot be fixed and is escalated as blocked).
+
 After patching, report:
 
 - files patched

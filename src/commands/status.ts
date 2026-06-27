@@ -34,24 +34,24 @@ export async function statusAction(options: StatusOptions): Promise<void> {
   let maxHistory = -1;
   for (const key of loopKeys) {
     const spec = config.manifest.loops[key]!;
-    const stateScan = scan(projectRoot, spec.auditPattern);
-    if (stateScan.history.length > maxHistory) {
-      maxHistory = stateScan.history.length;
+    const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern, followUpPattern: spec.followUpPattern });
+    if (stateScan.auditSteps.length > maxHistory) {
+      maxHistory = stateScan.auditSteps.length;
       detectedLoop = key;
     }
   }
 
   const loopSpec = config.manifest.loops[detectedLoop]!;
-  const stateScan = scan(projectRoot, loopSpec.auditPattern);
+  const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
 
   let nextStepMessage = 'Ready to smash';
   if (stateScan.latestVerdict === 'REJECTED') {
     nextStepMessage = `Proposed next: follow-up then audit version ${stateScan.latestVersion + 1}`;
   } else if (stateScan.latestVerdict === 'APPROVED') {
     nextStepMessage = `Completed: approved at version ${stateScan.latestVersion}`;
-  } else if (stateScan.latestVerdict === 'unknown' && stateScan.history.length > 0) {
+  } else if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
     nextStepMessage = `Terminal error: latest audit is unparseable`;
-  } else if (stateScan.history.length === 0) {
+  } else if (stateScan.auditSteps.length === 0) {
     nextStepMessage = 'Ready to smash version 1 (fresh)';
   }
 
@@ -62,7 +62,7 @@ export async function statusAction(options: StatusOptions): Promise<void> {
       currentIteration: stateScan.latestVersion,
       maxIterations: 5,
       activeSkillRunner: null,
-      history: stateScan.history,
+      timeline: stateScan.timeline,
       nextStepMessage
     })
   );

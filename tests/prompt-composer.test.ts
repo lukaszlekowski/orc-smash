@@ -22,7 +22,7 @@ describe('Prompt Composer', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('correctly assembles role, skill, and inputs', () => {
+  it('correctly assembles role, skill, and inputs for audit kind', () => {
     const loopSpec: LoopSpec = {
       kind: 'doc-audit',
       target: 'docs/dev/plan.md',
@@ -30,6 +30,7 @@ describe('Prompt Composer', () => {
       audit: 'plan-audit',
       'follow-up': 'plan-follow-up',
       auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
       inputs: [
         { label: 'Target document', source: 'target' },
         { label: 'Audit version', source: 'version' },
@@ -47,7 +48,8 @@ describe('Prompt Composer', () => {
         targetRoot: tempDir,
         version: 3,
         priorAuditPath: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'),
-        agentName: 'opencode'
+        agentName: 'opencode',
+        kind: 'audit'
       },
       tempDir
     );
@@ -59,5 +61,40 @@ describe('Prompt Composer', () => {
     expect(prompt).toContain('Audit version: 3');
     expect(prompt).toContain('Prior audit (v2+): docs/dev/plan-audit-v2-opencode.md');
     expect(prompt).toContain('Write your output to: docs/dev/plan-audit-v3-opencode.md');
+  });
+
+  it('correctly assembles role, skill, and inputs for follow-up kind', () => {
+    const loopSpec: LoopSpec = {
+      kind: 'doc-audit',
+      target: 'docs/dev/plan.md',
+      targetKind: 'file',
+      audit: 'plan-audit',
+      'follow-up': 'plan-follow-up',
+      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
+      inputs: [
+        { label: 'Target document', source: 'target' },
+        { label: 'Audit version', source: 'version' },
+        { label: 'Prior audit (v2+)', source: 'priorAudit' },
+        { label: 'Write your output to', source: 'outputPath' }
+      ]
+    };
+
+    const prompt = composePrompt(
+      'some-skill',
+      'roles/auditor.md',
+      'skills/some-skill/SKILL.md',
+      loopSpec,
+      {
+        targetRoot: tempDir,
+        version: 3,
+        priorAuditPath: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'),
+        agentName: 'opencode',
+        kind: 'follow-up'
+      },
+      tempDir
+    );
+
+    expect(prompt).toContain('Write your output to: docs/dev/plan-followup-v3-opencode.md');
   });
 });

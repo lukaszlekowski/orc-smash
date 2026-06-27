@@ -135,10 +135,7 @@ The output template enforces this sequence: verdict appears before the compariso
 ```markdown
 # Implementation Review — [Feature Name] — v[N]
 
-Date: YYYY-MM-DD
-Reviewer: [agent]-[model]
-Plan reviewed: [path]
-Prior review read: [path or n/a]
+> **Document metadata (loop, skill, kind, role, version, agent, model, target, priorAudit, timestamp) is written as YAML front matter by the orc-smash harness. Do not write `Date:`/`Auditor:`/metadata headers yourself.**
 
 ## Verdict
 

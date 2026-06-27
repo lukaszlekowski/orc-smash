@@ -1,21 +1,56 @@
 # Roadmap
 
-## Ideas
+## Checklist
 
-1. Investigate status panel progression during audit v2 runs.
-   Current observation: when audit v2 is running, the `orc smash` status panel only shows step 1. It looks like the panel is either not updating, not refreshing correctly, or later updates are being added but are not visible.
+Grouped by what should ship together. **Batch A** (1/2/4) is one cohesive rework of the artifact +
+metadata + timeline model — same files (`state.ts`, `loop.ts`, `prompt-composer.ts`, `provenance.ts`,
+skill templates); splitting it means redoing the state model two or three times. **3** is independent
+and parallelizable. **5** depends on both A and 3, so it ships last.
 
-2. Investigate `opencode` runner failures.
-   Current observation: `codex` and `claude` work, but `opencode` appears not to. This needs targeted investigation to determine whether the issue is in the adapter invocation, local CLI setup, authentication, model choice, or upstream service behavior.
+**Independent — runner (parallelizable, no deps on A)**
 
-3. Investigate audit artifact ownership / step attribution.
-   Current observation: `plan-audit-v2-claude.md` appears to have been produced while running the `plan-follow-up` skill, but it should be an artifact from the `plan-audit` skill. This needs investigation to confirm whether the wrong step wrote the file, the UI/status attribution is incorrect, or the loop is mislabeling which skill produced which artifact.
+- [x] **3 — opencode runner.** Make opencode a real first-class adapter: correct its model config, validate it, parse the JSON event stream, surface errors. (Fix opencode — do not replace it.)
 
-4. Normalize the top-of-document metadata heading in generated output docs.
-   Current observation: the "metadata" heading at the top of output documents does not appear consistent across generated artifacts. This should be standardized so audit/review artifacts use one consistent heading structure and naming convention.
+**After A + 3 — live panel**
 
-5. Improve status panel visibility for multi-step, multi-role execution.
-   Current observation: the `orc smash` status panel appears to show only the auditor's work and does not clearly show the implementer / patcher work. It also does not state the role of the active agent. This should be investigated so the panel makes all active/completed loop steps visible and labels each runner with its role as well as its agent/model.
+- [ ] **5 — Live status panel.** Event-driven adapter lifecycle + per-adapter stream parsing + a stable render region, instead of a static reprint.
 
-6. Investigate rerun behavior when implementer becomes visible but verdict becomes `unknown`.
-   Current observation: after rerunning the project, the implementer agents showed up in the status/output, but the verdict became `unknown`. This needs investigation to determine whether rerun state recovery, artifact parsing, output attribution, or verdict extraction is breaking when the loop resumes.
+---
+
+## 3 — opencode runner failures
+
+Goal: make the **opencode** runner work as a first-class adapter. Fix it — do not substitute a
+different provider for it.
+
+> Current observation: `codex` and `claude` work, but `opencode` appears not to. Needs targeted investigation into adapter invocation, local CLI setup, authentication, model choice, or upstream behavior.
+
+**Findings so far:** the adapter flags are all valid against the installed `opencode run --help` (`-m`, `--dir`, `--dangerously-skip-permissions`, `--format json`, positional) — this is **not** a CLI-version/flag problem. Two real defects remain: (a) the default model `opencode/deepseek-v4-flash` is not a valid opencode `provider/model` (the model `deepseek-v4-flash` does not exist under that provider name, resolving only as `opencode/deepseek-v4-flash-free` or `opencode-go/deepseek-v4-flash`), and the global opencode config registers no providers; (b) `--format json` emits a stream of raw JSON _events_, but `spawnAgentProcess` (`src/adapters/utils.ts`) dumps raw stdout and folds stderr into it, so neither the result nor the error is parsed.
+
+**Fix:**
+
+- Correct the default opencode model to a valid opencode `provider/model` in `OPENCODE_DEFAULT_MODEL` / `skills.yaml` (whatever provider/model opencode is meant to run — this is fixing opencode's config, not replacing opencode).
+- Validate the model against opencode's known providers/models and **fail fast** with a clear message instead of passing a bad string through.
+- Parse opencode's JSON event stream into a normalized `RunResult` (final message, tool calls, exit status) so verdict extraction and attribution work — in the opencode adapter, not in the generic spawner.
+- Surface adapter stderr separately and detect auth/config failures (missing provider credentials, unknown model) as structured errors rather than folding them into an `unknown` verdict.
+- Add/restore the opencode contract test (real spawn + write) so the path stays green.
+
+**Effort:** M–L.
+
+---
+
+## 5 — Live status panel
+
+"Re-render on an interval" is the cheap framing. Accurate live status needs an event-driven adapter
+lifecycle and a stable render path.
+
+> Current observation: when audit v2 is running, the panel only shows step 1 — as if not updating, not refreshing, or later updates aren't visible.
+
+**Root cause:** the panel is rendered _once_ before each spawn (`console.clear` + `console.log` in `src/loop.ts`), then a static spinner runs for the whole spawn. v2 is appended to history only after it completes, so during the run the table shows only v1. `console.clear` reprints also flicker and discard scrollback.
+
+**Fix:**
+
+- Decouple rendering from the blocking spawn: the adapter returns a lifecycle handle emitting `started | progress | done | failed`; a render loop subscribes and redraws. Replace `console.clear` + boxen reprint with a stable render region / double-buffered TUI.
+- Per-adapter stream parsers turn provider output into progress events ("editing path X", "tool call Y") — reusing the JSON-stream parsing from item 3 — so the panel shows what the active agent is doing, not just a spinner.
+- Disambiguate the counters: iteration, version, and step index are currently conflated.
+
+**Effort:** L (depends on 3's stream parsing and 4's step model).

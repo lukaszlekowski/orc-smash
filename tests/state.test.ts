@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { scan } from '../src/state.js';
-import { stampProvenance } from '../src/provenance.js';
+import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('State Scanner', () => {
   const tempDir = join(process.cwd(), 'temp-state-test');
+  const auditPattern = 'docs/dev/plan-audit-v{n}-{agent}.md';
+  const followUpPattern = 'docs/dev/plan-followup-v{n}-{agent}.md';
+  const patterns = { auditPattern, followUpPattern };
 
   beforeEach(() => {
     if (existsSync(tempDir)) {
@@ -19,10 +22,11 @@ describe('State Scanner', () => {
   });
 
   it('detects fresh state (no audit files)', () => {
-    const result = scan(tempDir, 'docs/dev/plan-audit-v{n}-{agent}.md');
+    const result = scan(tempDir, patterns);
     expect(result.latestVersion).toBe(0);
     expect(result.latestVerdict).toBeNull();
-    expect(result.history).toHaveLength(0);
+    expect(result.timeline).toHaveLength(0);
+    expect(result.auditSteps).toHaveLength(0);
     expect(result.proposedNext).toEqual({
       skill: 'audit',
       version: 1,
@@ -36,18 +40,31 @@ describe('State Scanner', () => {
 
     // Seed v1 audit as REJECTED
     const v1Path = join(devDir, 'plan-audit-v1-opencode.md');
+    const meta: ArtifactMeta = {
+      loop: 'plan',
+      skill: 'plan-audit',
+      kind: 'audit',
+      role: 'auditor',
+      version: 1,
+      agent: 'opencode',
+      model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md',
+      priorAudit: 'none',
+      timestamp: '2026-06-26T20:00:00.000Z'
+    };
     writeFileSync(
       v1Path,
-      `# Plan Audit v1\n\n## Verdict\nREJECTED\n` + stampProvenance('opencode', 'opencode/deepseek-v4-flash', 1)
+      buildFrontMatter(meta) + `# Plan Audit v1\n\n## Verdict\nREJECTED\n`
     );
 
-    const result = scan(tempDir, 'docs/dev/plan-audit-v{n}-{agent}.md');
+    const result = scan(tempDir, patterns);
     expect(result.latestVersion).toBe(1);
     expect(result.latestVerdict).toBe('REJECTED');
-    expect(result.history).toHaveLength(1);
+    expect(result.timeline).toHaveLength(1);
+    expect(result.auditSteps).toHaveLength(1);
     expect(result.proposedNext).toEqual({
       skill: 'follow-up',
-      version: 2,
+      version: 1, // follow-up version is N (the version being repaired)
       priorAuditPath: v1Path
     });
   });
@@ -57,19 +74,29 @@ describe('State Scanner', () => {
     mkdirSync(devDir, { recursive: true });
 
     // Seed v1 as REJECTED
+    const meta1: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'opencode', model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
     writeFileSync(
       join(devDir, 'plan-audit-v1-opencode.md'),
-      `# Plan Audit v1\n\n## Verdict\nREJECTED\n` + stampProvenance('opencode', 'opencode/deepseek-v4-flash', 1)
+      buildFrontMatter(meta1) + `# Plan Audit v1\n\n## Verdict\nREJECTED\n`
     );
 
     // Seed v2 as APPROVED
     const v2Path = join(devDir, 'plan-audit-v2-codex.md');
+    const meta2: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 2, agent: 'codex', model: 'gpt-5-codex',
+      target: 'docs/dev/plan.md', priorAudit: 'docs/dev/plan-audit-v1-opencode.md', timestamp: '2026-06-26T20:10:00.000Z'
+    };
     writeFileSync(
       v2Path,
-      `# Plan Audit v2\n\n## Verdict\nAPPROVED\n` + stampProvenance('codex', 'gpt-5-codex', 2)
+      buildFrontMatter(meta2) + `# Plan Audit v2\n\n## Verdict\nAPPROVED\n`
     );
 
-    const result = scan(tempDir, 'docs/dev/plan-audit-v{n}-{agent}.md');
+    const result = scan(tempDir, patterns);
     expect(result.latestVersion).toBe(2);
     expect(result.latestVerdict).toBe('APPROVED');
     expect(result.proposedNext.skill).toBe('audit');
@@ -83,13 +110,82 @@ describe('State Scanner', () => {
     mkdirSync(archivedDir, { recursive: true });
 
     // Seed v1 as APPROVED inside archived/
+    const meta: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'opencode', model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
     writeFileSync(
       join(archivedDir, 'plan-audit-v1-opencode.md'),
-      `# Plan Audit v1\n\n## Verdict\nAPPROVED\n` + stampProvenance('opencode', 'opencode/deepseek-v4-flash', 1)
+      buildFrontMatter(meta) + `# Plan Audit v1\n\n## Verdict\nAPPROVED\n`
     );
 
-    const result = scan(tempDir, 'docs/dev/plan-audit-v{n}-{agent}.md');
+    const result = scan(tempDir, patterns);
     expect(result.latestVersion).toBe(0);
-    expect(result.history).toHaveLength(0);
+    expect(result.timeline).toHaveLength(0);
+  });
+
+  it('correctly handles follow-up files (item-1 regression)', () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+
+    // Seed v1 audit as REJECTED
+    const meta1: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'opencode', model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-opencode.md'),
+      buildFrontMatter(meta1) + `# Plan Audit v1\n\n## Verdict\nREJECTED\n`
+    );
+
+    // Seed v1 follow-up file (no verdict)
+    const metaF: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-follow-up', kind: 'follow-up', role: 'planner',
+      version: 1, agent: 'fake', model: 'fake-model',
+      target: 'docs/dev/plan.md', priorAudit: 'docs/dev/plan-audit-v1-opencode.md', timestamp: '2026-06-26T20:05:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-followup-v1-fake.md'),
+      buildFrontMatter(metaF) + `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`
+    );
+
+    const result = scan(tempDir, patterns);
+    expect(result.latestVerdict).toBe('REJECTED'); // unchanged, follow-up verdict-less file doesn't affect it
+    expect(result.timeline).toHaveLength(2);
+    expect(result.auditSteps).toHaveLength(1);
+    expect(result.timeline[0]?.kind).toBe('audit');
+    expect(result.timeline[1]?.kind).toBe('follow-up');
+  });
+
+  it('stray follow-up never flips verdict to unknown', () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+
+    // Seed v1 audit as APPROVED
+    const meta1: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'opencode', model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-opencode.md'),
+      buildFrontMatter(meta1) + `# Plan Audit v1\n\n## Verdict\nAPPROVED\n`
+    );
+
+    // Seed a stray v2 follow-up (no verdict)
+    const metaF: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-follow-up', kind: 'follow-up', role: 'planner',
+      version: 2, agent: 'fake', model: 'fake-model',
+      target: 'docs/dev/plan.md', priorAudit: 'docs/dev/plan-audit-v1-opencode.md', timestamp: '2026-06-26T20:05:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-followup-v2-fake.md'),
+      buildFrontMatter(metaF) + `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`
+    );
+
+    const result = scan(tempDir, patterns);
+    expect(result.latestVerdict).toBe('APPROVED'); // still APPROVED
   });
 });
