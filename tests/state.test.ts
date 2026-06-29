@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { scan } from '../src/state.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
+import { renderFollowUpOutcomeSection, parseFollowUpOutcome } from '../src/follow-up-outcome.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -143,7 +144,7 @@ describe('State Scanner', () => {
     };
     writeFileSync(
       join(devDir, 'plan-followup-v1-fake.md'),
-      buildFrontMatter(metaF) + `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`
+      buildFrontMatter(metaF) + `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n`
     );
 
     const result = scan(tempDir, patterns);
@@ -177,7 +178,7 @@ describe('State Scanner', () => {
     };
     writeFileSync(
       join(devDir, 'plan-followup-v2-fake.md'),
-      buildFrontMatter(metaF) + `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`
+      buildFrontMatter(metaF) + `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n`
     );
 
     const result = scan(tempDir, patterns);
@@ -208,5 +209,20 @@ describe('State Scanner', () => {
     // ...and the verdict is parsed from the same single read.
     expect(step.verdict).toBe('REJECTED');
     expect(step.version).toBe(1);
+  });
+});
+
+describe('Follow-up Outcome Contract', () => {
+  it('correctly parses outcome from content', () => {
+    expect(parseFollowUpOutcome('## Follow-up Outcome\npatched')).toBe('patched');
+    expect(parseFollowUpOutcome('## Follow-up Outcome\n\npatched')).toBe('patched');
+    expect(parseFollowUpOutcome('## Follow-up Outcome\nblocked')).toBe('blocked');
+    expect(parseFollowUpOutcome('## Follow-up Outcome\n\nblocked')).toBe('blocked');
+    expect(parseFollowUpOutcome('some other content')).toBe('patched'); // default
+  });
+
+  it('renders section canonical output', () => {
+    expect(renderFollowUpOutcomeSection('patched')).toBe('## Follow-up Outcome\n\npatched');
+    expect(renderFollowUpOutcomeSection('blocked')).toBe('## Follow-up Outcome\n\nblocked');
   });
 });

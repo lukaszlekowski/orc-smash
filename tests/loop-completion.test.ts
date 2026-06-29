@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { runLoop as baseRunLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapter } from '../src/adapters/fake.js';
@@ -37,13 +38,12 @@ describe('loop execution-completeness handling (consumes normalized completion f
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-completion');
 
   beforeEach(() => {
-    if (existsSync(tempWorkspace)) rmSync(tempWorkspace, { recursive: true, force: true });
-    mkdirSync(tempWorkspace, { recursive: true });
+    createTempDir('temp-loop-completion');
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    rmSync(tempWorkspace, { recursive: true, force: true });
+    removeTempDir(tempWorkspace);
   });
 
   function setupProject() {

@@ -9,7 +9,9 @@ vi.mock('../src/loop.js', () => ({
 
 import { smashAction } from '../src/commands/smash.js';
 import { runLoop } from '../src/loop.js';
-import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
+import { buildFrontMatter } from '../src/provenance.js';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { makeArtifactMeta } from './helpers/provenance.js';
 
 const mockedRunLoop = vi.mocked(runLoop);
 
@@ -30,8 +32,7 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
   const tempDir = join(process.cwd(), 'temp-smash-action');
 
   beforeEach(() => {
-    if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
-    mkdirSync(tempDir, { recursive: true });
+    createTempDir('temp-smash-action');
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -39,17 +40,13 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    removeTempDir(tempDir);
     vi.restoreAllMocks();
   });
 
   function writeAudit(version: number, verdict: 'APPROVED' | 'REJECTED') {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    const meta: ArtifactMeta = {
-      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
-      version, agent: 'fake', model: 'fake-model',
-      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-29T00:00:00.000Z'
-    };
+    const meta = makeArtifactMeta({ version });
     writeFileSync(
       join(tempDir, `docs/dev/plan-audit-v${version}-fake.md`),
       buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\n${verdict}\n`
@@ -93,11 +90,7 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
 
   it('unknown latest audit is terminal: rejected before runLoop is reached', async () => {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    const meta: ArtifactMeta = {
-      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
-      version: 1, agent: 'fake', model: 'fake-model',
-      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-29T00:00:00.000Z'
-    };
+    const meta = makeArtifactMeta({ version: 1 });
     writeFileSync(
       join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
       buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nGARBAGE\n`

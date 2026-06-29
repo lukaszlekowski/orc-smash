@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
+import { renderFollowUpOutcomeSection } from '../follow-up-outcome.js';
 
 export const fakeAdapterState = {
   verdicts: [] as ('APPROVED' | 'REJECTED' | 'unknown')[],
@@ -59,7 +60,7 @@ export const fakeAdapter: AgentAdapter = {
       const absolutePath = resolve(input.cwd, relativePath);
       mkdirSync(dirname(absolutePath), { recursive: true });
       writeFileSync(absolutePath,
-        `# Plan Follow-up\n\n## Follow-up Outcome\n\npatched\n\nFiles patched: docs/dev/plan.md\n`);
+        `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n\nFiles patched: docs/dev/plan.md\n`);
     }
     const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
     if (targetMatch?.[1]) {

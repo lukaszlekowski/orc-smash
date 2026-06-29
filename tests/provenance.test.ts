@@ -3,36 +3,31 @@ import { writeFileSync, existsSync, rmSync, readFileSync, mkdirSync } from 'node
 import { join } from 'node:path';
 import {
   writeArtifactWithMeta,
-  parseArtifactMeta,
-  type ArtifactMeta
+  parseArtifactMeta
 } from '../src/provenance.js';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { makeArtifactMeta } from './helpers/provenance.js';
 
 describe('Provenance front-matter contract', () => {
   const tempDir = join(process.cwd(), 'temp-provenance-test');
   const tempFile = join(tempDir, 'test-artifact.md');
 
   beforeEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
-    mkdirSync(tempDir, { recursive: true });
+    createTempDir('temp-provenance-test');
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    removeTempDir(tempDir);
   });
 
   it('performs front-matter round-trip via writeArtifactWithMeta and parseArtifactMeta', () => {
-    const meta: ArtifactMeta = {
-      loop: 'plan',
-      skill: 'plan-audit',
-      kind: 'audit',
-      role: 'auditor',
+    const meta = makeArtifactMeta({
       version: 2,
       agent: 'codex',
       model: 'gpt-5-codex',
-      target: 'docs/dev/plan.md',
       priorAudit: 'docs/dev/plan-audit-v1-opencode.md',
       timestamp: '2026-06-26T20:11:00.000Z'
-    };
+    });
 
     const body = '# Title\nSome content here.';
     writeArtifactWithMeta(tempFile, body, meta);

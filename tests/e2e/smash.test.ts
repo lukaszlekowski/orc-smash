@@ -5,7 +5,8 @@ import { runLoop as baseRunLoop } from '../../src/loop.js';
 import { scan } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
 import { fakeAdapter, fakeAdapterState } from '../../src/adapters/fake.js';
-import { createTestAdapterRegistry, resetFakeAdapterState } from '../../src/adapters/testing.js';
+import { createTestAdapterRegistry } from '../../src/adapters/testing.js';
+import { createTempDir, removeTempDir } from '../helpers/fs.js';
 
 const testRegistry = createTestAdapterRegistry();
 const mockOutput = {
@@ -64,18 +65,11 @@ describe('Harness Loop E2E (fake adapter)', () => {
   beforeEach(() => {
     secondOpinionSelectCalls = 0;
     vi.restoreAllMocks();
-
-    if (existsSync(tempWorkspace)) {
-      rmSync(tempWorkspace, { recursive: true, force: true });
-    }
-    mkdirSync(tempWorkspace, { recursive: true });
-
-    // Reset fake adapter state
-    resetFakeAdapterState();
+    createTempDir('temp-e2e-workspace');
   });
 
   afterEach(() => {
-    rmSync(tempWorkspace, { recursive: true, force: true });
+    removeTempDir(tempWorkspace);
   });
 
   function setupTargetProject(name: string) {
