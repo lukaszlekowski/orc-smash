@@ -126,12 +126,96 @@ export function scan(
 }
 
 function sortTimeline(t: Step[]): void {
-  const kindRank = (k: StepKind) => (k === 'audit' ? 0 : 1);
+  const kindRank = (k: StepKind) => {
+    if (k === 'audit') return 0;
+    if (k === 'follow-up') return 1;
+    return 2;
+  };
   t.sort((a, b) => {
     if (a.version !== b.version) return a.version - b.version;
     if (a.kind !== b.kind) return kindRank(a.kind) - kindRank(b.kind);
     return a.mtime - b.mtime;
   });
+}
+
+function relativize(targetRoot: string, p: string): string {
+  if (p === 'none') return 'none';
+  if (p.startsWith(targetRoot)) {
+    return relative(targetRoot, p);
+  }
+  return p;
+}
+
+export function resolveApprovedPlanAuditPath(
+  targetRoot: string,
+  planSpec: { auditPattern: string; followUpPattern: string }
+): string | null {
+  const s = scan(targetRoot, { auditPattern: planSpec.auditPattern, followUpPattern: planSpec.followUpPattern });
+  return s.latestVerdict === 'APPROVED'
+    ? (s.auditSteps.at(-1)?.artifactPath ?? null)
+    : null;
+}
+
+export function scanImplementArtifacts(
+  targetRoot: string,
+  implementPattern: string
+): { version: number; priorAudit: string; agent: string }[] {
+  const allFiles = getAllFiles(targetRoot);
+  const regex = patternToRegex(implementPattern);
+  const results: { version: number; priorAudit: string; agent: string }[] = [];
+
+  for (const file of allFiles) {
+    const relPath = relative(targetRoot, file);
+    const match = relPath.match(regex);
+    if (!match) continue;
+
+    const version = parseInt(match[1]!, 10);
+    const agent = match[2]!;
+
+    const content = readFileSync(file, 'utf-8');
+    const meta = parseArtifactMeta(content, { agent, version, kind: 'implement' });
+    results.push({
+      version,
+      priorAudit: meta.priorAudit,
+      agent: meta.agent
+    });
+  }
+  return results;
+}
+
+export function resolveImplementFacts(
+  targetRoot: string,
+  planSpec: { auditPattern: string; followUpPattern: string },
+  implementSpec: { implementPattern: string }
+): { approvedPlanAuditPath: string | null; nextVersion: number; currentPlanImplemented: boolean } {
+  const approvedPlanAuditPath = resolveApprovedPlanAuditPath(targetRoot, planSpec);
+  const impls = scanImplementArtifacts(targetRoot, implementSpec.implementPattern);
+
+  const maxVersion = impls.reduce((max, impl) => Math.max(max, impl.version), 0);
+  const nextVersion = maxVersion + 1;
+
+  let currentPlanImplemented = false;
+  if (approvedPlanAuditPath) {
+    const relApproved = relativize(targetRoot, approvedPlanAuditPath);
+    currentPlanImplemented = impls.some(impl => relativize(targetRoot, impl.priorAudit) === relApproved);
+  }
+
+  return {
+    approvedPlanAuditPath,
+    nextVersion,
+    currentPlanImplemented
+  };
+}
+
+export function requireApprovedPlanAuditPath(
+  targetRoot: string,
+  planSpec: { auditPattern: string; followUpPattern: string }
+): string {
+  const approvedPath = resolveApprovedPlanAuditPath(targetRoot, planSpec);
+  if (!approvedPath) {
+    throw new Error('No approved plan audit found; implementation requires an APPROVED plan.');
+  }
+  return approvedPath;
 }
 
 

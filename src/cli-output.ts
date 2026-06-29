@@ -2,6 +2,7 @@ import type { PanelContext } from './status.js';
 import { renderStatusPanel } from './status-panel.js';
 import ora, { Ora } from 'ora';
 import chalk from 'chalk';
+import type { StepKind } from './provenance.js';
 
 export interface CliOutput {
   note(message: string): void;
@@ -9,7 +10,7 @@ export interface CliOutput {
   error(message: string): void;
   iterationStarted(ctx: { iteration: number; maxIterations: number }): void;
   stepStarted(ctx: {
-    kind: 'audit' | 'follow-up';
+    kind: StepKind;
     skillId: string;
     agent: string;
     model: string;
@@ -18,13 +19,13 @@ export interface CliOutput {
     message: string;
   }): void;
   stepSucceeded(ctx: {
-    kind: 'audit' | 'follow-up';
+    kind: StepKind;
     skillId: string;
     version: number;
     message: string;
   }): void;
   stepFailed(ctx: {
-    kind: 'audit' | 'follow-up';
+    kind: StepKind;
     skillId: string;
     version: number;
     message: string;

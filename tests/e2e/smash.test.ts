@@ -268,7 +268,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     expect(existsSync(join(devDir, 'plan-audit-v1-fake.md'))).toBe(true);
     expect(existsSync(join(devDir, 'plan-audit-v2-fake.md'))).toBe(true);
 
-    const history = scan(root, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern }).auditSteps;
+    const history = scan(root, { auditPattern: loopSpec.auditPattern ?? '', followUpPattern: loopSpec.followUpPattern ?? '' }).auditSteps;
     expect(history).toHaveLength(2);
     expect(history[0]?.verdict).toBe('APPROVED');
     expect(history[1]?.verdict).toBe('APPROVED');

@@ -29,6 +29,12 @@ skills:
     kind: follow-up
     agent: opencode
     model: opencode-go/deepseek-v4-flash
+  30-simple-implement:
+    file: skills/30-simple-implement/SKILL.md
+    role: implementer
+    kind: implement
+    agent: opencode
+    model: opencode-go/deepseek-v4-flash
 
 loops:
   plan:
@@ -45,6 +51,19 @@ loops:
       - { label: "Prior audit (v2+)",    source: priorAudit }
       - { label: "Write your output to", source: outputPath }
   implement:
+    kind: implement
+    target: "."
+    targetKind: worktree
+    planPath: docs/dev/plan.md
+    implement: 30-simple-implement
+    implementPattern: "docs/dev/impl-v{n}-{agent}.md"
+    inputs:
+      - { label: "Plan document",          source: planPath }
+      - { label: "Target (working tree)",  source: target }
+      - { label: "Implementation version", source: version }
+      - { label: "Approved audit (v1+)",   source: priorAudit }
+      - { label: "Write your output to",   source: outputPath }
+  review:
     kind: code-review
     target: "."
     targetKind: worktree

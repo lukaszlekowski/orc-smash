@@ -1,6 +1,14 @@
-import type { Config } from './config.js';
+import type { Config, ModelRegistry } from './config.js';
 
-export function isValidModelForAgent(agent: string, model: string): boolean {
+export function isValidModelForAgent(agent: string, model: string, registry: ModelRegistry): boolean {
+  const allowedModels = registry.providers[agent];
+  if (!allowedModels) {
+    return false;
+  }
+  if (allowedModels.includes(model)) {
+    return true;
+  }
+  // fallback migration aid for agents present in registry but with model outside allow-list
   if (agent === 'opencode') {
     return /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(model);
   }
@@ -16,12 +24,12 @@ export function isValidModelForAgent(agent: string, model: string): boolean {
   return false;
 }
 
-export function validateAgentAndModel(agent: string, model: string): void {
-  const allowedAgents = ['opencode', 'codex', 'claude', 'fake'];
+export function validateAgentAndModel(agent: string, model: string, registry: ModelRegistry): void {
+  const allowedAgents = Object.keys(registry.providers);
   if (!allowedAgents.includes(agent)) {
-    throw new Error(`unknown agent '${agent}'; expected opencode | codex | claude | fake`);
+    throw new Error(`unknown agent '${agent}'; expected ${allowedAgents.join(' | ')}`);
   }
-  if (!isValidModelForAgent(agent, model)) {
+  if (!isValidModelForAgent(agent, model, registry)) {
     throw new Error(`model '${model}' is not a ${agent} model`);
   }
 }
@@ -34,18 +42,18 @@ export function resolveRunner(
 ): { agent: string; model: string } {
   // 1. Interactive override
   if (interactiveOverride) {
-    validateAgentAndModel(interactiveOverride.agent, interactiveOverride.model);
+    validateAgentAndModel(interactiveOverride.agent, interactiveOverride.model, config.registry);
     return interactiveOverride;
   }
 
   // 2. Global CLI overrides
   if (globalOverrides.agent || globalOverrides.model) {
-    const resolvedAgent = globalOverrides.agent || config.defaultAgent;
+    const resolvedAgent = globalOverrides.agent || config.registry.defaults.agent;
     let resolvedModel = globalOverrides.model;
     if (!resolvedModel) {
-      resolvedModel = config.agentDefaultModels[resolvedAgent] || config.defaultModel;
+      resolvedModel = config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
     }
-    validateAgentAndModel(resolvedAgent, resolvedModel);
+    validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
     return { agent: resolvedAgent, model: resolvedModel };
   }
 
@@ -54,13 +62,9 @@ export function resolveRunner(
   if (skill) {
     const agent = skill.agent;
     const model = skill.model;
-    validateAgentAndModel(agent, model);
+    validateAgentAndModel(agent, model, config.registry);
     return { agent, model };
   }
 
-  // 4. .env fallback
-  const agent = config.defaultAgent;
-  const model = config.agentDefaultModels[agent] || config.defaultModel;
-  validateAgentAndModel(agent, model);
-  return { agent, model };
+  throw new Error(`Skill '${skillId}' not found in manifest, and no overrides provided.`);
 }

@@ -11,12 +11,14 @@ The binary is **`orc`**; the main command is **`orc smash`**.
 
 ```bash
 pnpm install
-cp .env.example .env        # current defaults; roadmap work will later move model-default ownership into a registry
 ```
 
-Default runner: `opencode-go/deepseek-v4-flash`. Each agent has its own default model
-(`CODEX_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`); switching a skill's agent re-defaults its model.
-This is the current mechanism, not the long-term target architecture.
+Model configuration, allowed providers, and defaults are defined in the model registry (`orc.config.yaml`). Precedence resolves from:
+1. Target project root: `projectRoot/orc.config.yaml`
+2. User home config: `~/.config/orc/config.yaml`
+3. Built-in defaults (`DEFAULT_REGISTRY`)
+
+Interactive selection lets you choose from configured models or provide a validated custom model.
 
 ## Commands
 
@@ -38,19 +40,12 @@ orc status --project <path>         # read-only: detect where we are, render the
 
 ## How it works
 
-- **Three real adapters:** opencode, codex, and claude all run for real; each skill picks its
-  own agent/model, so audit and follow-up can run on different CLIs (e.g. follow-up on opencode,
-  audit on codex). `--agent`/`--model` are run-wide overrides.
-- **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`.
-  Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
-- **One composed prompt:** each agent run receives a single prompt assembled from three
-  user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the
-  resolved **inputs**. No task content is invented by the harness.
-- **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal —
-  the loop stops for human review and never mutates the target. Follow-up runs only on a
-  concrete `REJECTED` audit.
-- **Second opinion:** on APPROVED, choose `stop` or `run-second-opinion` (re-prompts the audit
-  runner, ideally a different agent, and runs the next version).
+- **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
+- **Three real adapters:** opencode, codex, and claude all run for real; each skill picks its own agent/model, validated against the model registry.
+- **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
+- **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
+- **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.
+- **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
 
 ## Architecture direction
 
@@ -71,7 +66,7 @@ Current development is steering the harness toward a cleaner runtime architectur
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 2 implementation plan.
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 4 implementation plan.
 
 ## Verification and CI
 

@@ -40,7 +40,11 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
   let maxHistory = -1;
   for (const key of loopKeys) {
     const spec = config.manifest.loops[key]!;
-    const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern, followUpPattern: spec.followUpPattern });
+    if (spec.kind === 'implement') continue;
+    const stateScan = scan(projectRoot, {
+      auditPattern: spec.auditPattern ?? '',
+      followUpPattern: spec.followUpPattern ?? ''
+    });
     if (stateScan.auditSteps.length > maxHistory) {
       maxHistory = stateScan.auditSteps.length;
       detectedLoop = key;
@@ -48,7 +52,10 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
   }
 
   const loopSpec = config.manifest.loops[detectedLoop]!;
-  const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
+  const stateScan = scan(projectRoot, {
+    auditPattern: loopSpec.auditPattern ?? '',
+    followUpPattern: loopSpec.followUpPattern ?? ''
+  });
 
   const decision = resolveNextStep({
     latestVerdict: stateScan.latestVerdict,

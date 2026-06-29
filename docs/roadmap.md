@@ -22,22 +22,27 @@ Ordered by recommended implementation batches. This is the top-level view: group
 - [x] **19 — CI / typecheck workflow**
 - [x] **20 — fake-adapter registry boundary**
 
-**Batch 3 — Test and prompt-maintenance infrastructure**
+**Batch 3 — Test infrastructure & follow-up outcome contract**
 
-- [ ] **12 — test helpers extraction**
-- [ ] **13 — roles / skill-template consolidation**
-- [ ] **21 — follow-up outcome contract centralization**
+- [x] **12 — test helpers extraction**
+- [x] **21 — follow-up outcome contract centralization**
 
-**Batch 4 — Config, docs, and product-shape decisions**
+**Batch 4 — Runner/model UX and loop exposure**
 
 - [ ] **7 — Model registry config (single source of truth)**
-- [ ] **14 — docs canonicalization + broken plan reference fix**
-- [ ] **15 — orphan skills decision**
+- [ ] **15 — loop exposure for existing skills**
+- [ ] **22 — inspect opencode model naming boundary**
 
-**Batch 5 — End-user loop enhancements**
+**Batch 5 — Rendering and output polish**
+
+- [ ] **5 — Live status panel**
+- [ ] **23 — TUI border simplification**
+- [ ] **24 — plain mode multiline readability**
+
+**Batch 6 — Remaining interaction flow and docs**
 
 - [ ] **8 — Prompt to extend iterations at max**
-- [ ] **5 — Live status panel**
+- [ ] **14 — docs canonicalization + broken plan reference fix**
 
 ## Detailed checklist
 
@@ -74,22 +79,39 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 - [x] **19 — CI / typecheck workflow.** Add explicit repository automation that runs `typecheck` and deterministic tests on push / PR, and define how env-gated real-provider checks participate in sign-off. The quality bar should be machine-enforced, not just described in docs.
 - [x] **20 — fake-adapter registry boundary.** Make the boundary between production adapters and test-only infrastructure explicit. Keeping `fake` in the main registry is acceptable only if the contract is intentional, documented, and low-risk; otherwise isolate test adapters behind a separate registration path.
 
-**Batch 3 — Test and prompt-maintenance infrastructure**
+**Batch 3 — Test infrastructure & follow-up outcome contract**
 
-- [ ] **12 — Test helpers extraction.** Add shared test helpers (`createTempDir`, `withTempDir`, `runFakePlanLoop`, `makeMeta`, `makeErrorResult`) plus a `resetFakeAdapterState()` helper and test setup wiring. Keep these helpers narrowly scoped around test mechanics; do not hide core assertions or business behavior inside opaque mega-helpers. This batch should absorb the repeated temp-dir setup, repeated fake-runner setup, repeated `ArtifactMeta` builders, repeated adapter contract assertions, repeated `RunResult` test fixtures, and the missing `vitest.config` / shared setup-file support.
-- [ ] **13 — Roles / skill-template consolidation.** Move the duplicated “best-practice / no-MVP-shortcuts” guidance into real role files and only extract truly invariant template blocks from the audit/follow-up skills. Include the duplicated follow-up/audit prompt sections, but preserve prompt self-containment where it materially helps prompt quality.
-- [ ] **21 — follow-up outcome contract centralization.** Centralize the `## Follow-up Outcome` / `patched|blocked` wire format, which is currently defined in multiple skill files plus fake-adapter output and parser logic, so wording changes hit one source of truth instead of four.
+- [x] **12 — Test helpers extraction.** Add shared test helpers (`createTempDir`, `withTempDir`, `runFakePlanLoop`, `makeMeta`, `makeErrorResult`) plus a `resetFakeAdapterState()` helper and test setup wiring. Keep these helpers narrowly scoped around test mechanics; do not hide core assertions or business behavior inside opaque mega-helpers. This batch should absorb the repeated temp-dir setup, repeated fake-runner setup, repeated `ArtifactMeta` builders, repeated adapter contract assertions, repeated `RunResult` test fixtures, and the missing `vitest.config` / shared setup-file support.
+- [x] **21 — follow-up outcome contract centralization.** Centralize the `## Follow-up Outcome` / `patched|blocked` wire format, which is currently defined in multiple skill files plus fake-adapter output and parser logic, so wording changes hit one source of truth instead of four.
 
-**Batch 4 — Config, docs, and product-shape decisions**
+**Batch 4 — Runner/model UX and loop exposure**
 
 - [ ] **7 — Model registry config (single source of truth).** Introduce one canonical registry of providers, allowed models, and defaults, then have workflow config reference that registry instead of hardcoding raw model strings in multiple places. Preserve useful per-skill runner choice by referencing named/default models from the registry rather than removing all per-skill configurability.
-- [ ] **14 — Docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references.
-- [ ] **15 — Orphan skills decision.** Wire `00-simple-codebase-preload`, `20-simple-plan`, and `30-simple-implement` into loops, document them as standalone utilities, or remove them.
+- [ ] **15 — Loop exposure for existing skills.** Keep existing skills in `skills/` even if they are not yet wired into the main flow, and make loop-capable stages available through the product surface rather than treating them as candidates for removal. In particular, `30-simple-implement` should remain available to pick from the loop list after an approved plan and also be selectable when starting the script, reflecting the intended two-loop model (`plan` and `implement`).
+- [ ] **22 — Inspect opencode model naming boundary.** Decide whether identifiers such as `opencode-go/deepseek-v4-flash` should remain a single model string or be split into provider/endpoint plus model name, for example `opencode-go` as endpoint/provider metadata and `deepseek-v4-flash` as the actual model identifier. The current repo behavior requires the `opencode-go/` prefix, but the architecture should make clear whether that prefix is truly part of the model namespace or a transport/endpoint concern that should live elsewhere in config and validation. The outcome should define the correct ownership boundary for config, validation, interactive selection, and docs.
 
-**Batch 5 — End-user loop enhancements**
+Interactive workflow direction within Batch 4:
+
+- When a loop is in an approved state, start-point selection should expose both:
+  - `new-round`
+  - `implement`
+- After an audit reaches `APPROVED`, the post-approval action list should expose:
+  - `stop`
+  - `run-second-opinion`
+  - `implement`
+- Choosing `implement` should take the operator through agent/model selection and then run
+  `30-simple-implement`.
+
+**Batch 5 — Rendering and output polish**
+
+- [ ] **5 — Live status panel.** Replace the current static redraw model incrementally: first establish a stable render region, then layer in adapter lifecycle events, then add richer per-provider progress where the signal is trustworthy. Avoid a one-shot TUI rewrite.
+- [ ] **23 — TUI border simplification.** Review the current status panel rendering and remove unnecessary table borders / grid lines so the TUI uses less horizontal space and reads more cleanly. The timeline table should prefer a borderless or minimally-lined layout, and the outer panel border should also be reviewed for whether it needs a single consistent treatment instead of layered decorative framing. If the border remains, use stage / skill-specific color signaling so the operator can distinguish states such as `plan-audit` vs `plan-follow-up` directly from the panel chrome rather than relying only on text labels. Prefer a consistent mapping that is stable and easy to learn across loops.
+- [ ] **24 — Plain mode multiline readability.** Rework `--plain` output so panel/state information is emitted as readable multiline blocks instead of collapsing too much content into single-line log records. Optimize for mobile terminal apps and narrow screens: emit loop / iteration / active runner / next-step fields on separate lines, render the timeline as stacked entries with timestamps, allow long fields such as model names to wrap onto follow-on lines, and prefer visually separated timeline records (for example `---` between entries) over dense comma-heavy one-line summaries. Treat the multiline separated form as the preferred direction over a compact single-line dump.
+
+**Batch 6 — Remaining interaction flow and docs**
 
 - [ ] **8 — Prompt to extend iterations at max (consideration).** When the loop hits `max-iterations`, offer interactive users a controlled continuation choice without changing non-interactive behavior. Prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) with optional custom input only if it proves necessary.
-- [ ] **5 — Live status panel.** Replace the current static redraw model incrementally: first establish a stable render region, then layer in adapter lifecycle events, then add richer per-provider progress where the signal is trustworthy. Avoid a one-shot TUI rewrite.
+- [ ] **14 — Docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runner/model, loop, and rendering changes have landed so the docs only need one final alignment pass.
 
 ---
 
@@ -221,8 +243,9 @@ defaults:
   a non-default runner. Keep the workflow manifest expressive without letting it become a second uncontrolled
   source of raw model names.
 - Feed registered providers/models into `promptRunners` / `promptSecondOpinionRunner` (`src/interactive.ts`)
-  so selection is registry-backed. If a custom model escape hatch exists, it should be explicit and validated,
-  not the default path.
+  so selection is registry-backed. Model selection should be list-based for the chosen provider, with a final
+  `custom` option that allows manual entry of a model string. If a custom model escape hatch exists, it should
+  be explicit and validated, not the default path.
 - Make validation consult the registry first and use prefix/regex checks only as a fallback migration aid, not
   the long-term source of truth.
 - Remove dead `.env` model-default plumbing and dead `apiKeys` plumbing from `config.ts`; keep env vars only

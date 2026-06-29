@@ -17,9 +17,10 @@ export function resolveInput(
     version: number;
     priorAuditPath: string | null;
     agentName: string;
-    auditPattern: string;
-    followUpPattern: string;
-    kind: 'audit' | 'follow-up';
+    auditPattern?: string;
+    followUpPattern?: string;
+    implementPattern?: string;
+    kind: 'audit' | 'follow-up' | 'implement';
     planPath?: string;
     checklistPath?: string;
   }
@@ -37,7 +38,10 @@ export function resolveInput(
       }
       return context.priorAuditPath;
     case 'outputPath': {
-      const pattern = context.kind === 'follow-up' ? context.followUpPattern : context.auditPattern;
+      const pattern =
+        context.kind === 'follow-up' ? (context.followUpPattern ?? '') :
+        context.kind === 'implement' ? (context.implementPattern ?? '') :
+        (context.auditPattern ?? '');
       return renderPattern(pattern, { n: context.version, agent: context.agentName });
     }
     case 'planPath':
@@ -59,7 +63,7 @@ export function composePrompt(
     version: number;
     priorAuditPath: string | null;
     agentName: string;
-    kind: 'audit' | 'follow-up';
+    kind: 'audit' | 'follow-up' | 'implement';
   },
   toolRoot: string = defaultToolRoot
 ): string {
@@ -80,6 +84,7 @@ export function composePrompt(
       agentName: context.agentName,
       auditPattern: loopSpec.auditPattern,
       followUpPattern: loopSpec.followUpPattern,
+      implementPattern: loopSpec.implementPattern,
       kind: context.kind,
       planPath: loopSpec.planPath,
       checklistPath: loopSpec.checklistPath

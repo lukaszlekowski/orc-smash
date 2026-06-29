@@ -1,5 +1,7 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
+import { isValidModelForAgent } from './runner.js';
+import type { AgentRegistry } from './adapters/registry.js';
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
   return select({
@@ -35,9 +37,17 @@ export async function promptMaxIterations(defaultVal: number): Promise<number> {
 export async function promptRunners(
   skills: string[],
   config: Config,
+  agentRegistry: AgentRegistry,
   globalOverrides: { agent?: string; model?: string } = {}
 ): Promise<Record<string, { agent: string; model: string }>> {
   const runners: Record<string, { agent: string; model: string }> = {};
+
+  const selectableAgents = [...agentRegistry.adapters.keys()]
+    .filter((agent) => agent in config.registry.providers);
+
+  if (!selectableAgents.includes(config.registry.defaults.agent)) {
+    throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
+  }
 
   const customize = await confirm({
     message: 'Would you like to customize skill runners?',
@@ -54,7 +64,7 @@ export async function promptRunners(
 
     if (globalOverrides.agent) {
       defaultAgent = globalOverrides.agent;
-      defaultModel = globalOverrides.model || config.agentDefaultModels[defaultAgent] || config.defaultModel;
+      defaultModel = globalOverrides.model || config.registry.providers[defaultAgent]?.[0] || config.registry.defaults.model;
     }
 
     if (!customize) {
@@ -62,47 +72,93 @@ export async function promptRunners(
       continue;
     }
 
+    let promptDefaultAgent = defaultAgent;
+    if (!selectableAgents.includes(promptDefaultAgent)) {
+      promptDefaultAgent = config.registry.defaults.agent;
+    }
+
     const agent = await select({
       message: `Select agent for skill '${skillId}':`,
-      choices: [
-        { name: 'opencode', value: 'opencode' },
-        { name: 'codex', value: 'codex' },
-        { name: 'claude', value: 'claude' }
-      ],
-      default: defaultAgent
+      choices: selectableAgents.map(a => ({ name: a, value: a })),
+      default: promptDefaultAgent
     });
 
-    const defaultModelForSelectedAgent = config.agentDefaultModels[agent] || config.defaultModel;
+    const models = config.registry.providers[agent] || [];
+    const modelChoices = models.map(m => ({ name: m, value: m }));
+    modelChoices.push({ name: 'Custom model…', value: 'custom' });
 
-    const model = await input({
-      message: `Enter model for agent '${agent}' (skill '${skillId}'):`,
-      default: defaultModelForSelectedAgent
+    let defaultModelSelection = defaultModel;
+    if (!models.includes(defaultModelSelection)) {
+      defaultModelSelection = config.registry.defaults.model;
+    }
+    if (!models.includes(defaultModelSelection)) {
+      defaultModelSelection = models[0] || 'custom';
+    }
+
+    let selectedModel = await select({
+      message: `Select model for agent '${agent}' (skill '${skillId}'):`,
+      choices: modelChoices,
+      default: defaultModelSelection
     });
 
-    runners[skillId] = { agent, model };
+    if (selectedModel === 'custom') {
+      selectedModel = await input({
+        message: `Enter custom model for agent '${agent}' (skill '${skillId}'):`,
+        validate: (val) => {
+          if (!isValidModelForAgent(agent, val, config.registry)) {
+            return `model '${val}' is not a valid model for agent '${agent}'`;
+          }
+          return true;
+        }
+      });
+    }
+
+    runners[skillId] = { agent, model: selectedModel };
   }
 
   return runners;
 }
 
-export async function promptSecondOpinionDecision(): Promise<'stop' | 'run-second-opinion'> {
+export async function promptSecondOpinionDecision(
+  allowedActions: ('stop' | 'run-second-opinion' | 'implement')[]
+): Promise<'stop' | 'run-second-opinion' | 'implement'> {
+  const choices = [];
+  if (allowedActions.includes('stop')) {
+    choices.push({ name: 'Stop and await manual review', value: 'stop' as const });
+  }
+  if (allowedActions.includes('run-second-opinion')) {
+    choices.push({ name: 'Run second opinion (with a different agent)', value: 'run-second-opinion' as const });
+  }
+  if (allowedActions.includes('implement')) {
+    choices.push({ name: 'Run implementation', value: 'implement' as const });
+  }
   return select({
     message: 'Audit is APPROVED! What would you like to do?',
-    choices: [
-      { name: 'Stop and await manual review', value: 'stop' },
-      { name: 'Run second opinion (with a different agent)', value: 'run-second-opinion' }
-    ],
+    choices,
     default: 'stop'
   });
 }
 
 export async function promptSecondOpinionRunner(
   currentAgent: string,
-  config: Config
+  config: Config,
+  agentRegistry: AgentRegistry
 ): Promise<{ agent: string; model: string }> {
-  // Recommend a different agent
-  const recommendedAgent = currentAgent === 'opencode' ? 'codex' : 'opencode';
-  const recommendedModel = config.agentDefaultModels[recommendedAgent] || config.defaultModel;
+  const selectableAgents = [...agentRegistry.adapters.keys()]
+    .filter((agent) => agent in config.registry.providers);
+
+  if (!selectableAgents.includes(config.registry.defaults.agent)) {
+    throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
+  }
+
+  const alternativeAgents = selectableAgents.filter((agent) => agent !== currentAgent);
+  if (alternativeAgents.length === 0) {
+    throw new Error('No alternative configured and runnable agent available for second opinion.');
+  }
+
+  const recommendedAgent = alternativeAgents[0]!;
+  const recommendedModel =
+    config.registry.providers[recommendedAgent]?.[0] ?? config.registry.defaults.model;
 
   const customize = await confirm({
     message: `Configure second opinion runner? (Recommended: ${recommendedAgent} using ${recommendedModel})`,
@@ -115,20 +171,47 @@ export async function promptSecondOpinionRunner(
 
   const agent = await select({
     message: 'Select agent for second opinion:',
-    choices: [
-      { name: 'opencode', value: 'opencode' },
-      { name: 'codex', value: 'codex' },
-      { name: 'claude', value: 'claude' }
-    ],
+    choices: selectableAgents.map(a => ({ name: a, value: a })),
     default: recommendedAgent
   });
 
-  const defaultModelForSelectedAgent = config.agentDefaultModels[agent] || config.defaultModel;
+  const models = config.registry.providers[agent] || [];
+  const modelChoices = models.map(m => ({ name: m, value: m }));
+  modelChoices.push({ name: 'Custom model…', value: 'custom' });
 
-  const model = await input({
-    message: `Enter model for agent '${agent}':`,
-    default: defaultModelForSelectedAgent
+  let defaultModelSelection = config.registry.providers[agent]?.[0] || config.registry.defaults.model;
+  if (!models.includes(defaultModelSelection)) {
+    defaultModelSelection = 'custom';
+  }
+
+  let selectedModel = await select({
+    message: `Select model for agent '${agent}':`,
+    choices: modelChoices,
+    default: defaultModelSelection
   });
 
-  return { agent, model };
+  if (selectedModel === 'custom') {
+    selectedModel = await input({
+      message: `Enter custom model for agent '${agent}':`,
+      validate: (val) => {
+        if (!isValidModelForAgent(agent, val, config.registry)) {
+          return `model '${val}' is not a valid model for agent '${agent}'`;
+        }
+        return true;
+      }
+    });
+  }
+
+  return { agent, model: selectedModel };
+}
+
+export async function promptContinueToReview(): Promise<'stop' | 'review'> {
+  return select({
+    message: 'Implementation complete! What would you like to do next?',
+    choices: [
+      { name: 'Stop and await manual review', value: 'stop' as const },
+      { name: 'Run code review', value: 'review' as const }
+    ],
+    default: 'stop'
+  });
 }

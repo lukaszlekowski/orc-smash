@@ -4,14 +4,27 @@ import type { Config } from '../src/config.js';
 
 describe('Runner selection and verification', () => {
   const dummyConfig: Config = {
-    defaultAgent: 'opencode',
-    defaultModel: 'opencode-go/deepseek-v4-flash',
-    agentDefaultModels: {
-      opencode: 'opencode-go/deepseek-v4-flash',
-      codex: 'gpt-5-codex',
-      claude: 'claude-sonnet-4-6'
+    registry: {
+      providers: {
+        opencode: [
+          'opencode-go/deepseek-v4-flash',
+          'opencode/deepseek-v4-flash-free'
+        ],
+        claude: [
+          'claude-sonnet-4-6'
+        ],
+        codex: [
+          'gpt-5-codex'
+        ],
+        fake: [
+          'fake-model'
+        ]
+      },
+      defaults: {
+        agent: 'opencode',
+        model: 'opencode-go/deepseek-v4-flash'
+      }
     },
-    apiKeys: {},
     manifest: {
       roles: { auditor: 'roles/auditor.md' },
       skills: {
@@ -29,17 +42,17 @@ describe('Runner selection and verification', () => {
 
   it('verifies valid models for agents', () => {
     // Note: full model-level validity is resolved at runtime via stream error; this is just a sync shape check.
-    expect(isValidModelForAgent('opencode', 'opencode-go/deepseek-v4-flash')).toBe(true);
-    expect(isValidModelForAgent('opencode', 'zai-coding-plan/glm-5.2')).toBe(true);
-    expect(isValidModelForAgent('opencode', 'opencode/deepseek')).toBe(true);
-    expect(isValidModelForAgent('opencode', 'gpt-5-codex')).toBe(false);
+    expect(isValidModelForAgent('opencode', 'opencode-go/deepseek-v4-flash', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('opencode', 'zai-coding-plan/glm-5.2', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('opencode', 'opencode/deepseek', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('opencode', 'gpt-5-codex', dummyConfig.registry)).toBe(false);
 
-    expect(isValidModelForAgent('claude', 'claude-sonnet-4-6')).toBe(true);
-    expect(isValidModelForAgent('claude', 'opencode/deepseek')).toBe(false);
+    expect(isValidModelForAgent('claude', 'claude-sonnet-4-6', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('claude', 'opencode/deepseek', dummyConfig.registry)).toBe(false);
 
-    expect(isValidModelForAgent('codex', 'gpt-5-codex')).toBe(true);
-    expect(isValidModelForAgent('codex', 'opencode/deepseek')).toBe(false);
-    expect(isValidModelForAgent('codex', 'claude-sonnet-4-6')).toBe(false);
+    expect(isValidModelForAgent('codex', 'gpt-5-codex', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('codex', 'opencode/deepseek', dummyConfig.registry)).toBe(false);
+    expect(isValidModelForAgent('codex', 'claude-sonnet-4-6', dummyConfig.registry)).toBe(false);
   });
 
   it('resolves using global overrides', () => {

@@ -1,0 +1,11 @@
+providers:
+  opencode:
+    - opencode-go/deepseek-v4-flash
+    - opencode/deepseek-v4-flash-free
+  claude:
+    - claude-sonnet-4-6
+  codex:
+    - gpt-5-codex
+defaults:
+  agent: opencode
+  model: opencode-go/deepseek-v4-flash

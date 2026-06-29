@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
-import { scan } from '../state.js';
+import { scan, resolveImplementFacts, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
 import { validateAgentAndModel } from '../runner.js';
 import { resolveNextStep, allowedStartPoint } from '../next-step.js';
@@ -32,7 +32,7 @@ interface SmashRunSetup {
   config: Config;
   runners: Record<string, { agent: string; model: string }>;
   maxIterations: number;
-  startPoint: 'fresh' | 'resume' | 'new-round';
+  startPoint?: 'fresh' | 'resume' | 'new-round';
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
@@ -58,19 +58,45 @@ async function resolveSmashRunSetup(
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
+  const registry = createProductionAdapterRegistry();
+
   // 1. Loop selection
   let loopName = options.loop;
   const isInteractive = !options.loop;
 
   if (isInteractive) {
-    let defaultLoop = loopKeys[0] || 'plan';
-    for (const key of loopKeys) {
-      const spec = config.manifest.loops[key]!;
-      const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern, followUpPattern: spec.followUpPattern });
-      if (stateScan.auditSteps.length > 0) {
-        defaultLoop = key;
-        break;
+    let defaultLoop = 'plan';
+    const planSpec = config.manifest.loops['plan'];
+    const implementSpec = config.manifest.loops['implement'];
+    if (planSpec && implementSpec) {
+      const { approvedPlanAuditPath, currentPlanImplemented } = resolveImplementFacts(
+        projectRoot,
+        {
+          auditPattern: planSpec.auditPattern ?? '',
+          followUpPattern: planSpec.followUpPattern ?? ''
+        },
+        {
+          implementPattern: implementSpec.implementPattern ?? ''
+        }
+      );
+      if (currentPlanImplemented) {
+        defaultLoop = 'review';
+      } else if (approvedPlanAuditPath !== null) {
+        defaultLoop = 'implement';
+      } else {
+        defaultLoop = 'plan';
       }
+    } else {
+      let defaultLoopCandidate = loopKeys[0] || 'plan';
+      for (const key of loopKeys) {
+        const spec = config.manifest.loops[key]!;
+        const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern || '', followUpPattern: spec.followUpPattern || '' });
+        if (stateScan.auditSteps.length > 0) {
+          defaultLoopCandidate = key;
+          break;
+        }
+      }
+      defaultLoop = defaultLoopCandidate;
     }
     loopName = await promptLoopSelect(loopKeys, defaultLoop);
   }
@@ -83,43 +109,61 @@ async function resolveSmashRunSetup(
 
   const loopSpec = config.manifest.loops[loopName]!;
 
-  // 2. Scan state
-  const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
-  if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
-    const msg = 'latest audit is unparseable; resolve or delete it before smashing';
-    options.output.error(msg);
-    return { errorResult: { exitCode: 1, message: msg } };
-  }
+  // 2. Scan state & 3. Start Point selection & validation
+  let startPoint: 'fresh' | 'resume' | 'new-round' | undefined = undefined;
 
-  // 3. Start Point selection & validation
-  const decision = resolveNextStep({
-    latestVerdict: stateScan.latestVerdict,
-    latestVersion: stateScan.latestVersion,
-    hasAudits: stateScan.auditSteps.length > 0,
-    latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
-  });
-  const allowed = allowedStartPoint(decision);
-
-  let startPoint: 'fresh' | 'resume' | 'new-round' = 'fresh';
-
-  if (isInteractive) {
-    const allowedList: string[] = allowed ? [allowed] : [];
-    const defaultSP = allowed ?? 'fresh';
-    const sp = await promptStartPoint(allowedList, defaultSP);
-    startPoint = sp as any;
+  if (loopSpec.kind === 'implement') {
+    try {
+      const planSpec = config.manifest.loops['plan'];
+      if (!planSpec) {
+        throw new Error("Loop 'plan' not found in manifest");
+      }
+      requireApprovedPlanAuditPath(projectRoot, {
+        auditPattern: planSpec.auditPattern ?? '',
+        followUpPattern: planSpec.followUpPattern ?? ''
+      });
+    } catch (err: any) {
+      const msg = `Error: ${err.message}`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
   } else {
-    startPoint = allowed ?? 'fresh';
-  }
+    const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
+    if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
+      const msg = 'latest audit is unparseable; resolve or delete it before smashing';
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
 
-  const latestVerdict = stateScan.latestVerdict;
-  if (startPoint !== allowed) {
-    const msg = `Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`;
-    options.output.error(msg);
-    return { errorResult: { exitCode: 1, message: msg } };
+    const decision = resolveNextStep({
+      latestVerdict: stateScan.latestVerdict,
+      latestVersion: stateScan.latestVersion,
+      hasAudits: stateScan.auditSteps.length > 0,
+      latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+    });
+    const allowed = allowedStartPoint(decision);
+
+    if (isInteractive) {
+      const allowedList: string[] = allowed ? [allowed] : [];
+      const defaultSP = allowed ?? 'fresh';
+      const sp = await promptStartPoint(allowedList, defaultSP);
+      startPoint = sp as any;
+    } else {
+      startPoint = allowed ?? 'fresh';
+    }
+
+    const latestVerdict = stateScan.latestVerdict;
+    if (startPoint !== allowed) {
+      const msg = `Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
   }
 
   // 4. Runners selection & validation
-  const loopSkills = [loopSpec.audit, loopSpec['follow-up']];
+  const loopSkills = loopSpec.kind === 'implement'
+    ? (loopSpec.implement ? [loopSpec.implement] : [])
+    : [loopSpec.audit, loopSpec['follow-up']].filter((s): s is string => !!s);
   const runners: Record<string, { agent: string; model: string }> = {};
 
   const globalOverrides = {
@@ -129,9 +173,9 @@ async function resolveSmashRunSetup(
 
   if (globalOverrides.agent || globalOverrides.model) {
     try {
-      const resolvedAgent = globalOverrides.agent || config.defaultAgent;
-      const resolvedModel = globalOverrides.model || config.agentDefaultModels[resolvedAgent] || config.defaultModel;
-      validateAgentAndModel(resolvedAgent, resolvedModel);
+      const resolvedAgent = globalOverrides.agent || config.registry.defaults.agent;
+      const resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
+      validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
       options.output.error(msg);
@@ -140,7 +184,7 @@ async function resolveSmashRunSetup(
   }
 
   if (isInteractive) {
-    const promptedRunners = await promptRunners(loopSkills, config, globalOverrides);
+    const promptedRunners = await promptRunners(loopSkills, config, registry, globalOverrides);
     Object.assign(runners, promptedRunners);
   } else {
     for (const skillId of loopSkills) {
@@ -152,11 +196,11 @@ async function resolveSmashRunSetup(
 
       if (globalOverrides.agent) {
         resolvedAgent = globalOverrides.agent;
-        resolvedModel = globalOverrides.model || config.agentDefaultModels[resolvedAgent] || config.defaultModel;
+        resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
       }
 
       try {
-        validateAgentAndModel(resolvedAgent, resolvedModel);
+        validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
       } catch (err: any) {
         const msg = `Error: ${err.message}`;
         options.output.error(msg);
@@ -179,8 +223,6 @@ async function resolveSmashRunSetup(
       return { errorResult: { exitCode: 1, message: msg } };
     }
   }
-
-  const registry = createProductionAdapterRegistry();
 
   return {
     setup: {
