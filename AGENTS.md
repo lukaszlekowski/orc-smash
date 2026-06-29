@@ -15,6 +15,17 @@ itself.
 - These docs must stay synchronized with `docs/dev/plan.md` on manifest semantics, the runner
   model, and verification gates.
 
+## 1a. Architecture direction matters as much as feature scope
+
+- Refactors must introduce **purposeful module boundaries**, not generic helper buckets.
+- A new file is justified only when it owns a stable responsibility, shared domain rule, or
+  testable contract.
+- Prefer small pure modules for single-source-of-truth rules such as artifact-path rendering,
+  next-step resolution, and shared runtime contracts.
+- Avoid files such as `helpers.ts`, `common.ts`, or `misc.ts` unless the responsibility name is
+  genuinely precise and durable.
+- Keep orchestration thin and keep provider-specific behavior behind adapters.
+
 ## 2. Runners are per-skill; three real adapters behind one seam
 
 - Each skill declares its own default `agent`/`model`; the operator can override any skill's
@@ -30,8 +41,7 @@ itself.
   (the `21-simple-plans-audit` / review skills hardcode this shape). A model slug is
   intentionally **not** added — diverging from the skill's template risks the agent writing to
   the templated path and breaking state detection. orc-smash records the model itself via a
-  provenance stamp (`provenance.ts`), recovered with a fallback chain (stamp → `Auditor:`
-  header → filename `{agent}`).
+  provenance stamp (`provenance.ts`).
 - All agents implement `AgentAdapter` (`buildRun` + `run`). Agents are black boxes — opaque
   native binaries invoked over `stdio + args`. orc-smash never imports them or shares a runtime.
 - Headless agents that must write files require the provider's autonomy flag
@@ -48,6 +58,10 @@ itself.
 - `unknown` (missing file, malformed `## Verdict`, stdout parse miss, transport failure) stops
   the loop for human review. The target is **never** mutated on a parse miss or infrastructure
   failure.
+- Execution-completeness signals are part of this rule when an adapter can provide them. In the
+  current repo direction, `opencode` is the only provider with a verified completion signal
+  (`stopReason`); `codex` and `claude` still rely on exit code + structured error handling until
+  proven otherwise.
 - Follow-up runs **only** on a concrete `REJECTED` audit — never on `unknown` or `APPROVED`.
 
 ## 4. Post-approval offers a second opinion
@@ -58,7 +72,7 @@ itself.
 
 ## 5. Statelessness; one runner per target
 
-- The tool holds only config (default models + keys). All per-run target state is read from the
+- The tool holds only config. All per-run target state is read from the
   target's `docs/dev/` filenames on each run; nothing is persisted or resumed by the tool.
 - One runner per target. Concurrent runs on *different* targets are fine and must not
   interfere (proven by the dual-target isolation e2e).

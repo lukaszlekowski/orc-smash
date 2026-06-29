@@ -4,6 +4,7 @@ import { loadConfig } from '../config.js';
 import { scan } from '../state.js';
 import { runLoop } from '../loop.js';
 import { validateAgentAndModel } from '../runner.js';
+import { resolveNextStep, allowedStartPoint } from '../next-step.js';
 import {
   promptLoopSelect,
   promptStartPoint,
@@ -71,48 +72,33 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     process.exit(1);
   }
 
-  // 3. Start Point selection & validation
-  let startPoint: 'fresh' | 'resume' | 'new-round' = 'fresh';
-  
-  if (isInteractive) {
-    const allowed: string[] = [];
-    let defaultSP = 'fresh';
-    if (stateScan.auditSteps.length === 0) {
-      allowed.push('fresh');
-      defaultSP = 'fresh';
-    } else if (stateScan.latestVerdict === 'REJECTED') {
-      allowed.push('resume');
-      defaultSP = 'resume';
-    } else if (stateScan.latestVerdict === 'APPROVED') {
-      allowed.push('new-round');
-      defaultSP = 'new-round';
-    }
+  // 3. Start Point selection & validation — driven by the canonical next-step rule
+  // (resolveNextStep + allowedStartPoint), so the command cannot re-derive
+  // verdict-to-start-point policy inline.
+  const decision = resolveNextStep({
+    latestVerdict: stateScan.latestVerdict,
+    latestVersion: stateScan.latestVersion,
+    hasAudits: stateScan.auditSteps.length > 0,
+    latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+  });
+  const allowed = allowedStartPoint(decision); // the single valid start point for this state, or null
 
-    const sp = await promptStartPoint(allowed, defaultSP);
+  let startPoint: 'fresh' | 'resume' | 'new-round' = 'fresh';
+
+  if (isInteractive) {
+    const allowedList: string[] = allowed ? [allowed] : [];
+    const defaultSP = allowed ?? 'fresh';
+    const sp = await promptStartPoint(allowedList, defaultSP);
     startPoint = sp as any;
   } else {
     // Non-interactive start point determination
-    if (stateScan.auditSteps.length === 0) {
-      startPoint = 'fresh';
-    } else if (stateScan.latestVerdict === 'REJECTED') {
-      startPoint = 'resume';
-    } else if (stateScan.latestVerdict === 'APPROVED') {
-      startPoint = 'new-round';
-    }
+    startPoint = allowed ?? 'fresh';
   }
 
-  // Validate startPoint against detected state
+  // Validate the chosen start point against the canonical rule for this state.
   const latestVerdict = stateScan.latestVerdict;
-  if (startPoint === 'resume' && latestVerdict !== 'REJECTED') {
-    console.error(chalk.red(`Error: start-point 'resume' is invalid for latest verdict ${latestVerdict || 'null'}`));
-    process.exit(1);
-  }
-  if (startPoint === 'new-round' && latestVerdict !== 'APPROVED') {
-    console.error(chalk.red(`Error: start-point 'new-round' is invalid for latest verdict ${latestVerdict || 'null'}`));
-    process.exit(1);
-  }
-  if (startPoint === 'fresh' && stateScan.auditSteps.length > 0) {
-    console.error(chalk.red(`Error: start-point 'fresh' is invalid for latest verdict ${latestVerdict || 'null'}`));
+  if (startPoint !== allowed) {
+    console.error(chalk.red(`Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`));
     process.exit(1);
   }
 

@@ -27,11 +27,8 @@ describe('State Scanner', () => {
     expect(result.latestVerdict).toBeNull();
     expect(result.timeline).toHaveLength(0);
     expect(result.auditSteps).toHaveLength(0);
-    expect(result.proposedNext).toEqual({
-      skill: 'audit',
-      version: 1,
-      priorAuditPath: null
-    });
+    // state.ts is now a fact-scanning module; the next-step decision derived from
+    // these facts is asserted canonically in tests/next-step.test.ts.
   });
 
   it('detects restart from rejected state', () => {
@@ -62,11 +59,9 @@ describe('State Scanner', () => {
     expect(result.latestVerdict).toBe('REJECTED');
     expect(result.timeline).toHaveLength(1);
     expect(result.auditSteps).toHaveLength(1);
-    expect(result.proposedNext).toEqual({
-      skill: 'follow-up',
-      version: 1, // follow-up version is N (the version being repaired)
-      priorAuditPath: v1Path
-    });
+    // latest audit path feeds resolveNextStep; the follow-up-version decision
+    // itself is asserted in tests/next-step.test.ts.
+    expect(result.auditSteps[0]?.artifactPath).toBe(v1Path);
   });
 
   it('detects APPROVED state', () => {
@@ -99,9 +94,9 @@ describe('State Scanner', () => {
     const result = scan(tempDir, patterns);
     expect(result.latestVersion).toBe(2);
     expect(result.latestVerdict).toBe('APPROVED');
-    expect(result.proposedNext.skill).toBe('audit');
-    expect(result.proposedNext.version).toBe(3);
-    expect(result.proposedNext.priorAuditPath).toBe(v2Path);
+    // canonical next-round decision (next audit = v3) is asserted in
+    // tests/next-step.test.ts; here we assert the scanned facts + latest path.
+    expect(result.auditSteps[result.auditSteps.length - 1]?.artifactPath).toBe(v2Path);
   });
 
   it('ignores archived directory', () => {
@@ -187,5 +182,31 @@ describe('State Scanner', () => {
 
     const result = scan(tempDir, patterns);
     expect(result.latestVerdict).toBe('APPROVED'); // still APPROVED
+  });
+
+  it('parses front matter + verdict consistently from a single read (Step 3 regression)', () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+
+    const meta: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'codex', model: 'gpt-5-codex',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-codex.md'),
+      buildFrontMatter(meta) + `# Plan Audit v1\n\n## Verdict\nREJECTED\n`
+    );
+
+    const result = scan(tempDir, patterns);
+    expect(result.auditSteps).toHaveLength(1);
+    const step = result.auditSteps[0]!;
+    // Enriched from front matter (metadata fallback works for generated artifacts)...
+    expect(step.role).toBe('auditor');
+    expect(step.agent).toBe('codex');
+    expect(step.model).toBe('gpt-5-codex');
+    // ...and the verdict is parsed from the same single read.
+    expect(step.verdict).toBe('REJECTED');
+    expect(step.version).toBe(1);
   });
 });

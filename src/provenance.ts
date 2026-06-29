@@ -17,12 +17,6 @@ export interface ArtifactMeta {
   timestamp: string;    // ISO 8601
 }
 
-export interface Provenance {
-  agent: string;
-  model: string;
-  version: number;
-}
-
 /** Build the canonical front-matter block (with trailing blank line). */
 export function buildFrontMatter(meta: ArtifactMeta): string {
   const yaml = YAML.stringify(meta).trimEnd();
@@ -44,8 +38,11 @@ function extractFrontMatter(content: string): string | null {
 }
 
 /**
- * Read canonical metadata. Front matter wins; legacy HTML-comment and
- * `Auditor:` header paths survive only as fallbacks for historical artifacts.
+ * Read canonical metadata from harness-owned front matter. When front matter is
+ * absent, the result is built ONLY from the caller-supplied fallback values
+ * (`agent`, `version`, `kind`); nothing is inferred from document prose. The
+ * legacy HTML-comment and `Auditor:` header fallback paths have been removed —
+ * the harness only owns the front-matter contract.
  */
 export function parseArtifactMeta(
   content: string,
@@ -67,45 +64,18 @@ export function parseArtifactMeta(
       timestamp: obj.timestamp ?? ''
     };
   }
-  const p = parseLegacyProvenance(content, fallback.agent, fallback.version);
+
+  // No front matter: use only the caller-supplied fallback values.
   return {
     loop: 'unknown',
     skill: 'unknown',
     kind: fallback.kind ?? 'audit',
     role: 'unknown',
-    version: p.version,
-    agent: p.agent,
-    model: p.model,
+    version: fallback.version,
+    agent: fallback.agent,
+    model: 'unknown',
     target: 'unknown',
     priorAudit: 'none',
     timestamp: ''
   };
-}
-
-/** Back-compat shim: returns just agent/model/version. Delegates to parseArtifactMeta. */
-export function parseProvenance(content: string, filenameAgent: string, filenameVersion: number): Provenance {
-  const m = parseArtifactMeta(content, { agent: filenameAgent, version: filenameVersion });
-  return { agent: m.agent, model: m.model, version: m.version };
-}
-
-// --- Legacy parsers (fallback only) ---------------------------------------
-
-function parseLegacyProvenance(content: string, filenameAgent: string, filenameVersion: number): Provenance {
-  const comment = content.match(/<!--\s*orc-smash-provenance\s+agent="([^"]+)"\s+model="([^"]+)"\s+version="(\d+)"\s*-->/);
-  if (comment) {
-    return { agent: comment[1]!, model: comment[2]!, version: parseInt(comment[3]!, 10) };
-  }
-  const auditor = content.match(/^[#\s]*Auditor:\s*([^\s\r\n]+)/im);
-  if (auditor) {
-    const raw = auditor[1]!;
-    const parts = raw.split('-');
-    const parsedAgent = parts[0]!;
-    const parsedModel = parts.slice(1).join('-');
-    const knownAgents = ['opencode', 'codex', 'claude', 'fake'];
-    if (knownAgents.includes(parsedAgent)) {
-      return { agent: parsedAgent, model: parsedModel || 'unknown', version: filenameVersion };
-    }
-    return { agent: filenameAgent, model: raw, version: filenameVersion };
-  }
-  return { agent: filenameAgent, model: 'unknown', version: filenameVersion };
 }

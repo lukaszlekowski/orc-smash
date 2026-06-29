@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { loadConfig } from '../config.js';
 import { scan } from '../state.js';
 import { renderStatusPanel } from '../status.js';
+import { resolveNextStep } from '../next-step.js';
 
 export interface StatusOptions {
   project?: string;
@@ -44,15 +45,31 @@ export async function statusAction(options: StatusOptions): Promise<void> {
   const loopSpec = config.manifest.loops[detectedLoop]!;
   const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
 
+  // Single source of truth: next-step messaging derives from resolveNextStep,
+  // the same rule the loop and smash command consume.
+  const decision = resolveNextStep({
+    latestVerdict: stateScan.latestVerdict,
+    latestVersion: stateScan.latestVersion,
+    hasAudits: stateScan.auditSteps.length > 0,
+    latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+  });
+
   let nextStepMessage = 'Ready to smash';
-  if (stateScan.latestVerdict === 'REJECTED') {
-    nextStepMessage = `Proposed next: follow-up then audit version ${stateScan.latestVersion + 1}`;
-  } else if (stateScan.latestVerdict === 'APPROVED') {
-    nextStepMessage = `Completed: approved at version ${stateScan.latestVersion}`;
-  } else if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
-    nextStepMessage = `Terminal error: latest audit is unparseable`;
-  } else if (stateScan.auditSteps.length === 0) {
-    nextStepMessage = 'Ready to smash version 1 (fresh)';
+  switch (decision.state) {
+    case 'fresh':
+      nextStepMessage = `Ready to smash version ${decision.nextAuditVersion} (fresh)`;
+      break;
+    case 'rejected':
+      // Built from nextAuditVersion (not followUpVersion) so the status message
+      // cannot drift from the canonical restart rule.
+      nextStepMessage = `Proposed next: follow-up then audit version ${decision.nextAuditVersion}`;
+      break;
+    case 'approved':
+      nextStepMessage = `Completed: approved at version ${stateScan.latestVersion}`;
+      break;
+    case 'unknown-latest-audit':
+      nextStepMessage = `Terminal error: latest audit is unparseable`;
+      break;
   }
 
   console.log(

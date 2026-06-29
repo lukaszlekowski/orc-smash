@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LoopSpec } from './manifest.js';
+import { renderPattern } from './patterns.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,9 +38,7 @@ export function resolveInput(
       return context.priorAuditPath;
     case 'outputPath': {
       const pattern = context.kind === 'follow-up' ? context.followUpPattern : context.auditPattern;
-      return pattern
-        .replace('{n}', String(context.version))
-        .replace('{agent}', context.agentName);
+      return renderPattern(pattern, { n: context.version, agent: context.agentName });
     }
     case 'planPath':
       return context.planPath || 'none';

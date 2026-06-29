@@ -11,11 +11,12 @@ The binary is **`orc`**; the main command is **`orc smash`**.
 
 ```bash
 pnpm install
-cp .env.example .env        # DEFAULT_AGENT/DEFAULT_MODEL + per-agent default models (+ keys)
+cp .env.example .env        # current defaults; roadmap work will later move model-default ownership into a registry
 ```
 
 Default runner: `opencode-go/deepseek-v4-flash`. Each agent has its own default model
 (`CODEX_DEFAULT_MODEL`, `CLAUDE_DEFAULT_MODEL`); switching a skill's agent re-defaults its model.
+This is the current mechanism, not the long-term target architecture.
 
 ## Commands
 
@@ -45,6 +46,27 @@ orc status --project <path>         # read-only: detect where we are, render the
 - **Second opinion:** on APPROVED, choose `stop` or `run-second-opinion` (re-prompts the audit
   runner, ideally a different agent, and runs the next version).
 
+## Architecture direction
+
+Current development is steering the harness toward a cleaner runtime architecture:
+
+- **Single-source-of-truth rules:** artifact-path rendering/parsing, next-step resolution, and
+  shared runtime contracts should each live in one clearly named place.
+- **Purposeful module boundaries:** new files are added only when they own a stable
+  responsibility. Avoid generic buckets such as `helpers.ts`, `common.ts`, or `misc.ts`.
+- **Thin orchestration:** `loop.ts` should orchestrate, while stable runtime seams own process
+  execution, artifact conventions, and decision logic.
+- **Provider-specific behavior behind adapters:** shared runtime code should consume normalized
+  signals; provider-specific parsing and remediation stay in the adapter layer.
+- **Execution completeness as an explicit contract:** in the current repo direction, `opencode`
+  is the only provider with a verified completion signal (`stopReason`). `codex` and `claude`
+  still rely on exit code + structured error handling until equivalent support is explicitly
+  proven and implemented.
+
+See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
+[docs/roadmap.md](./docs/roadmap.md) for staged direction, and
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 1 implementation plan.
+
 ## Verification
 
 ```bash
@@ -61,5 +83,9 @@ end-to-end smoke (sign-off requires all of them) — none is optional.
 
 ## Project layout
 
-See `docs/dev/plan.md` for the full design and `docs/architecture/overview.md` for the module
-map. Authority rules: `AGENTS.md`.
+Use these docs with different expectations:
+
+- [docs/architecture/overview.md](./docs/architecture/overview.md): canonical architecture overview
+- [docs/roadmap.md](./docs/roadmap.md): staged roadmap and architectural direction
+- [docs/dev/plan.md](./docs/dev/plan.md): current implementation plan
+- [AGENTS.md](./AGENTS.md): repository rules and invariants

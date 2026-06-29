@@ -354,8 +354,9 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('opencode rejected model');
+    expect(result.message).toContain('fake execution error');
     expect(result.message).toContain('err_3a9287f2');
+    expect(result.message).not.toContain('opencode rejected model');
   });
 
   it('fails fast on audit timeout error (C1 + m6)', async () => {
@@ -382,8 +383,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('timed out');
-    expect(result.message).toContain('5000ms');
+    expect(result.message).toContain('fake timed out after 5000ms');
   });
 
   it('fails fast on audit auth error (C1)', async () => {
@@ -410,7 +410,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('provider/credential error');
+    expect(result.message).toContain('fake provider/credential error');
   });
 
   it('fails on follow-up error and does not write false patched step (C2)', async () => {
@@ -440,7 +440,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('opencode rejected model');
+    expect(result.message).toContain('fake execution error');
     expect(result.message).toContain('err_y');
 
     // Verify follow-up file was NOT written (due to early failure)
