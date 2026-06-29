@@ -35,7 +35,8 @@ export interface RunResult {
   stderr?: string;            // captured separately — NEVER folded into stdout
   error?: RunError;           // structured adapter error (absent ⇒ success)
   toolCalls?: ToolCall[];     // opencode: parsed tool calls (also feeds item 5 later)
-  stopReason?: string | null; // opencode: last step_finish.part.reason (e.g. "stop")
+  stopReason?: string | null; // opencode: raw last step_finish.part.reason (e.g. "stop"); diagnostics only
+  completion?: 'complete' | 'truncated' | 'interrupted'; // normalized execution-completeness (Batch 1: opencode only)
 }
 
 export interface AgentAdapter {

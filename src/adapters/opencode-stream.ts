@@ -11,13 +11,16 @@ export interface ParseResult {
   finalText: string;
   toolCalls: ToolCall[];
   stopReason: string | null;
+  // Kept for tests/diagnostics: the full ordered list of step_finish reasons.
   finishReasons: string[];
+  // Kept for tests/diagnostics: aggregate token usage across step_finish events.
   tokenUsage?: {
     prompt?: number;
     completion?: number;
     total?: number;
   };
   streamError?: OpencodeStreamError;
+  // Kept for tests/diagnostics: lines that failed to parse as JSON stream events.
   unparsed: string[];
 }
 

@@ -4,11 +4,10 @@ import { join } from 'node:path';
 import {
   writeArtifactWithMeta,
   parseArtifactMeta,
-  parseProvenance,
   type ArtifactMeta
 } from '../src/provenance.js';
 
-describe('Provenance front-matter and legacy fallback', () => {
+describe('Provenance front-matter contract', () => {
   const tempDir = join(process.cwd(), 'temp-provenance-test');
   const tempFile = join(tempDir, 'test-artifact.md');
 
@@ -51,41 +50,36 @@ describe('Provenance front-matter and legacy fallback', () => {
     expect(files).toEqual(['test-artifact.md']);
   });
 
-  it('falls back to HTML comment for historical artifacts in parseProvenance', () => {
-    const fileContent = `Some text here.
-<!-- orc-smash-provenance agent="opencode" model="opencode-go/deepseek-v4-flash" version="6" -->`;
-    const parsed = parseProvenance(fileContent, 'opencode', 6);
+  it('uses only the caller fallback values when front matter is absent', () => {
+    const body = `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`;
+    const parsed = parseArtifactMeta(body, { agent: 'claude', version: 3, kind: 'audit' });
     expect(parsed).toEqual({
-      agent: 'opencode',
-      model: 'opencode-go/deepseek-v4-flash',
-      version: 6
-    });
-  });
-
-  it('falls back to Auditor header when comment is missing in parseProvenance', () => {
-    const fileContent = `
-# Plan Audit
-Auditor: codex-gpt-5
-Document: some-doc
-    `;
-    const parsed = parseProvenance(fileContent, 'codex', 5);
-    expect(parsed).toEqual({
-      agent: 'codex',
-      model: 'gpt-5',
-      version: 5
-    });
-  });
-
-  it('falls back to filename agent and version when Auditor header and comment are missing in parseProvenance', () => {
-    const fileContent = `
-# Plan Audit
-Just some markdown content.
-    `;
-    const parsed = parseProvenance(fileContent, 'claude', 3);
-    expect(parsed).toEqual({
+      loop: 'unknown',
+      skill: 'unknown',
+      kind: 'audit',
+      role: 'unknown',
+      version: 3,
       agent: 'claude',
       model: 'unknown',
-      version: 3
+      target: 'unknown',
+      priorAudit: 'none',
+      timestamp: ''
     });
+  });
+
+  it('does NOT infer metadata from legacy prose (HTML comment / Auditor header removed)', () => {
+    // A historical artifact carrying an HTML-comment provenance stamp and an
+    // `Auditor:` header must NOT have that prose parsed as metadata anymore.
+    const body = `Some text here.
+<!-- orc-smash-provenance agent="opencode" model="opencode-go/deepseek-v4-flash" version="6" -->
+
+# Plan Audit
+Auditor: codex-gpt-5
+`;
+    const parsed = parseArtifactMeta(body, { agent: 'claude', version: 3, kind: 'audit' });
+    // Only the caller fallback values survive; prose is never inferred.
+    expect(parsed.agent).toBe('claude');
+    expect(parsed.version).toBe(3);
+    expect(parsed.model).toBe('unknown');
   });
 });

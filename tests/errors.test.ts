@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { structuredMessage } from '../src/adapters/errors.js';
 import type { RunResult } from '../src/adapters/types.js';
 
-describe('structuredMessage error formatting', () => {
-  const ctx = { label: 'Audit', model: 'opencode-go/deepseek-v4-flash' };
+describe('structuredMessage — opencode-specific remediation', () => {
+  const ctx = { label: 'Audit', model: 'opencode-go/deepseek-v4-flash', agent: 'opencode' };
 
   it('formats unknown-model / server error correctly', () => {
     const result: RunResult = {
@@ -108,4 +108,65 @@ describe('structuredMessage error formatting', () => {
     const msg = structuredMessage(result, ctx);
     expect(msg).toBe('Audit exited with code 3. stderr: some stderr');
   });
+});
+
+describe('structuredMessage — generic (non-opencode) provider wording', () => {
+  // Shared adapter failure paths must name the actual provider, never "opencode".
+  const cases: Array<{ agent: string; model: string }> = [
+    { agent: 'codex', model: 'gpt-5.4' },
+    { agent: 'claude', model: 'claude-sonnet-4-6' },
+    { agent: 'fake', model: 'fake-model' }
+  ];
+
+  for (const { agent, model } of cases) {
+    const ctx = { label: 'Audit', model, agent };
+
+    it(`${agent}: server/unknown-model => "${agent} execution error"`, () => {
+      const result: RunResult = {
+        stdout: '', exitCode: 1,
+        error: { kind: 'server', message: 'boom', ref: 'err_z' }
+      };
+      const msg = structuredMessage(result, ctx);
+      expect(msg).toBe(`${agent} execution error: boom (ref err_z)`);
+      expect(msg).not.toContain('opencode');
+    });
+
+    it(`${agent}: auth => "${agent} provider/credential error"`, () => {
+      const result: RunResult = {
+        stdout: '', exitCode: 1,
+        error: { kind: 'auth', message: 'unauthorized' }
+      };
+      const msg = structuredMessage(result, ctx);
+      expect(msg).toBe(`${agent} provider/credential error: unauthorized`);
+      expect(msg).not.toContain('opencode');
+    });
+
+    it(`${agent}: config => "${agent} configuration error"`, () => {
+      const result: RunResult = {
+        stdout: '', exitCode: 1,
+        error: { kind: 'config', message: 'bad provider' }
+      };
+      const msg = structuredMessage(result, ctx);
+      expect(msg).toBe(`${agent} configuration error: bad provider`);
+    });
+
+    it(`${agent}: timeout => "${agent} timed out after <ms>ms"`, () => {
+      const result: RunResult = {
+        stdout: '', exitCode: 0,
+        error: { kind: 'timeout', message: 'no completion event', raw: { timeoutMs: 9000 } }
+      };
+      const msg = structuredMessage(result, ctx);
+      expect(msg).toBe(`${agent} timed out after 9000ms`);
+      expect(msg).not.toContain('opencode');
+    });
+
+    it(`${agent}: spawn => "${agent} failed to start"`, () => {
+      const result: RunResult = {
+        stdout: '', exitCode: -1,
+        error: { kind: 'spawn', message: 'ENOENT' }
+      };
+      const msg = structuredMessage(result, ctx);
+      expect(msg).toBe(`${agent} failed to start: ENOENT`);
+    });
+  }
 });

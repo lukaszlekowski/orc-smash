@@ -70,7 +70,7 @@ describe('Real-provider contract tests', () => {
   }, 60000);
 
   it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex spawn', async () => {
-    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4';
+    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
     const outputPath = 'docs/dev/plan-audit-v1-codex.md';
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 

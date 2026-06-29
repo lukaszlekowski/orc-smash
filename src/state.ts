@@ -1,9 +1,14 @@
 import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative } from 'node:path';
 import { parseArtifactMeta } from './provenance.js';
 import { parseVerdict, type Verdict } from './verdict.js';
+import { patternToRegex } from './patterns.js';
 
-export type StepKind = 'audit' | 'follow-up';
+// Canonical StepKind lives in src/provenance.ts (single source of truth);
+// state.ts imports + re-exports it instead of redeclaring.
+import type { StepKind } from './provenance.js';
+export type { StepKind };
+
 export type StepStatus = 'running' | 'done' | 'failed';
 
 export interface Step {
@@ -23,15 +28,10 @@ export interface ScanResult {
   latestVersion: number;
   latestVerdict: Verdict | null;
   timeline: Step[];      // all steps, ordered
-  auditSteps: Step[];    // audit-only (drives latestVerdict/proposedNext)
-  proposedNext: {
-    skill: 'audit' | 'follow-up';
-    version: number;
-    priorAuditPath: string | null;
-  };
+  auditSteps: Step[];    // audit-only (drives latestVerdict)
 }
 
-function getAllFiles(dir: string, baseDir: string = dir): string[] {
+function getAllFiles(dir: string): string[] {
   let results: string[] = [];
   if (!existsSync(dir)) {
     return results;
@@ -45,7 +45,7 @@ function getAllFiles(dir: string, baseDir: string = dir): string[] {
       if (file === 'archived' || filePath.includes('docs/dev/archived') || filePath.includes('/archived/')) {
         continue;
       }
-      results = results.concat(getAllFiles(filePath, baseDir));
+      results = results.concat(getAllFiles(filePath));
     } else {
       results.push(filePath);
     }
@@ -65,46 +65,45 @@ export function scan(
 
   for (const file of allFiles) {
     const relPath = relative(targetRoot, file);
-    const m = relPath.match(auditRegex);
-    if (m) {
-      const version = parseInt(m[1]!, 10);
-      const agent = m[2]!;
-      const content = readFileSync(file, 'utf-8');
+    const auditMatch = relPath.match(auditRegex);
+    const match = auditMatch ?? relPath.match(followUpRegex);
+    if (!match) continue;
+
+    const version = parseInt(match[1]!, 10);
+    const agent = match[2]!;
+    const kind: StepKind = auditMatch ? 'audit' : 'follow-up';
+
+    // Read each artifact exactly once and reuse the same content for verdict/outcome
+    // parsing AND front-matter metadata enrichment (previously read twice).
+    const content = readFileSync(file, 'utf-8');
+    const meta = parseArtifactMeta(content, { agent, version, kind });
+    const stat = statSync(file);
+
+    if (kind === 'audit') {
       timeline.push({
         kind: 'audit',
-        role: 'unknown',                      // overwritten from front matter if present
-        agent, model: 'unknown', version,
+        role: meta.role,                      // front matter where present, else 'unknown'
+        agent: meta.agent,
+        model: meta.model,
+        version,
         status: 'done',
         verdict: parseVerdict(content),
         artifactPath: file,
-        mtime: statSync(file).mtimeMs
+        mtime: stat.mtimeMs
       });
-      continue;
-    }
-    const f = relPath.match(followUpRegex);
-    if (f) {
-      const version = parseInt(f[1]!, 10);
-      const agent = f[2]!;
-      const content = readFileSync(file, 'utf-8');
+    } else {
       timeline.push({
         kind: 'follow-up',
-        role: 'unknown',
-        agent, model: 'unknown', version,
+        role: meta.role,
+        agent: meta.agent,
+        model: meta.model,
+        version,
         status: 'done',
         outcome: parseOutcome(content),
         artifactPath: file,
-        mtime: statSync(file).mtimeMs
+        mtime: stat.mtimeMs
       });
     }
-  }
-
-  // Enrich role/agent/model from front matter where present.
-  for (const s of timeline) {
-    const content = readFileSync(s.artifactPath, 'utf-8');
-    const meta = parseArtifactMeta(content, { agent: s.agent, version: s.version, kind: s.kind });
-    s.role = meta.role === 'unknown' ? s.role : meta.role;
-    s.agent = meta.agent;
-    s.model = meta.model;
   }
 
   sortTimeline(timeline);
@@ -114,35 +113,15 @@ export function scan(
   const latestVersion = latestAudit ? latestAudit.version : 0;
   const latestVerdict = latestAudit ? (latestAudit.verdict ?? null) : null;
 
-  let skill: 'audit' | 'follow-up' = 'audit';
-  let version = 1;
-  let priorAuditPath: string | null = null;
-  if (latestAudit) {
-    priorAuditPath = latestAudit.artifactPath;
-    if (latestVerdict === 'REJECTED') {
-      skill = 'follow-up';
-      version = latestVersion;
-    } else {
-      skill = 'audit';
-      version = latestVersion + 1;
-    }
-  }
+  // state.ts is a fact-scanning module only: it normalizes filesystem facts.
+  // Restart / next-step policy lives in src/next-step.ts (resolveNextStep), not here.
 
   return {
     latestVersion,
     latestVerdict,
     timeline,
-    auditSteps,
-    proposedNext: { skill, version, priorAuditPath }
+    auditSteps
   };
-}
-
-function patternToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace('\\{n\\}', '(\\d+)')
-    .replace('\\{agent\\}', '([a-zA-Z0-9_-]+)');
-  return new RegExp('^' + escaped + '$');
 }
 
 function sortTimeline(t: Step[]): void {
