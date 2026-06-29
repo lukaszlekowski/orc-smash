@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { execSync } from 'node:child_process';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
 import { codexAdapter } from '../src/adapters/codex.js';
@@ -11,10 +12,7 @@ describe('Real-provider contract tests', () => {
   const tempDir = join(process.cwd(), 'temp-contract-test');
 
   beforeEach(() => {
-    if (existsSync(tempDir)) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-    mkdirSync(tempDir, { recursive: true });
+    createTempDir('temp-contract-test');
 
     // Initialize git repository to keep coding agents relative to this test directory
     execSync('git init', { cwd: tempDir, stdio: 'ignore' });
@@ -26,7 +24,7 @@ describe('Real-provider contract tests', () => {
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    removeTempDir(tempDir);
   });
 
   it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode spawn', async () => {

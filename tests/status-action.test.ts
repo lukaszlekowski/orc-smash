@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { statusAction } from '../src/commands/status.js';
-import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
+import { buildFrontMatter } from '../src/provenance.js';
 import * as configModule from '../src/config.js';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { makeArtifactMeta } from './helpers/provenance.js';
 
 describe('statusAction command (consumes resolveNextStep)', () => {
   const tempDir = join(process.cwd(), 'temp-status-action');
@@ -24,8 +26,7 @@ describe('statusAction command (consumes resolveNextStep)', () => {
   };
 
   beforeEach(() => {
-    if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
-    mkdirSync(tempDir, { recursive: true });
+    createTempDir('temp-status-action');
     renderPanelCalledWith = null;
     errorCalledWith = null;
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -33,17 +34,13 @@ describe('statusAction command (consumes resolveNextStep)', () => {
   });
 
   afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+    removeTempDir(tempDir);
     vi.restoreAllMocks();
   });
 
   function writeAudit(version: number, verdict: 'APPROVED' | 'REJECTED' | 'MALFORMED', agent = 'fake') {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    const meta: ArtifactMeta = {
-      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
-      version, agent, model: 'fake-model',
-      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-29T00:00:00.000Z'
-    };
+    const meta = makeArtifactMeta({ version, agent });
     const body = verdict === 'MALFORMED'
       ? `# Plan Audit\n\n## Verdict\n\nGARBAGE\n`
       : `# Plan Audit\n\n## Verdict\n\n${verdict}\n`;

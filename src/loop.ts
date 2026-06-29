@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import chalk from 'chalk';
-import { scan, parseOutcome, type Step } from './state.js';
+import { scan, type Step } from './state.js';
+import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.js';
 import { getAdapter, type AgentRegistry } from './adapters/registry.js';
 import type { RunResult } from './adapters/types.js';
 import { renderPattern } from './patterns.js';
@@ -209,10 +210,10 @@ export async function runLoop(
 
       const relFollowUpPath = renderPattern(loopSpec.followUpPattern, { n: followUpVersion, agent: runner.agent });
       const absFollowUpPath = resolve(projectRoot, relFollowUpPath);
-      let followUpOutcome: 'patched' | 'blocked' = 'patched';
+      let followUpOutcome: FollowUpOutcome = 'patched';
       if (existsSync(absFollowUpPath)) {
         const body = readFileSync(absFollowUpPath, 'utf-8');
-        followUpOutcome = parseOutcome(body);
+        followUpOutcome = parseFollowUpOutcome(body);
         writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner));
       }
       steps.push({

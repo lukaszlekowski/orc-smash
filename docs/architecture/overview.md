@@ -18,6 +18,7 @@ cli.ts ──▶ commands/{smash,status}.ts
                 ├─ manifest.ts      zod schema + validation (source of truth: skills.yaml)
                 ├─ runner.ts        per-skill {agent,model} resolution (agent change re-defaults model)
                 ├─ state.ts         scan target docs/dev → normalized artifact facts
+                ├─ follow-up-outcome.ts shared outcome enum, parser, and heading contract
                 ├─ interactive.ts   typed prompts (loop / per-skill runners / start-point / max-iters)
                 ├─ loop.ts          audit→follow-up driver; per-step runner; max-iter; unknown→terminal; second-opinion
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
@@ -27,8 +28,16 @@ cli.ts ──▶ commands/{smash,status}.ts
                 └─ adapters/        registry: explicit production registry (registry.ts) vs testing registry (testing.ts)
 ```
 
-Pure, I/O-free logic (`verdict`, `state`, `prompt-composer`, `runner`, status context, adapter arg builders) is
+Pure, I/O-free logic (`verdict`, `state`, `follow-up-outcome`, `prompt-composer`, `runner`, status context, adapter arg builders) is
 isolated so it unit-tests without spawning agents.
+
+## Testing architecture and shared setup
+
+Deterministic harness behavior is covered under `tests/` using the `fake` adapter. Repeated test mechanics are centralized in `tests/helpers/*` (such as `fs.ts` for temp directories, `fake-adapter.ts` for adapter control, `provenance.ts` for metadata, and `results.ts` for run fixtures).
+
+To guarantee test isolation:
+- `vitest.config.ts` registers `tests/setup.ts` as a global setup file.
+- `tests/setup.ts` enforces the invariant that the global fake-adapter state is reset `beforeEach` test, preventing leakages between tests while letting file-local overrides win.
 
 ## Target direction
 

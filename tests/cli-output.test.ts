@@ -4,8 +4,9 @@ import { join, resolve } from 'node:path';
 import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { createPlainCliOutput, createPanelCliOutput } from '../src/cli-output.js';
-import { createTestAdapterRegistry, resetFakeAdapterState } from '../src/adapters/testing.js';
+import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { fakeAdapterState } from '../src/adapters/fake.js';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
 import ora from 'ora';
 
 const mockSpinner = {
@@ -25,11 +26,7 @@ describe('Plain mode loop-level integration', () => {
   let clearSpy: any;
 
   beforeEach(() => {
-    if (existsSync(tempWorkspace)) {
-      rmSync(tempWorkspace, { recursive: true, force: true });
-    }
-    mkdirSync(tempWorkspace, { recursive: true });
-    resetFakeAdapterState();
+    createTempDir('temp-plain-mode-test');
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     clearSpy = vi.spyOn(console, 'clear').mockImplementation(() => {});
     vi.mocked(ora).mockClear();
@@ -40,7 +37,7 @@ describe('Plain mode loop-level integration', () => {
   });
 
   afterEach(() => {
-    rmSync(tempWorkspace, { recursive: true, force: true });
+    removeTempDir(tempWorkspace);
     vi.restoreAllMocks();
   });
 

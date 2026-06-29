@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { parseArtifactMeta } from './provenance.js';
 import { parseVerdict, type Verdict } from './verdict.js';
 import { patternToRegex } from './patterns.js';
+import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.js';
 
 // Canonical StepKind lives in src/provenance.ts (single source of truth);
 // state.ts imports + re-exports it instead of redeclaring.
@@ -19,7 +20,7 @@ export interface Step {
   version: number;
   status: StepStatus;
   verdict?: Verdict;                  // audit steps only
-  outcome?: 'patched' | 'blocked';    // follow-up steps only
+  outcome?: FollowUpOutcome;    // follow-up steps only
   artifactPath: string;               // absolute path to the artifact file
   mtime: number;
 }
@@ -99,7 +100,7 @@ export function scan(
         model: meta.model,
         version,
         status: 'done',
-        outcome: parseOutcome(content),
+        outcome: parseFollowUpOutcome(content),
         artifactPath: file,
         mtime: stat.mtimeMs
       });
@@ -133,13 +134,4 @@ function sortTimeline(t: Step[]): void {
   });
 }
 
-/**
- * Single source of truth for follow-up outcome parsing. Called from `scan`
- * (here) AND from `loop.ts` after the follow-up run (Step 5) — do NOT
- * re-implement it inline. Matches the first `patched`/`blocked` token
- * immediately under the `## Follow-up Outcome` heading. (m2)
- */
-export function parseOutcome(content: string): 'patched' | 'blocked' {
-  const m = content.match(/^##\s*Follow-up Outcome\s*\r?\n\s*\r?\n?\s*(patched|blocked)\b/im);
-  return m && m[1] === 'blocked' ? 'blocked' : 'patched';
-}
+
