@@ -16,11 +16,11 @@ Ordered by recommended implementation batches. This is the top-level view: group
 
 **Batch 2 — CLI/runtime ergonomics**
 
-- [ ] **10 — logging layer**
-- [ ] **6 — Debug / non-graphical mode**
-- [ ] **11 — command flow cleanup (`process.exit` at the boundary)**
-- [ ] **19 — CI / typecheck workflow**
-- [ ] **20 — fake-adapter registry boundary**
+- [x] **10 — logging layer**
+- [x] **6 — Debug / non-graphical mode**
+- [x] **11 — command flow cleanup (`process.exit` at the boundary)**
+- [x] **19 — CI / typecheck workflow**
+- [x] **20 — fake-adapter registry boundary**
 
 **Batch 3 — Test and prompt-maintenance infrastructure**
 
@@ -68,11 +68,11 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 
 **Batch 2 — CLI/runtime ergonomics**
 
-- [ ] **10 — Logging layer.** Introduce a deliberately small output abstraction for the CLI surface so loop/command output is not hardwired to `console.log` + `chalk` + `ora`. Keep it thin: structured events in, renderer implementation out; no heavyweight logging framework, no global singleton, and no generic utility bucket.
-- [ ] **6 — Debug / non-graphical mode.** Add a plain, scrollback-preserving execution mode for `smash` on top of the refactored loop surface and thin output abstraction. Prefer a user-facing flag shape that reflects behavior (`--plain`, optionally with `--debug` as an alias), and keep interactive prompting semantics unchanged.
-- [ ] **11 — Command flow cleanup.** Refactor `smash.ts` / `status.ts` to return results and exit once at the CLI boundary instead of calling `process.exit()` throughout the command logic. Fold in the duplicated interactive vs non-interactive start-point / runner-resolution logic and replace the loose `any` config typing in the command layer while touching those flows.
-- [ ] **19 — CI / typecheck workflow.** Add explicit repository automation that runs `typecheck` and deterministic tests on push / PR, and define how env-gated real-provider checks participate in sign-off. The quality bar should be machine-enforced, not just described in docs.
-- [ ] **20 — fake-adapter registry boundary.** Make the boundary between production adapters and test-only infrastructure explicit. Keeping `fake` in the main registry is acceptable only if the contract is intentional, documented, and low-risk; otherwise isolate test adapters behind a separate registration path.
+- [x] **10 — Logging layer.** Introduce a deliberately small output abstraction for the CLI surface so loop/command output is not hardwired to `console.log` + `chalk` + `ora`. Keep it thin: structured events in, renderer implementation out; no heavyweight logging framework, no global singleton, and no generic utility bucket.
+- [x] **6 — Debug / non-graphical mode.** Add a plain, scrollback-preserving execution mode for `smash` on top of the refactored loop surface and thin output abstraction. Prefer a user-facing flag shape that reflects behavior (`--plain`, optionally with `--debug` as an alias), and keep interactive prompting semantics unchanged.
+- [x] **11 — Command flow cleanup.** Refactor `smash.ts` / `status.ts` to return results and exit once at the CLI boundary instead of calling `process.exit()` throughout the command logic. Fold in the duplicated interactive vs non-interactive start-point / runner-resolution logic and replace the loose `any` config typing in the command layer while touching those flows.
+- [x] **19 — CI / typecheck workflow.** Add explicit repository automation that runs `typecheck` and deterministic tests on push / PR, and define how env-gated real-provider checks participate in sign-off. The quality bar should be machine-enforced, not just described in docs.
+- [x] **20 — fake-adapter registry boundary.** Make the boundary between production adapters and test-only infrastructure explicit. Keeping `fake` in the main registry is acceptable only if the contract is intentional, documented, and low-risk; otherwise isolate test adapters behind a separate registration path.
 
 **Batch 3 — Test and prompt-maintenance infrastructure**
 

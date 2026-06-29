@@ -36,7 +36,8 @@ itself.
   precedence per skill: interactive per-skill pick > `--agent`/`--model` (run-wide) > skill
   manifest default > `.env` default. **Changing an agent re-defaults its model** to that
   agent's default model. `runner.ts` resolves this; `loop.ts` selects the adapter **per step**
-  from a registry (agent name → adapter).
+  from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
+  excludes `fake`, which is only available in the test registry (`testing.ts`).
 - **Audit filenames follow the skill's convention** `docs/dev/<type>-v{n}-{agent}.md`
   (the `21-simple-plans-audit` / review skills hardcode this shape). A model slug is
   intentionally **not** added — diverging from the skill's template risks the agent writing to
@@ -87,3 +88,5 @@ itself.
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). **Each
   real provider path** (opencode, codex, claude) is gated by its own env-gated contract test
   plus a live mixed-CLI end-to-end smoke — approval requires all of them.
+- A GitHub Actions CI workflow runs typecheck and deterministic tests on push and pull requests,
+  while real-provider verification remains an env-gated/manual release sign-off requirement.

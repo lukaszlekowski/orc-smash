@@ -13,6 +13,19 @@ import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 
 const mockedRunLoop = vi.mocked(runLoop);
 
+let lastErrorMessage = '';
+const mockOutput = {
+  note: () => {},
+  warn: () => {},
+  error: (msg: string) => { lastErrorMessage = msg; },
+  iterationStarted: () => {},
+  stepStarted: () => {},
+  stepSucceeded: () => {},
+  stepFailed: () => {},
+  renderPanel: () => {},
+  finalSummary: () => {}
+};
+
 describe('smashAction start-point derivation (consumes canonical rule)', () => {
   const tempDir = join(process.cwd(), 'temp-smash-action');
 
@@ -20,14 +33,9 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
     mkdirSync(tempDir, { recursive: true });
     mockedRunLoop.mockClear();
+    mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    // smashAction uses process.exit both as a terminal (after runLoop) and as a
-    // guard (unknown verdict, invalid start point). Throwing halts guard logic so
-    // it cannot fall through; callers catch the thrown error.
-    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-      throw new Error(`process.exit(${code ?? 0})`);
-    }) as never);
   });
 
   afterEach(() => {
@@ -49,33 +57,38 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
   }
 
   async function runSmash() {
-    // Non-interactive: loop + agent/model provided via flags.
-    // The mocked process.exit throws on the terminal exit; swallow it.
-    try {
-      await smashAction({ project: tempDir, loop: 'plan', agent: 'fake', model: 'fake-model' });
-    } catch {
-      /* expected: mocked process.exit throws */
-    }
+    return await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
   }
 
   it('REJECTED state => start-point resume (matches allowedStartPoint)', async () => {
     writeAudit(1, 'REJECTED');
-    await runSmash();
+    const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'resume' });
+    expect(res.exitCode).toBe(0);
   });
 
   it('APPROVED state => start-point new-round', async () => {
     writeAudit(1, 'APPROVED');
-    await runSmash();
+    const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'new-round' });
+    expect(lastErrorMessage).toBe('');
+    expect(res.exitCode).toBe(0);
   });
 
   it('fresh state (no audits) => start-point fresh', async () => {
-    await runSmash();
+    const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'fresh' });
+    expect(lastErrorMessage).toBe('');
+    expect(res.exitCode).toBe(0);
   });
 
   it('unknown latest audit is terminal: rejected before runLoop is reached', async () => {
@@ -89,10 +102,33 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
       join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
       buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nGARBAGE\n`
     );
-    await runSmash();
-    // The unparseable latest audit is a terminal state with no valid start point;
-    // smash must error out without ever running the loop.
+    const res = await runSmash();
     expect(mockedRunLoop).not.toHaveBeenCalled();
-    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('loop failure with verdict unknown returns exitCode: 1', async () => {
+    mockedRunLoop.mockResolvedValueOnce({ success: false, verdict: 'unknown', message: 'failed', lastAuditPath: null });
+    const res = await runSmash();
+    expect(res.exitCode).toBe(1);
+  });
+
+  it('loop failure with verdict REJECTED (max iterations reached) returns exitCode: 0', async () => {
+    mockedRunLoop.mockResolvedValueOnce({ success: false, verdict: 'REJECTED', message: 'max iterations', lastAuditPath: null });
+    const res = await runSmash();
+    expect(res.exitCode).toBe(0);
+  });
+
+  it('forwards the custom output options object to runLoop', async () => {
+    const customOutput = { ...mockOutput };
+    await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      agent: 'fake',
+      model: 'fake-model',
+      output: customOutput
+    });
+    expect(mockedRunLoop).toHaveBeenCalledTimes(1);
+    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ output: customOutput });
   });
 });

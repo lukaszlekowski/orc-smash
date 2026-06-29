@@ -1,10 +1,38 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { runLoop } from '../../src/loop.js';
+import { runLoop as baseRunLoop } from '../../src/loop.js';
 import { scan } from '../../src/state.js';
 import { loadConfig } from '../../src/config.js';
 import { fakeAdapter, fakeAdapterState } from '../../src/adapters/fake.js';
+import { createTestAdapterRegistry, resetFakeAdapterState } from '../../src/adapters/testing.js';
+
+const testRegistry = createTestAdapterRegistry();
+const mockOutput = {
+  note: () => {},
+  warn: () => {},
+  error: () => {},
+  iterationStarted: () => {},
+  stepStarted: () => {},
+  stepSucceeded: () => {},
+  stepFailed: () => {},
+  renderPanel: () => {},
+  finalSummary: () => {}
+};
+const runLoop = (
+  projectRoot: string,
+  loopName: string,
+  loopSpec: any,
+  config: any,
+  runners: any,
+  options: any
+): any => {
+  return baseRunLoop(projectRoot, loopName, loopSpec, config, runners, {
+    ...options,
+    registry: testRegistry,
+    output: mockOutput
+  });
+};
 
 let secondOpinionSelectCalls = 0;
 
@@ -43,13 +71,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     mkdirSync(tempWorkspace, { recursive: true });
 
     // Reset fake adapter state
-    fakeAdapterState.verdicts = [];
-    fakeAdapterState.stdout = '';
-    fakeAdapterState.exitCode = 0;
-    fakeAdapterState.writeVerdictFile = true;
-    fakeAdapterState.auditError = undefined;
-    fakeAdapterState.followUpError = undefined;
-    fakeAdapterState.stderr = undefined;
+    resetFakeAdapterState();
   });
 
   afterEach(() => {

@@ -1,6 +1,5 @@
 import { resolve } from 'node:path';
-import chalk from 'chalk';
-import { loadConfig } from '../config.js';
+import { loadConfig, type Config } from '../config.js';
 import { scan } from '../state.js';
 import { runLoop } from '../loop.js';
 import { validateAgentAndModel } from '../runner.js';
@@ -11,6 +10,10 @@ import {
   promptRunners,
   promptMaxIterations
 } from '../interactive.js';
+import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
+import type { CliOutput } from '../cli-output.js';
+import type { CommandResult } from './types.js';
+import type { LoopSpec } from '../manifest.js';
 
 export interface SmashOptions {
   project?: string;
@@ -18,27 +21,41 @@ export interface SmashOptions {
   agent?: string;
   model?: string;
   maxIterations?: string;
+  output: CliOutput;
+  plain?: boolean;
 }
 
-export async function smashAction(options: SmashOptions): Promise<void> {
-  if (!options.project) {
-    console.error(chalk.red('Error: project path is required. Use --project <path>'));
-    process.exit(1);
-  }
+interface SmashRunSetup {
+  projectRoot: string;
+  loopName: string;
+  loopSpec: LoopSpec;
+  config: Config;
+  runners: Record<string, { agent: string; model: string }>;
+  maxIterations: number;
+  startPoint: 'fresh' | 'resume' | 'new-round';
+  globalOverrides: { agent?: string; model?: string };
+  isInteractive: boolean;
+  registry: AgentRegistry;
+}
 
-  const projectRoot = resolve(options.project);
-  let config: any;
+async function resolveSmashRunSetup(
+  projectRoot: string,
+  options: SmashOptions
+): Promise<{ errorResult: CommandResult } | { setup: SmashRunSetup }> {
+  let config: Config;
   try {
     config = loadConfig(projectRoot);
   } catch (err: any) {
-    console.error(chalk.red(`Error: failed to load config or manifest: ${err.message}`));
-    process.exit(1);
+    const msg = `Error: failed to load config or manifest: ${err.message}`;
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
   }
 
   const loopKeys = Object.keys(config.manifest.loops);
   if (loopKeys.length === 0) {
-    console.error(chalk.red('Error: no loops defined in manifest.'));
-    process.exit(1);
+    const msg = 'Error: no loops defined in manifest.';
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
   }
 
   // 1. Loop selection
@@ -59,8 +76,9 @@ export async function smashAction(options: SmashOptions): Promise<void> {
   }
 
   if (!loopName || !config.manifest.loops[loopName]) {
-    console.error(chalk.red(`Error: loop '${loopName}' not found in manifest.`));
-    process.exit(1);
+    const msg = `Error: loop '${loopName}' not found in manifest.`;
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
   }
 
   const loopSpec = config.manifest.loops[loopName]!;
@@ -68,20 +86,19 @@ export async function smashAction(options: SmashOptions): Promise<void> {
   // 2. Scan state
   const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
   if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
-    console.error(chalk.red(`latest audit is unparseable; resolve or delete it before smashing`));
-    process.exit(1);
+    const msg = 'latest audit is unparseable; resolve or delete it before smashing';
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  // 3. Start Point selection & validation — driven by the canonical next-step rule
-  // (resolveNextStep + allowedStartPoint), so the command cannot re-derive
-  // verdict-to-start-point policy inline.
+  // 3. Start Point selection & validation
   const decision = resolveNextStep({
     latestVerdict: stateScan.latestVerdict,
     latestVersion: stateScan.latestVersion,
     hasAudits: stateScan.auditSteps.length > 0,
     latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
   });
-  const allowed = allowedStartPoint(decision); // the single valid start point for this state, or null
+  const allowed = allowedStartPoint(decision);
 
   let startPoint: 'fresh' | 'resume' | 'new-round' = 'fresh';
 
@@ -91,15 +108,14 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     const sp = await promptStartPoint(allowedList, defaultSP);
     startPoint = sp as any;
   } else {
-    // Non-interactive start point determination
     startPoint = allowed ?? 'fresh';
   }
 
-  // Validate the chosen start point against the canonical rule for this state.
   const latestVerdict = stateScan.latestVerdict;
   if (startPoint !== allowed) {
-    console.error(chalk.red(`Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`));
-    process.exit(1);
+    const msg = `Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`;
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
   }
 
   // 4. Runners selection & validation
@@ -111,15 +127,15 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     model: options.model
   };
 
-  // Validate global flags if provided
   if (globalOverrides.agent || globalOverrides.model) {
     try {
       const resolvedAgent = globalOverrides.agent || config.defaultAgent;
       const resolvedModel = globalOverrides.model || config.agentDefaultModels[resolvedAgent] || config.defaultModel;
       validateAgentAndModel(resolvedAgent, resolvedModel);
     } catch (err: any) {
-      console.error(chalk.red(`Error: ${err.message}`));
-      process.exit(1);
+      const msg = `Error: ${err.message}`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
     }
   }
 
@@ -130,7 +146,7 @@ export async function smashAction(options: SmashOptions): Promise<void> {
     for (const skillId of loopSkills) {
       const skill = config.manifest.skills[skillId];
       if (!skill) continue;
-      
+
       let resolvedAgent = skill.agent;
       let resolvedModel = skill.model;
 
@@ -142,8 +158,9 @@ export async function smashAction(options: SmashOptions): Promise<void> {
       try {
         validateAgentAndModel(resolvedAgent, resolvedModel);
       } catch (err: any) {
-        console.error(chalk.red(`Error: ${err.message}`));
-        process.exit(1);
+        const msg = `Error: ${err.message}`;
+        options.output.error(msg);
+        return { errorResult: { exitCode: 1, message: msg } };
       }
 
       runners[skillId] = { agent: resolvedAgent, model: resolvedModel };
@@ -157,29 +174,63 @@ export async function smashAction(options: SmashOptions): Promise<void> {
   } else if (options.maxIterations) {
     maxIterations = parseInt(options.maxIterations, 10);
     if (isNaN(maxIterations) || maxIterations <= 0) {
-      console.error(chalk.red('Error: max-iterations must be a positive integer.'));
-      process.exit(1);
+      const msg = 'Error: max-iterations must be a positive integer.';
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
     }
   }
 
-  // 6. Run the loop
-  try {
-    const result = await runLoop(projectRoot, loopName, loopSpec, config, runners, {
+  const registry = createProductionAdapterRegistry();
+
+  return {
+    setup: {
+      projectRoot,
+      loopName,
+      loopSpec,
+      config,
+      runners,
       maxIterations,
       startPoint,
       globalOverrides,
-      interactive: isInteractive
+      isInteractive,
+      registry
+    }
+  };
+}
+
+export async function smashAction(options: SmashOptions): Promise<CommandResult> {
+  if (!options.project) {
+    const msg = 'Error: project path is required. Use --project <path>';
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
+  }
+
+  const projectRoot = resolve(options.project);
+  const setupResult = await resolveSmashRunSetup(projectRoot, options);
+  if ('errorResult' in setupResult) {
+    return setupResult.errorResult;
+  }
+
+  const { setup } = setupResult;
+
+  try {
+    const result = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
+      maxIterations: setup.maxIterations,
+      startPoint: setup.startPoint,
+      globalOverrides: setup.globalOverrides,
+      interactive: setup.isInteractive,
+      registry: setup.registry,
+      output: options.output
     });
 
     if (result.success) {
-      console.log(chalk.bold.green(`\nSuccess: ${result.message}`));
-      process.exit(0);
+      return { exitCode: 0, message: result.message };
     } else {
-      console.log(chalk.bold.red(`\nLoop terminated: ${result.message}`));
-      process.exit(result.verdict === 'unknown' ? 1 : 0);
+      return { exitCode: result.verdict === 'unknown' ? 1 : 0, message: result.message };
     }
   } catch (err: any) {
-    console.error(chalk.bold.red(`\nExecution Error: ${err.message}`));
-    process.exit(1);
+    const msg = `Error running loop: ${err.message}`;
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
   }
 }

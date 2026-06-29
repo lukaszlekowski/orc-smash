@@ -22,10 +22,16 @@ This is the current mechanism, not the long-term target architecture.
 
 ```bash
 orc smash --project <path>          # run the audit↔follow-up loop (interactive if flags omitted)
+orc smash --project <path> --plain  # run the loop in append-only scrollback-safe plain mode
 orc smash --project <path> \        # run-wide runner override, non-interactive
   --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
 orc status --project <path>         # read-only: detect where we are, render the status panel
 ```
+
+### Execution Modes
+
+- **Panel Mode (Default):** A graphical, boxen-rendered status dashboard with interactive spinners (`ora`) and auto-clearing screens.
+- **Plain Mode (`--plain`):** A scrollback-safe, append-only textual output suitable for headless CI/CD and logs, emitting clean step events and final summaries.
 
 `orc smash` is restart-aware: it scans the target's `docs/dev/*-audit-v*-*.md` (ignoring
 `docs/dev/archived/`), detects the latest verdict, and proposes the next step.
@@ -65,15 +71,22 @@ Current development is steering the harness toward a cleaner runtime architectur
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 1 implementation plan.
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 2 implementation plan.
 
-## Verification
+## Verification and CI
+
+Continuous Integration (CI) runs automatically on push and pull requests, executing typecheck and deterministic unit/e2e tests (using the `fake` adapter) to gate harness logic without requiring network or credentials:
 
 ```bash
 pnpm typecheck
-pnpm test                                       # deterministic e2e (fake adapter) gates harness logic
+pnpm test                                       # run deterministic unit/e2e tests locally
+```
+
+In contrast, **real-provider verification** remains a separate sign-off requirement before releases. Real-provider checks are env-gated and must be executed manually or on a dedicated runner:
+
+```bash
 OPENCODE_CONTRACT=1 CODEX_CONTRACT=1 \
-  CLAUDE_CONTRACT=1 pnpm test                   # mandatory sign-off: REAL spawn/write per provider
+  CLAUDE_CONTRACT=1 pnpm test                   # env-gated contract + mixed-CLI smoke tests
 ```
 
 The repo-local e2e (`tests/e2e/smash.test.ts` via the `fake` adapter) covers every exit branch,

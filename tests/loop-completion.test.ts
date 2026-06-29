@@ -1,9 +1,37 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { runLoop } from '../src/loop.js';
+import { runLoop as baseRunLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapter } from '../src/adapters/fake.js';
+import { createTestAdapterRegistry } from '../src/adapters/testing.js';
+
+const testRegistry = createTestAdapterRegistry();
+const mockOutput = {
+  note: () => {},
+  warn: () => {},
+  error: () => {},
+  iterationStarted: () => {},
+  stepStarted: () => {},
+  stepSucceeded: () => {},
+  stepFailed: () => {},
+  renderPanel: () => {},
+  finalSummary: () => {}
+};
+const runLoop = (
+  projectRoot: string,
+  loopName: string,
+  loopSpec: any,
+  config: any,
+  runners: any,
+  options: any
+): any => {
+  return baseRunLoop(projectRoot, loopName, loopSpec, config, runners, {
+    ...options,
+    registry: testRegistry,
+    output: mockOutput
+  });
+};
 
 describe('loop execution-completeness handling (consumes normalized completion field)', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-completion');
