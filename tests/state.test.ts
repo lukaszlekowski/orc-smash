@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { scan } from '../src/state.js';
+import { scan, resolveApprovedPlanAuditPath, requireApprovedPlanAuditPath } from '../src/state.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 import { renderFollowUpOutcomeSection, parseFollowUpOutcome } from '../src/follow-up-outcome.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
@@ -224,5 +224,77 @@ describe('Follow-up Outcome Contract', () => {
   it('renders section canonical output', () => {
     expect(renderFollowUpOutcomeSection('patched')).toBe('## Follow-up Outcome\n\npatched');
     expect(renderFollowUpOutcomeSection('blocked')).toBe('## Follow-up Outcome\n\nblocked');
+  });
+});
+
+describe('State-owner approved path resolution', () => {
+  const tempDir = join(process.cwd(), 'temp-state-test');
+  const auditPattern = 'docs/dev/plan-audit-v{n}-{agent}.md';
+  const followUpPattern = 'docs/dev/plan-followup-v{n}-{agent}.md';
+  const patterns = { auditPattern, followUpPattern };
+
+  beforeEach(() => {
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+    mkdirSync(tempDir);
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('resolves path when plan is APPROVED', () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+    const meta: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'fake', model: 'fake-model',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-fake.md'),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\nAPPROVED\n`
+    );
+
+    const path = resolveApprovedPlanAuditPath(tempDir, patterns);
+    expect(path).toContain('plan-audit-v1-fake.md');
+
+    const reqPath = requireApprovedPlanAuditPath(tempDir, patterns);
+    expect(reqPath).toContain('plan-audit-v1-fake.md');
+  });
+
+  it('stale approved plan regression: latest v2 is REJECTED makes approval resolve to null and require throw', () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+
+    // Seed v1 APPROVED
+    const meta1: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'fake', model: 'fake-model',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-fake.md'),
+      buildFrontMatter(meta1) + `# Plan Audit\n\n## Verdict\nAPPROVED\n`
+    );
+
+    // Seed v2 REJECTED
+    const meta2: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 2, agent: 'fake', model: 'fake-model',
+      target: 'docs/dev/plan.md', priorAudit: 'docs/dev/plan-audit-v1-fake.md', timestamp: '2026-06-26T20:10:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v2-fake.md'),
+      buildFrontMatter(meta2) + `# Plan Audit\n\n## Verdict\nREJECTED\n`
+    );
+
+    const path = resolveApprovedPlanAuditPath(tempDir, patterns);
+    expect(path).toBeNull();
+
+    expect(() => {
+      requireApprovedPlanAuditPath(tempDir, patterns);
+    }).toThrow(/No approved plan audit found/);
   });
 });

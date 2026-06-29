@@ -2,7 +2,7 @@ import { writeFileSync, renameSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import YAML from 'yaml';
 
-export type StepKind = 'audit' | 'follow-up';
+export type StepKind = 'audit' | 'follow-up' | 'implement';
 
 export interface ArtifactMeta {
   loop: string;

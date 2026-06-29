@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { loadManifest, ManifestSchema } from '../src/manifest.js';
+import { loadManifest, buildManifestSchema } from '../src/manifest.js';
+import { DEFAULT_REGISTRY } from '../src/config.js';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,7 +11,7 @@ const toolRoot = resolve(__dirname, '..');
 describe('Manifest validation', () => {
   it('successfully loads and validates the standard skills.yaml', () => {
     const yamlPath = resolve(toolRoot, 'skills.yaml');
-    const manifest = loadManifest(yamlPath);
+    const manifest = loadManifest(yamlPath, DEFAULT_REGISTRY);
     expect(manifest.roles).toBeDefined();
     expect(manifest.skills).toBeDefined();
     expect(manifest.loops).toBeDefined();
@@ -45,7 +46,7 @@ describe('Manifest validation', () => {
         }
       }
     };
-    const parsed = ManifestSchema.safeParse(invalidManifest);
+    const parsed = buildManifestSchema(DEFAULT_REGISTRY).safeParse(invalidManifest);
     expect(parsed.success).toBe(false);
   });
 });

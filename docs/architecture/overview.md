@@ -14,13 +14,13 @@ shorter and point here rather than restating the same internals in full.
 ```
 cli.ts ──▶ commands/{smash,status}.ts
                 │
-                ├─ config.ts        current runner defaults + skills.yaml → typed Config
-                ├─ manifest.ts      zod schema + validation (source of truth: skills.yaml)
-                ├─ runner.ts        per-skill {agent,model} resolution (agent change re-defaults model)
-                ├─ state.ts         scan target docs/dev → normalized artifact facts
+                ├─ config.ts        loads model registry (orc.config.yaml) + skills.yaml → typed Config
+                ├─ manifest.ts      zod schema + validation (source of truth: skills.yaml, validates model registry)
+                ├─ runner.ts        per-skill {agent,model} resolution (agent model namespaces validation)
+                ├─ state.ts         scan target docs/dev → normalized artifact and implement facts
                 ├─ follow-up-outcome.ts shared outcome enum, parser, and heading contract
-                ├─ interactive.ts   typed prompts (loop / per-skill runners / start-point / max-iters)
-                ├─ loop.ts          audit→follow-up driver; per-step runner; max-iter; unknown→terminal; second-opinion
+                ├─ interactive.ts   registry-driven prompts, filtered to configured ∩ runnable agents
+                ├─ loop.ts          three-stage pipeline orchestrator (plan → implement → review)
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
                 ├─ status.ts        pure next-step-message & PanelContext builders
                 ├─ status-panel.ts  pure ASCII boxen/table dashboard string renderer
@@ -56,16 +56,18 @@ The codebase is being steered toward these architectural properties:
 
 ## Data flow — one `orc smash` run
 
-1. `config` loads current runner defaults plus `skills.yaml`.
-2. `state.scan` globs the target's `docs/dev/*-audit-v*-*.md` (ignoring `archived/`), reads the
-   matching artifacts, and returns normalized facts about the timeline and latest audit state.
-3. `interactive` proposes loop / per-skill runners / start-point / max-iters (pre-filled from
-   state and manifest defaults); `commands/smash` normalizes and **rejects impossible
-   transitions**, unknown agents, and agent/model mismatches with specific errors.
-4. `loop` runs until APPROVED/max-iterations. Instead of directly printing or managing spinner state, `loop.ts` emits structured lifecycle events (e.g. `iterationStarted`, `stepStarted`, `stepSucceeded`, `stepFailed`, `renderPanel`, `finalSummary`) via a `CliOutput` interface.
-5. Each step resolves its runner via `runner.ts` → `prompt-composer` assembles role + skill + inputs → the adapter (explicitly resolved from the runner registry) spawns the agent in the target cwd → the agent writes the versioned audit file → `verdict.parse` reads it → branch on APPROVED / REJECTED / unknown.
-6. On APPROVED the loop offers `stop | run-second-opinion` (re-prompts the audit runner, runs the next version).
-7. `cli.ts` serves as the single process-exit boundary: commands return a structured `CommandResult` containing the `exitCode`, and `cli.ts` sets `process.exitCode` accordingly.
+1. `config` loads the model registry (`orc.config.yaml`) and `skills.yaml`. Model registry validations verify that every skill's model is valid.
+2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
+3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
+4. `loop` drives the loop execution:
+   - For `implement` kind, it requires an approved plan audit and runs the implementation stage, writing the ledger artifact linked via provenance.
+   - For `doc-audit`/`code-review` loops, it iterates versioned audits and follow-ups.
+5. In interactive runs, stage transitions advance downstream:
+   - `plan` loops APPROVED verdict offers `stop | run-second-opinion | implement` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
+   - `implement` stage complete offers `stop | review` to start code review.
+   - `review` loops APPROVED verdict offers `stop | run-second-opinion` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
+6. Each execution step resolves its runner → `prompt-composer` assembles role + skill + inputs → the adapter spawns the agent → versioned output is verified and metadata provenance is written.
+7. `cli.ts` serves as the single process-exit boundary mapping structured `CommandResult` to process exit code.
 
 ## Execution completeness
 

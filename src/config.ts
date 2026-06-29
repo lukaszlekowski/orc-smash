@@ -1,68 +1,87 @@
-import dotenv from 'dotenv';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import YAML from 'yaml';
+import { z } from 'zod';
 import { loadManifest, type Manifest } from './manifest.js';
 
+export interface ModelRegistry {
+  providers: Record<string, string[]>;
+  defaults: { agent: string; model: string };
+}
+
+export const ModelRegistrySchema = z.object({
+  providers: z.record(z.string(), z.array(z.string())),
+  defaults: z.object({
+    agent: z.string(),
+    model: z.string()
+  })
+});
+
+export const DEFAULT_REGISTRY: ModelRegistry = {
+  providers: {
+    opencode: [
+      'opencode-go/deepseek-v4-flash',
+      'opencode/deepseek-v4-flash-free'
+    ],
+    claude: [
+      'claude-sonnet-4-6'
+    ],
+    codex: [
+      'gpt-5-codex'
+    ]
+  },
+  defaults: {
+    agent: 'opencode',
+    model: 'opencode-go/deepseek-v4-flash'
+  }
+};
+
 export interface Config {
-  defaultAgent: string;
-  defaultModel: string;
-  agentDefaultModels: Record<string, string>;
-  apiKeys: Record<string, string>;
+  registry: ModelRegistry;
   manifest: Manifest;
 }
 
-export function loadConfig(projectRoot: string = process.cwd()): Config {
-  // Load env from the projectRoot if it exists, otherwise fallback to current directory
-  const envPath = resolve(projectRoot, '.env');
-  if (existsSync(envPath)) {
-    dotenv.config({ path: envPath });
-  } else {
-    dotenv.config();
+export function loadModelRegistry(projectRoot: string = process.cwd()): ModelRegistry {
+  const localPath = resolve(projectRoot, 'orc.config.yaml');
+  const homePath = resolve(os.homedir(), '.config/orc/config.yaml');
+
+  let configContent: string | null = null;
+  let loadedPath = '';
+
+  if (existsSync(localPath)) {
+    configContent = readFileSync(localPath, 'utf-8');
+    loadedPath = localPath;
+  } else if (existsSync(homePath)) {
+    configContent = readFileSync(homePath, 'utf-8');
+    loadedPath = homePath;
   }
 
-  // Load manifest. skills.yaml is always in the tool's root directory or target root?
-  // The plan states "skills.yaml" is in the tool repository root.
-  // Let's resolve skills.yaml relative to this file's directory (src/config.ts -> ../skills.yaml)
-  // or we can allow passing it. Let's look for skills.yaml in process.cwd() or tool root.
+  if (configContent !== null) {
+    try {
+      const parsed = YAML.parse(configContent);
+      return ModelRegistrySchema.parse(parsed);
+    } catch (err: any) {
+      throw new Error(`Failed to parse or validate model registry config at ${loadedPath}: ${err.message}`);
+    }
+  }
+
+  return { ...DEFAULT_REGISTRY };
+}
+
+export function loadConfig(projectRoot: string = process.cwd()): Config {
   const toolRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   let manifestPath = resolve(toolRoot, 'skills.yaml');
   if (!existsSync(manifestPath)) {
-    // fallback to projectRoot
     manifestPath = resolve(projectRoot, 'skills.yaml');
   }
 
-  const manifest = loadManifest(manifestPath);
-
-  const defaultAgent = process.env['DEFAULT_AGENT'] || 'opencode';
-  // Note: opencode-go/deepseek-v4-flash is the paid provider model, which bills the user's plan.
-  const defaultModel = process.env['DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
-
-  const agentDefaultModels: Record<string, string> = {
-    opencode: process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash',
-    codex: process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5-codex',
-    claude: process.env['CLAUDE_DEFAULT_MODEL'] || 'claude-sonnet-4-6',
-    fake: 'fake-model'
-  };
-
-  const apiKeys: Record<string, string> = {};
-  if (process.env['OPENCODE_API_KEY']) {
-    apiKeys['opencode'] = process.env['OPENCODE_API_KEY'];
-  }
-  if (process.env['CODEX_API_KEY']) {
-    apiKeys['codex'] = process.env['CODEX_API_KEY'];
-  }
-  if (process.env['CLAUDE_API_KEY']) {
-    apiKeys['claude'] = process.env['CLAUDE_API_KEY'];
-  }
+  const registry = loadModelRegistry(projectRoot);
+  const manifest = loadManifest(manifestPath, registry);
 
   return {
-    defaultAgent,
-    defaultModel,
-    agentDefaultModels,
-    apiKeys,
+    registry,
     manifest
   };
 }
-
-import { fileURLToPath } from 'node:url';
-import { dirname } from 'node:path';

@@ -33,6 +33,10 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
 
   beforeEach(() => {
     createTempDir('temp-smash-action');
+    writeFileSync(
+      join(tempDir, 'orc.config.yaml'),
+      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
+    );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -123,5 +127,32 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     });
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ output: customOutput });
+  });
+
+  it('direct implement loop entry fails if no approved plan exists', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'implement',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    expect(mockedRunLoop).not.toHaveBeenCalled();
+    expect(res.exitCode).toBe(1);
+    expect(lastErrorMessage).toContain('No approved plan audit found');
+  });
+
+  it('direct implement loop entry succeeds and skips start-point derivation when plan is approved', async () => {
+    writeAudit(1, 'APPROVED');
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'implement',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    expect(mockedRunLoop).toHaveBeenCalledTimes(1);
+    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: undefined });
+    expect(res.exitCode).toBe(0);
   });
 });

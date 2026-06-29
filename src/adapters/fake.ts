@@ -40,6 +40,19 @@ export const fakeAdapter: AgentAdapter = {
       };
     }
 
+    const isImplement = /impl-v\d+-/.test(relativePath);
+    if (isImplement) {
+      if (relativePath && fakeAdapterState.writeVerdictFile) {
+        const absolutePath = resolve(input.cwd, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        writeFileSync(absolutePath, `# Implementation Evidence Ledger\n\n| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n|---|---|---|---|---|\n| Step 1 | src/config.ts | pnpm test | ✅ | none |\n`);
+      }
+      return {
+        stdout: fakeAdapterState.stdout || `Fake implementation completed`,
+        exitCode: fakeAdapterState.exitCode
+      };
+    }
+
     if (!isFollowUp) {
       // --- Audit path: consume exactly one verdict, write the audit artifact. ---
       const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';   // shift() ONLY here (m6)
