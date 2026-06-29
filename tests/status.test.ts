@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderStatusPanel } from '../src/status.js';
+import { renderStatusPanel } from '../src/status-panel.js';
 
 describe('Status panel renderer', () => {
   it('renders box, details, and timeline table correctly', () => {

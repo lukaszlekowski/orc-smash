@@ -1,33 +1,38 @@
 import { resolve } from 'node:path';
-import chalk from 'chalk';
-import { loadConfig } from '../config.js';
+import { loadConfig, type Config } from '../config.js';
 import { scan } from '../state.js';
-import { renderStatusPanel } from '../status.js';
 import { resolveNextStep } from '../next-step.js';
+import { assembleNextStepMessage, buildPanelContext } from '../status.js';
+import type { CliOutput } from '../cli-output.js';
+import type { CommandResult } from './types.js';
 
 export interface StatusOptions {
   project?: string;
+  output: CliOutput;
 }
 
-export async function statusAction(options: StatusOptions): Promise<void> {
+export async function statusAction(options: StatusOptions): Promise<CommandResult> {
   if (!options.project) {
-    console.error(chalk.red('Error: project path is required. Use --project <path>'));
-    process.exit(1);
+    const msg = 'Error: project path is required. Use --project <path>';
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
   }
 
   const projectRoot = resolve(options.project);
-  let config: any;
+  let config: Config;
   try {
     config = loadConfig(projectRoot);
   } catch (err: any) {
-    console.error(chalk.red(`Error: failed to load config or manifest: ${err.message}`));
-    process.exit(1);
+    const msg = `Error: failed to load config or manifest: ${err.message}`;
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
   }
 
   const loopKeys = Object.keys(config.manifest.loops);
   if (loopKeys.length === 0) {
-    console.error(chalk.red('Error: no loops defined in manifest.'));
-    process.exit(1);
+    const msg = 'Error: no loops defined in manifest.';
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
   }
 
   // Detect loop based on history length
@@ -45,8 +50,6 @@ export async function statusAction(options: StatusOptions): Promise<void> {
   const loopSpec = config.manifest.loops[detectedLoop]!;
   const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern, followUpPattern: loopSpec.followUpPattern });
 
-  // Single source of truth: next-step messaging derives from resolveNextStep,
-  // the same rule the loop and smash command consume.
   const decision = resolveNextStep({
     latestVerdict: stateScan.latestVerdict,
     latestVersion: stateScan.latestVersion,
@@ -54,34 +57,19 @@ export async function statusAction(options: StatusOptions): Promise<void> {
     latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
   });
 
-  let nextStepMessage = 'Ready to smash';
-  switch (decision.state) {
-    case 'fresh':
-      nextStepMessage = `Ready to smash version ${decision.nextAuditVersion} (fresh)`;
-      break;
-    case 'rejected':
-      // Built from nextAuditVersion (not followUpVersion) so the status message
-      // cannot drift from the canonical restart rule.
-      nextStepMessage = `Proposed next: follow-up then audit version ${decision.nextAuditVersion}`;
-      break;
-    case 'approved':
-      nextStepMessage = `Completed: approved at version ${stateScan.latestVersion}`;
-      break;
-    case 'unknown-latest-audit':
-      nextStepMessage = `Terminal error: latest audit is unparseable`;
-      break;
-  }
+  const nextStepMessage = assembleNextStepMessage(decision, stateScan.latestVersion);
 
-  console.log(
-    renderStatusPanel({
-      projectRoot,
-      loopName: detectedLoop,
-      currentIteration: stateScan.latestVersion,
-      maxIterations: 5,
-      activeSkillRunner: null,
-      timeline: stateScan.timeline,
-      nextStepMessage
-    })
+  const panelCtx = buildPanelContext(
+    projectRoot,
+    detectedLoop,
+    stateScan.latestVersion,
+    5,
+    null,
+    stateScan.timeline,
+    nextStepMessage
   );
-  process.exit(0);
+
+  options.output.renderPanel(panelCtx);
+
+  return { exitCode: 0 };
 }

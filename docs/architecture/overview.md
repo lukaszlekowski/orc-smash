@@ -21,11 +21,13 @@ cli.ts ──▶ commands/{smash,status}.ts
                 ├─ interactive.ts   typed prompts (loop / per-skill runners / start-point / max-iters)
                 ├─ loop.ts          audit→follow-up driver; per-step runner; max-iter; unknown→terminal; second-opinion
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
-                ├─ status.ts        ASCII panel (boxen + cli-table3 + ora)
-                └─ adapters/        AgentAdapter registry: opencode · codex · claude (all real) · fake (tests)
+                ├─ status.ts        pure next-step-message & PanelContext builders
+                ├─ status-panel.ts  pure ASCII boxen/table dashboard string renderer
+                ├─ cli-output.ts    event-driven terminal output seam (panel/plain modes)
+                └─ adapters/        registry: explicit production registry (registry.ts) vs testing registry (testing.ts)
 ```
 
-Pure, I/O-free logic (`verdict`, `state`, `prompt-composer`, `runner`, adapter arg builders) is
+Pure, I/O-free logic (`verdict`, `state`, `prompt-composer`, `runner`, status context, adapter arg builders) is
 isolated so it unit-tests without spawning agents.
 
 ## Target direction
@@ -51,14 +53,10 @@ The codebase is being steered toward these architectural properties:
 3. `interactive` proposes loop / per-skill runners / start-point / max-iters (pre-filled from
    state and manifest defaults); `commands/smash` normalizes and **rejects impossible
    transitions**, unknown agents, and agent/model mismatches with specific errors.
-4. `loop` runs until APPROVED/max-iterations. Each step resolves its runner via `runner.ts` →
-   `prompt-composer` assembles role + skill + inputs → the adapter for that runner spawns the
-   agent in the target cwd → the agent writes the versioned audit file → `verdict.parse` reads
-   it (stdout fallback) → branch on APPROVED / REJECTED / unknown. Audit and follow-up may use
-   different runners/CLIs.
-5. On APPROVED the loop offers `stop | run-second-opinion` (re-prompts the audit runner, runs
-   the next version). `status` redraws the panel each iteration; on stop it prints "awaiting
-   your review" + the final audit path.
+4. `loop` runs until APPROVED/max-iterations. Instead of directly printing or managing spinner state, `loop.ts` emits structured lifecycle events (e.g. `iterationStarted`, `stepStarted`, `stepSucceeded`, `stepFailed`, `renderPanel`, `finalSummary`) via a `CliOutput` interface.
+5. Each step resolves its runner via `runner.ts` → `prompt-composer` assembles role + skill + inputs → the adapter (explicitly resolved from the runner registry) spawns the agent in the target cwd → the agent writes the versioned audit file → `verdict.parse` reads it → branch on APPROVED / REJECTED / unknown.
+6. On APPROVED the loop offers `stop | run-second-opinion` (re-prompts the audit runner, runs the next version).
+7. `cli.ts` serves as the single process-exit boundary: commands return a structured `CommandResult` containing the `exitCode`, and `cli.ts` sets `process.exitCode` accordingly.
 
 ## Execution completeness
 
@@ -77,6 +75,7 @@ In the current repo direction, `opencode` is the only adapter with a verified co
 - **Three real adapters; per-skill runners:** opencode, codex, and claude all run for real; each
   skill declares its own agent/model (overridable per run). Agent and model are a coupled pair —
   switching agent re-defaults model. The adapter is selected per step, so stages can mix CLIs.
+- **Explicit Registries:** The production adapter registry registers only real adapters; test-only adapters (such as `fake`) are registered via a separate test registry constructor (`testing.ts`).
 - **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`.
   A loop using the existing input sources (`target`, `version`, `priorAudit`, `outputPath`,
   `planPath`, `checklistPath`) is added via YAML only (no TS).
@@ -90,6 +89,4 @@ In the current repo direction, `opencode` is the only adapter with a verified co
 - **Stateless; isolated per target:** the tool holds only config; all per-run target state is
   derived from filenames. One runner per target; different targets never interfere (dual-target
   e2e proves it).
-- **Verify every real path:** the deterministic `fake`-adapter e2e gates harness logic; each
-  real provider (opencode, codex, claude) is gated by its own env-gated contract test plus a live
-  mixed-CLI smoke.
+- **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths (opencode, codex, claude) remain covered by env-gated contract tests and mixed-CLI smoke tests as a separate, manual sign-off requirement.

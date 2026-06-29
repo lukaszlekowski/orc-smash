@@ -3,17 +3,33 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { statusAction } from '../src/commands/status.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
+import * as configModule from '../src/config.js';
 
 describe('statusAction command (consumes resolveNextStep)', () => {
   const tempDir = join(process.cwd(), 'temp-status-action');
 
+  let renderPanelCalledWith: any = null;
+  let errorCalledWith: any = null;
+
+  const mockOutput = {
+    note: () => {},
+    warn: () => {},
+    error: (msg: string) => { errorCalledWith = msg; },
+    iterationStarted: () => {},
+    stepStarted: () => {},
+    stepSucceeded: () => {},
+    stepFailed: () => {},
+    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; },
+    finalSummary: () => {}
+  };
+
   beforeEach(() => {
     if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
     mkdirSync(tempDir, { recursive: true });
+    renderPanelCalledWith = null;
+    errorCalledWith = null;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    // statusAction calls process.exit(0) after rendering; keep the test alive.
-    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   });
 
   afterEach(() => {
@@ -34,38 +50,44 @@ describe('statusAction command (consumes resolveNextStep)', () => {
     writeFileSync(join(tempDir, `docs/dev/plan-audit-v${version}-${agent}.md`), buildFrontMatter(meta) + body);
   }
 
-  async function renderOutput(): Promise<string> {
-    const calls = (console.log as ReturnType<typeof vi.fn>).mock.calls;
-    return calls.map(c => c.join(' ')).join('\n');
-  }
-
   it('rejected: message asserts nextAuditVersion (latestVersion + 1), driven by resolveNextStep', async () => {
     writeAudit(1, 'REJECTED');
-    await statusAction({ project: tempDir });
-    const out = await renderOutput();
-    // nextAuditVersion for v1 REJECTED is 2; status must NOT reference followUpVersion (1).
-    expect(out).toContain('Proposed next: follow-up then audit version 2');
-    expect(out).not.toMatch(/audit version 1\b/);
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith).not.toBeNull();
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Proposed next: follow-up then audit version 2');
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/audit version 1\b/);
   });
 
   it('approved: message reports the approved version', async () => {
     writeAudit(2, 'APPROVED');
-    await statusAction({ project: tempDir });
-    const out = await renderOutput();
-    expect(out).toContain('Completed: approved at version 2');
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith).not.toBeNull();
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Completed: approved at version 2');
   });
 
   it('fresh: message reports version 1 (nextAuditVersion)', async () => {
-    // No audit files written.
-    await statusAction({ project: tempDir });
-    const out = await renderOutput();
-    expect(out).toContain('Ready to smash version 1 (fresh)');
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith).not.toBeNull();
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to smash version 1 (fresh)');
   });
 
   it('unknown latest audit: terminal message', async () => {
     writeAudit(1, 'MALFORMED');
-    await statusAction({ project: tempDir });
-    const out = await renderOutput();
-    expect(out).toContain('Terminal error: latest audit is unparseable');
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith).not.toBeNull();
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Terminal error: latest audit is unparseable');
+  });
+
+  it('proves statusAction receives and uses StatusOptions.output for guard error', async () => {
+    vi.spyOn(configModule, 'loadConfig').mockImplementationOnce(() => {
+      throw new Error('mocked config error');
+    });
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(1);
+    expect(errorCalledWith).toContain('failed to load config or manifest: mocked config error');
   });
 });
