@@ -1,8 +1,14 @@
 import type { PanelContext } from './status.js';
 import { renderStatusPanel } from './status-panel.js';
+import { renderPlainPanel } from './plain-render.js';
 import ora, { Ora } from 'ora';
 import chalk from 'chalk';
 import type { StepKind } from './provenance.js';
+
+const ENTER_ALT_SCREEN = '\u001B[?1049h';
+const EXIT_ALT_SCREEN = '\u001B[?1049l';
+const CURSOR_HOME_CLEAR = '\u001B[H\u001B[2J';
+export const PANEL_RENDER_INTERVAL_MS = 200;
 
 export interface CliOutput {
   note(message: string): void;
@@ -38,10 +44,49 @@ export interface CliOutput {
     message: string;
     lastAuditPath: string | null;
   }): void;
+  attachLiveRegion?(supplier: () => PanelContext): void;
+  detachLiveRegion?(): void;
 }
 
 export function createPanelCliOutput(): CliOutput {
   let spinner: Ora | null = null;
+  let altScreenActive = false;
+  let liveInterval: ReturnType<typeof setInterval> | null = null;
+  let liveActive = false;
+  let liveSupplier: (() => PanelContext) | null = null;
+
+  const ensureAltScreen = () => {
+    if (altScreenActive) {
+      return;
+    }
+    process.stdout.write(ENTER_ALT_SCREEN);
+    altScreenActive = true;
+  };
+
+  const restoreMainScreen = () => {
+    if (!altScreenActive) {
+      return;
+    }
+    process.stdout.write(EXIT_ALT_SCREEN);
+    altScreenActive = false;
+  };
+
+  const panelDraw = (ctx: PanelContext) => {
+    ensureAltScreen();
+    process.stdout.write(`${CURSOR_HOME_CLEAR}${renderStatusPanel(ctx)}\n`);
+  };
+
+  const detach = () => {
+    if (liveSupplier) {
+      process.stdout.write(CURSOR_HOME_CLEAR + renderStatusPanel(liveSupplier()) + '\n');
+      liveSupplier = null;
+    }
+    if (liveInterval) {
+      clearInterval(liveInterval);
+      liveInterval = null;
+    }
+    liveActive = false;
+  };
 
   return {
     note(message: string) {
@@ -57,12 +102,19 @@ export function createPanelCliOutput(): CliOutput {
       // iteration started hook
     },
     stepStarted(ctx) {
+      if (liveActive) {
+        return;
+      }
       if (spinner) {
         spinner.stop();
       }
       spinner = ora(chalk.blue(ctx.message)).start();
     },
     stepSucceeded(ctx) {
+      if (liveActive) {
+        console.log(chalk.green(ctx.message));
+        return;
+      }
       if (spinner) {
         spinner.succeed(chalk.green(ctx.message));
         spinner = null;
@@ -71,6 +123,10 @@ export function createPanelCliOutput(): CliOutput {
       }
     },
     stepFailed(ctx) {
+      if (liveActive) {
+        console.error(chalk.red(ctx.message));
+        return;
+      }
       if (spinner) {
         spinner.fail(chalk.red(ctx.message));
         spinner = null;
@@ -79,15 +135,35 @@ export function createPanelCliOutput(): CliOutput {
       }
     },
     renderPanel(context: PanelContext) {
-      console.clear();
-      console.log(renderStatusPanel(context));
+      panelDraw(context);
     },
     finalSummary(ctx) {
+      detach();
+      restoreMainScreen();
       if (ctx.success) {
         console.log(chalk.bold.green(`\nSuccess: ${ctx.message}`));
       } else {
         console.log(chalk.bold.red(`\nLoop terminated: ${ctx.message}`));
       }
+    },
+    attachLiveRegion(supplier: () => PanelContext) {
+      if (liveInterval) {
+        clearInterval(liveInterval);
+        liveInterval = null;
+      }
+      if (spinner) {
+        spinner.stop();
+        spinner = null;
+      }
+      liveSupplier = supplier;
+      liveActive = true;
+      ensureAltScreen();
+      liveInterval = setInterval(() => {
+        process.stdout.write(CURSOR_HOME_CLEAR + renderStatusPanel(supplier()) + '\n');
+      }, PANEL_RENDER_INTERVAL_MS);
+    },
+    detachLiveRegion() {
+      detach();
     }
   };
 }
@@ -124,6 +200,9 @@ export function createPlainCliOutput(): CliOutput {
         maxIterations: context.maxIterations,
         activeSkillRunner: context.activeSkillRunner,
         nextStepMessage: context.nextStepMessage,
+        inFlight: context.inFlight,
+        latestVersion: context.latestVersion,
+        readOnly: context.readOnly,
         timeline: context.timeline.map(s => ({
           version: s.version,
           role: s.role,
@@ -137,26 +216,7 @@ export function createPlainCliOutput(): CliOutput {
       const json = JSON.stringify(simplified);
       if (json !== lastPanelContextJson) {
         lastPanelContextJson = json;
-        const activeRunner = context.activeSkillRunner
-          ? `${context.activeSkillRunner.skillId} (${context.activeSkillRunner.agent} · ${context.activeSkillRunner.model})`
-          : 'None';
-        const timelineStr = context.timeline
-          .map(s => {
-            const stepName = `${s.kind} v${s.version}`;
-            const stepState = s.status === 'running'
-              ? 'running'
-              : s.status === 'failed'
-              ? 'failed'
-              : s.kind === 'audit'
-              ? s.verdict ?? 'done'
-              : s.outcome ?? 'done';
-            return `${stepName}:${stepState}`;
-          })
-          .join(', ');
-
-        console.log(
-          `[Panel] Loop: ${context.loopName} | Iteration: ${context.currentIteration}/${context.maxIterations} | Active: ${activeRunner} | Next: ${context.nextStepMessage} | Timeline: [${timelineStr}]`
-        );
+        console.log(renderPlainPanel(context));
       }
     },
     finalSummary(ctx) {
@@ -165,6 +225,8 @@ export function createPlainCliOutput(): CliOutput {
       } else {
         console.log(`Loop terminated: ${ctx.message} (Verdict: ${ctx.verdict})`);
       }
-    }
+    },
+    attachLiveRegion: () => {},
+    detachLiveRegion: () => {}
   };
 }

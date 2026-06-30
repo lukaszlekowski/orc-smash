@@ -12,6 +12,8 @@ export const codexAdapter: AgentAdapter = {
         '-m',
         input.model,
         '--skip-git-repo-check',
+        // Headless autonomy: skip all approval prompts + sandbox so non-interactive runs can write artifacts.
+        '--dangerously-bypass-approvals-and-sandbox',
         input.prompt
       ]
     };
@@ -19,6 +21,12 @@ export const codexAdapter: AgentAdapter = {
 
   async run(input: RunInput): Promise<RunResult> {
     const { command, args } = this.buildRun(input);
-    return spawnAgentProcess(command, args, input.cwd);
+    return spawnAgentProcess(command, args, input.cwd, {
+      agent: this.name,
+      model: input.model,
+      skillId: input.skillId,
+      version: input.version,
+      onLifecycle: input.onLifecycle
+    });
   }
 };

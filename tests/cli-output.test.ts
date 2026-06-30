@@ -24,11 +24,13 @@ describe('Plain mode loop-level integration', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-plain-mode-test');
   let logSpy: any;
   let clearSpy: any;
+  let stdoutWriteSpy: any;
 
   beforeEach(() => {
     createTempDir('temp-plain-mode-test');
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     clearSpy = vi.spyOn(console, 'clear').mockImplementation(() => {});
+    stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.mocked(ora).mockClear();
     mockSpinner.start.mockClear();
     mockSpinner.stop.mockClear();
@@ -218,5 +220,45 @@ describe('Plain mode loop-level integration', () => {
     });
     logs = logSpy.mock.calls.map((c: any) => c.join(' ')).join('\n');
     expect(logs).toContain('Loop terminated: hit max-iterations, awaiting human');
+
+    // 7. renderPanel uses alternate-screen redraw instead of console.clear
+    const baseWriteCalls = stdoutWriteSpy.mock.calls.length;
+    output.renderPanel({
+      projectRoot: '/tmp/project',
+      loopName: 'plan',
+      currentIteration: 1,
+      maxIterations: 5,
+      activeSkillRunner: {
+        skillId: 'plan-audit',
+        agent: 'fake',
+        model: 'fake-model'
+      },
+      nextStepMessage: 'Running audit...',
+      timeline: [],
+      inFlight: null,
+      latestVersion: 0,
+      readOnly: false
+    });
+    const writeChunks = stdoutWriteSpy.mock.calls
+      .slice(baseWriteCalls)
+      .map((c: any) => c[0])
+      .join('');
+    expect(clearSpy).not.toHaveBeenCalled();
+    expect(writeChunks).toContain('\u001B[?1049h');
+    expect(writeChunks).toContain('\u001B[H\u001B[2J');
+
+    // 8. finalSummary restores the main screen before printing
+    const summaryWriteCalls = stdoutWriteSpy.mock.calls.length;
+    output.finalSummary({
+      success: true,
+      verdict: 'APPROVED',
+      message: 'done',
+      lastAuditPath: 'docs/dev/plan-audit-v1-fake.md'
+    });
+    const summaryWrites = stdoutWriteSpy.mock.calls
+      .slice(summaryWriteCalls)
+      .map((c: any) => c[0])
+      .join('');
+    expect(summaryWrites).toContain('\u001B[?1049l');
   });
 });

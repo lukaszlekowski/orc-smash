@@ -1,5 +1,18 @@
 import type { Config, ModelRegistry } from './config.js';
 
+/**
+ * opencode's own model-id contract: `opencode run -m` requires the form
+ * `provider/model` (verified via `opencode run --help`). The `provider/`
+ * segment is opencode's transport/endpoint namespace (e.g. `opencode-go`),
+ * owned by opencode — orc-smash treats the whole string as opaque and
+ * validates only that it has exactly one `provider/model` slash.
+ */
+const OPENCODE_MODEL_ID = /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/;
+
+export function isOpencodeModelId(model: string): boolean {
+  return OPENCODE_MODEL_ID.test(model);
+}
+
 export function isValidModelForAgent(agent: string, model: string, registry: ModelRegistry): boolean {
   const allowedModels = registry.providers[agent];
   if (!allowedModels) {
@@ -8,9 +21,9 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
   if (allowedModels.includes(model)) {
     return true;
   }
-  // fallback migration aid for agents present in registry but with model outside allow-list
+  // Per-provider shape rules for models outside the registry allow-list.
   if (agent === 'opencode') {
-    return /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/.test(model);
+    return isOpencodeModelId(model);
   }
   if (agent === 'claude') {
     return model.startsWith('claude-');

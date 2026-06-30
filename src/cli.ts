@@ -34,6 +34,8 @@ program
   .option('-a, --agent <agent-name>', 'Global override for agent')
   .option('-m, --model <model-name>', 'Global override for model')
   .option('-i, --max-iterations <iterations>', 'Maximum audit iterations', '5')
+  .option('--debug-spawn', 'Write spawn/process debug logs to docs/dev/spawn-debug.log')
+  .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
   .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
   .action(async (options) => {
     const output = options.plain ? createPlainCliOutput() : createPanelCliOutput();

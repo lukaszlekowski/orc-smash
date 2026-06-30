@@ -5,7 +5,8 @@ import os from 'node:os';
 import {
   loadModelRegistry,
   DEFAULT_REGISTRY,
-  loadConfig
+  loadConfig,
+  registryTimeoutFor
 } from '../src/config.js';
 import { loadManifest } from '../src/manifest.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
@@ -116,5 +117,80 @@ loops: {}
     expect(() => {
       loadManifest(manifestPath, registry);
     }).toThrow(/unregistered-model/);
+  });
+
+  it('parses optional per-agent timeouts and exposes them via registryTimeoutFor', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    const yaml = `
+providers:
+  opencode:
+    - opencode-go/deepseek-v4-flash
+defaults:
+  agent: opencode
+  model: opencode-go/deepseek-v4-flash
+timeouts:
+  opencode: 120000
+`;
+    writeFileSync(join(tempDir, 'orc.config.yaml'), yaml);
+    const registry = loadModelRegistry(tempDir);
+    expect(registry.timeouts?.['opencode']).toBe(120000);
+    expect(registryTimeoutFor(registry, 'opencode')).toBe(120000);
+    expect(registryTimeoutFor(registry, 'codex')).toBeUndefined();
+  });
+
+  it('rejects negative or non-integer timeout values', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: ['opencode-go/x'] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencode: -5 }
+`);
+    expect(() => loadModelRegistry(tempDir)).toThrow(/Failed to parse or validate/);
+  });
+
+  it('treats timeouts.opencode: 0 as "disabled" (non-negative integers allowed)', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: ['opencode-go/x'] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencode: 0 }
+`);
+    const registry = loadModelRegistry(tempDir);
+    expect(registryTimeoutFor(registry, 'opencode')).toBe(0);
+  });
+
+  it('rejects unknown timeouts keys (e.g. "opencdoe" as a typo) — strict schema catches unrecognized keys', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: ['opencode-go/x'] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencdoe: 12345 }
+`);
+    expect(() => loadModelRegistry(tempDir)).toThrow(/Unrecognized/);
+  });
+
+  it('rejects a non-opencode timeouts key even when opencode is also present', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: ['opencode-go/x'] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencode: 60000, fake: 5000 }
+`);
+    expect(() => loadModelRegistry(tempDir)).toThrow(/Unrecognized/);
+  });
+
+  it('rejects a codex timeouts key (only opencode supports timeouts today)', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers:
+  opencode: [opencode-go/x]
+  codex: [gpt-5.4]
+  claude: [glm-5.2]
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts:
+  opencode: 60000
+  codex: 60000
+`);
+    expect(() => loadModelRegistry(tempDir)).toThrow(/Unrecognized/);
   });
 });

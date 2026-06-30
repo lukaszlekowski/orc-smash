@@ -45,6 +45,8 @@ orc status --project <path>         # read-only: detect where we are, render the
 - **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
 - **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
 - **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.
+- **Ledger Verification & Closeout:** For implementation runs, the harness parses the written ledger to verify required tables (evidence and coverage) and confidence declaration. On success, it updates the plan's front-matter status (to `done` or `blocked` based on a 0.95 confidence threshold) and appends a versioned change log.
+- **Execution Watchdog:** Spawns are protected by a watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default.
 - **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
 
 ## Architecture direction
@@ -66,7 +68,7 @@ Current development is steering the harness toward a cleaner runtime architectur
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 4 implementation plan.
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 2 implementation plan.
 
 ## Verification and CI
 
@@ -81,13 +83,12 @@ In contrast, **real-provider verification** remains a separate sign-off requirem
 
 ```bash
 OPENCODE_CONTRACT=1 CODEX_CONTRACT=1 \
-  CLAUDE_CONTRACT=1 pnpm test                   # env-gated contract + mixed-CLI smoke tests
+  CLAUDE_CONTRACT=1 pnpm test                   # env-gated contract tests
 ```
 
 The repo-local e2e (`tests/e2e/smash.test.ts` via the `fake` adapter) covers every exit branch,
 mixed-runner loops, and dual-target isolation without external credentials or network. **Each
-real provider path** is proven by its env-gated contract test plus a live mixed-CLI
-end-to-end smoke (sign-off requires all of them) — none is optional.
+real provider path** is proven by its own env-gated contract test — none is optional.
 
 ## Project layout
 

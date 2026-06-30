@@ -106,7 +106,9 @@ export async function promptRunners(
         message: `Enter custom model for agent '${agent}' (skill '${skillId}'):`,
         validate: (val) => {
           if (!isValidModelForAgent(agent, val, config.registry)) {
-            return `model '${val}' is not a valid model for agent '${agent}'`;
+            return agent === 'opencode'
+              ? `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`
+              : `model '${val}' is not a valid model for agent '${agent}'`;
           }
           return true;
         }
@@ -195,7 +197,9 @@ export async function promptSecondOpinionRunner(
       message: `Enter custom model for agent '${agent}':`,
       validate: (val) => {
         if (!isValidModelForAgent(agent, val, config.registry)) {
-          return `model '${val}' is not a valid model for agent '${agent}'`;
+          return agent === 'opencode'
+            ? `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`
+            : `model '${val}' is not a valid model for agent '${agent}'`;
         }
         return true;
       }

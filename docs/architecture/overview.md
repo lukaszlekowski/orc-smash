@@ -21,6 +21,8 @@ cli.ts ──▶ commands/{smash,status}.ts
                 ├─ follow-up-outcome.ts shared outcome enum, parser, and heading contract
                 ├─ interactive.ts   registry-driven prompts, filtered to configured ∩ runnable agents
                 ├─ loop.ts          three-stage pipeline orchestrator (plan → implement → review)
+                ├─ implement-ledger.ts implementation ledger tables and confidence validator
+                ├─ plan-closeout.ts plan front-matter status closeout and change log appender
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
                 ├─ status.ts        pure next-step-message & PanelContext builders
                 ├─ status-panel.ts  pure ASCII boxen/table dashboard string renderer
@@ -60,7 +62,7 @@ The codebase is being steered toward these architectural properties:
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
 3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
 4. `loop` drives the loop execution:
-   - For `implement` kind, it requires an approved plan audit and runs the implementation stage, writing the ledger artifact linked via provenance.
+   - For `implement` kind, it requires an approved plan audit. Once the agent writes its ledger, `implement-ledger` parses and validates the tables (evidence and coverage) and the overall confidence declaration. On success, `plan-closeout` updates `docs/dev/plan.md`'s front matter status (to `done` or `blocked` based on a 0.95 confidence threshold) and appends a structured versioned log entry under `## Change Log`. The loop stamps the harness metadata provenance onto the ledger only if the closeout was successful and the confidence met the threshold.
    - For `doc-audit`/`code-review` loops, it iterates versioned audits and follow-ups.
 5. In interactive runs, stage transitions advance downstream:
    - `plan` loops APPROVED verdict offers `stop | run-second-opinion | implement` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
@@ -81,6 +83,26 @@ In the current repo direction, `opencode` is the only adapter with a verified co
 (`stopReason`) that can support this distinction. `codex` and `claude` currently remain exit-code
 / structured-error based until equivalent support is explicitly proven and implemented.
 
+### Model-id ownership boundary
+
+orc-smash stores model ids verbatim (one opaque string per skill) and never splits them.
+The `provider/` prefix in opencode model ids (e.g. `opencode-go/deepseek-v4-flash`) is
+opencode's own transport/endpoint namespace, not an orc-smash concept — orc-smash validates
+only per-provider shape via `runner.ts:isOpencodeModelId`. codex and claude ids have no
+`provider/` segment and are validated by separate rules (`model.startsWith('claude-')` for
+claude; no opencode/claude prefix for codex).
+
+### Opencode timeout policy
+
+The opencode execution timeout is config-driven-first with explicit precedence:
+`OPENCODE_RUN_TIMEOUT_MS` env > `registry.timeouts.opencode` (config tier) > built-in
+600000 ms (10 minutes). A value of `0` (or env `"0"`) disables the watchdog. The single
+source of truth is the pure `resolveOpencodeTimeoutMs` function in
+`src/adapters/utils.ts`; `spawnOpencode` and `createOpencodeAdapter` use it. There is no
+per-call programmatic override on `spawnOpencode` — the option is the config-driven
+default, not an override. The production registry accepts an optional `opencodeSpawn` test
+seam; production code never passes it. codex/claude have no harness timeout today.
+
 ## Key invariants
 
 - **Three real adapters; per-skill runners:** opencode, codex, and claude all run for real; each
@@ -93,6 +115,14 @@ In the current repo direction, `opencode` is the only adapter with a verified co
 - **One composed prompt:** each agent run gets role + skill + inputs — no task content is invented.
 - **Single-source-of-truth runtime rules:** path rendering/parsing, next-step resolution, and
   shared contracts should not be reimplemented ad hoc across multiple files.
+- **Model ids are opaque-per-provider; the `provider/` prefix is the provider's own concern:**
+  opencode's `run -m` requires `provider/model`; the first segment is opencode's transport
+  namespace, not an orc-smash concept. orc-smash stores ids verbatim and validates only
+  per-provider shape. codex/claude ids have no `provider/` segment. Do not split
+  endpoint/model in the shared registry.
+- **Opencode execution timeout is config-driven-first:** precedence is `OPENCODE_RUN_TIMEOUT_MS`
+  env > `registry.timeouts.opencode` > built-in 600000 ms. `0` disables. The pure
+  `resolveOpencodeTimeoutMs` function in `src/adapters/utils.ts` is the single source of truth.
 - **`unknown` is terminal:** a missing/malformed verdict stops the loop for human review; the
   target is never mutated on a parse miss. Follow-up runs only on a concrete REJECTED audit.
 - **Black-box agents:** providers are opaque native binaries invoked over stdio + args; the
@@ -100,4 +130,4 @@ In the current repo direction, `opencode` is the only adapter with a verified co
 - **Stateless; isolated per target:** the tool holds only config; all per-run target state is
   derived from filenames. One runner per target; different targets never interfere (dual-target
   e2e proves it).
-- **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths (opencode, codex, claude) remain covered by env-gated contract tests and mixed-CLI smoke tests as a separate, manual sign-off requirement.
+- **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths (opencode, codex, claude) remain covered by env-gated contract tests as a separate, manual release sign-off requirement.

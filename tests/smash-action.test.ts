@@ -2,9 +2,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Mock runLoop so smashAction's start-point derivation is exercised in isolation.
 vi.mock('../src/loop.js', () => ({
   runLoop: vi.fn().mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null })
+}));
+
+let lastPromptedDefault: string | undefined;
+vi.mock('../src/interactive.js', () => ({
+  promptLoopSelect: async (_loops: string[], defaultLoop: string) => {
+    lastPromptedDefault = defaultLoop;
+    return defaultLoop;
+  },
+  promptStartPoint: async () => 'fresh',
+  promptRunners: async (skills: string[]) => {
+    const res: any = {};
+    for (const s of skills) res[s] = { agent: 'fake', model: 'fake-model' };
+    return res;
+  },
+  promptMaxIterations: async () => 5
 }));
 
 import { smashAction } from '../src/commands/smash.js';
@@ -12,6 +26,8 @@ import { runLoop } from '../src/loop.js';
 import { buildFrontMatter } from '../src/provenance.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
+import { resolveImplementFacts } from '../src/state.js';
+import { loadConfig } from '../src/config.js';
 
 const mockedRunLoop = vi.mocked(runLoop);
 
@@ -154,5 +170,136 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: undefined });
     expect(res.exitCode).toBe(0);
+  });
+
+  it('v5-audit C1: interactive startup does NOT default to review after a closeout_failed run', async () => {
+    // Pre-state: an approved plan audit exists, but the only implement
+    // artifact is the agent's raw ledger (no harness front matter) —
+    // exactly what the harness leaves on disk when writePlanCloseout
+    // fails (Step 7 v5-audit C1 contract: writeArtifactWithMeta does
+    // NOT run on the closeout_failed branch).
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    const meta = makeArtifactMeta({ version: 1 });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+    // Agent's raw ledger — no harness front matter. This simulates the
+    // on-disk state after a `closeout_failed` run (Step 7 v5-audit C1).
+    writeFileSync(
+      join(tempDir, 'docs/dev/impl-v1-fake.md'),
+      `# Implementation Evidence Ledger\n\n| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n| --- | --- | --- | --- | --- |\n| Step 1 | src/x.ts | pnpm test | pass | none |\n\n| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n| --- | --- | --- | --- |\n| Req A | src/x.ts | tests/x.test.ts | pass |\n\nState overall confidence: 1.00\n`
+    );
+
+    // Read the project-local manifest so we can call resolveImplementFacts
+    // with the same patterns the loop uses internally.
+    const config = loadConfig(tempDir);
+    const facts = resolveImplementFacts(
+      tempDir,
+      {
+        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
+        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
+      },
+      {
+        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
+      }
+    );
+    // The fix: the state scanner MUST NOT count a closeout_failed run as
+    // a completed implementation. Without the harness's front matter
+    // carrying `priorAudit: docs/dev/plan-audit-v1-fake.md`, the scan
+    // reads `priorAudit: 'none'` and `currentPlanImplemented` is false.
+    // This is the contract that stops `smash.ts` from defaulting the
+    // next interactive start to `review` — proving the v5-audit C1
+    // single-workflow-boundary fix end-to-end.
+    expect(facts.approvedPlanAuditPath).toContain('plan-audit-v1-fake.md');
+    expect(facts.currentPlanImplemented).toBe(false);
+
+    // Direct assertion on the `smash.ts` default-loop logic. Calling
+    // `smashAction` in interactive mode (no `--loop`) reads the same
+    // `resolveImplementFacts()` result; the default loop should be
+    // `implement` (continue the work), not `review` (skip ahead as if
+    // it were done). The `vi.mock` for `promptLoopSelect` records the
+    // default the harness computed (`lastPromptedDefault`) and returns
+    // it; `runLoop` is then called with that loop name.
+    mockedRunLoop.mockClear();
+    lastPromptedDefault = undefined;
+    await smashAction({
+      project: tempDir,
+      // no `loop` → interactive mode → reads `resolveImplementFacts`
+      // and defaults to `implement` (NOT `review`) when
+      // `currentPlanImplemented` is false but `approvedPlanAuditPath`
+      // is non-null.
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    // The default the harness computed (and the loop name it called
+    // runLoop with) on a `closeout_failed` post-state is `implement`,
+    // not `review`. If the v5-audit C1 fix is missing, this assertion
+    // fails (the default would silently advance to `review`).
+    expect(lastPromptedDefault).toBe('implement');
+    expect(mockedRunLoop).toHaveBeenCalled();
+    const calledLoopName = mockedRunLoop.mock.calls[0]![1];
+    expect(calledLoopName).toBe('implement');
+  });
+
+  it('v9-audit Critical: interactive startup does NOT default to review after a blocked closeout run', async () => {
+    // The on-disk post-state of a blocked run: the plan front matter
+    // has been updated to `status: blocked` by `writePlanCloseout`,
+    // and the impl ledger file exists BUT without the harness's front
+    // matter (writeArtifactWithMeta is NOT called on the blocked
+    // branch — see Step 7 v9-audit Critical fix). The state scanner
+    // must see `currentPlanImplemented: false` and the default loop
+    // must be `implement`, not `review`.
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    const meta = makeArtifactMeta({ version: 1 });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+    // Plan with `status: blocked` — the post-blocked-closeout state.
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan.md'),
+      '---\nstatus: blocked\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Plan body\n'
+    );
+    // Agent's raw ledger — no harness front matter. This simulates the
+    // post-blocked-closeout state: the agent produced a complete ledger,
+    // closeout updated the plan, but the loop did NOT stamp the harness
+    // front matter.
+    writeFileSync(
+      join(tempDir, 'docs/dev/impl-v1-fake.md'),
+      `# Implementation Evidence Ledger\n\n| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n| --- | --- | --- | --- | --- |\n| Step 1 | src/x.ts | pnpm test | pass | none |\n\n| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n| --- | --- | --- | --- |\n| Req A | src/x.ts | tests/x.test.ts | pass |\n\nState overall confidence: 0.94\n`
+    );
+
+    const config = loadConfig(tempDir);
+    const facts = resolveImplementFacts(
+      tempDir,
+      {
+        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
+        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
+      },
+      {
+        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
+      }
+    );
+    // Without the harness's front matter, the scanner reads
+    // `priorAudit: 'none'` and `currentPlanImplemented` is false.
+    expect(facts.approvedPlanAuditPath).toContain('plan-audit-v1-fake.md');
+    expect(facts.currentPlanImplemented).toBe(false);
+
+    mockedRunLoop.mockClear();
+    lastPromptedDefault = undefined;
+    await smashAction({
+      project: tempDir,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    // The default on a blocked post-state is `implement` (continue
+    // the work), not `review` (skip ahead as if it were done).
+    expect(lastPromptedDefault).toBe('implement');
+    expect(mockedRunLoop).toHaveBeenCalled();
+    const calledLoopName = mockedRunLoop.mock.calls[0]![1];
+    expect(calledLoopName).toBe('implement');
   });
 });
