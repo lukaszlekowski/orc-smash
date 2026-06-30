@@ -29,7 +29,10 @@ export const DEFAULT_REGISTRY: ModelRegistry = {
       'opencode-go/qwen3.7-max'
     ],
     claude: [
-      'claude-sonnet-4-6'
+      'glm-4.7',
+      'glm-5.1',
+      'glm-5.2',
+      'glm-5.2[1m]'
     ],
     codex: [
       'gpt-5.5',

@@ -2,51 +2,27 @@
 
 ## Short checklist
 
-Ordered by recommended implementation batches. This is the top-level view: grouped, ordered, and status-only.
+Current pending work, grouped into recommended implementation batches.
 
-**Batch 1 — Core runtime cleanup**
+**Batch 1 — Runner and Provider Hardening**
 
-- [x] **1 — structured error labeling fix**
-- [x] **9 — `loop.ts` + spawner refactor**
-- [x] **2 — pattern rendering/parsing centralization**
-- [x] **4 — next-step decision centralization**
-- [x] **16 — legacy provenance cleanup**
-- [x] **17 — execution-completeness contract for streaming adapters**
-- [x] **18 — state-scan dead-code cleanup**
-
-**Batch 2 — CLI/runtime ergonomics**
-
-- [x] **10 — logging layer**
-- [x] **6 — Debug / non-graphical mode**
-- [x] **11 — command flow cleanup (`process.exit` at the boundary)**
-- [x] **19 — CI / typecheck workflow**
-- [x] **20 — fake-adapter registry boundary**
-
-**Batch 3 — Test infrastructure & follow-up outcome contract**
-
-- [x] **12 — test helpers extraction**
-- [x] **21 — follow-up outcome contract centralization**
-
-**Batch 4 — Runner/model UX and loop exposure**
-
-- [ ] **7 — Model registry config (single source of truth)**
-- [ ] **15 — loop exposure for existing skills**
 - [ ] **22 — inspect opencode model naming boundary**
+- [ ] **25 — provider execution contract hardening**
 
-**Batch 5 — Rendering and output polish**
+**Batch 2 — Rendering and Output Polish**
 
 - [ ] **5 — Live status panel**
 - [ ] **23 — TUI border simplification**
 - [ ] **24 — plain mode multiline readability**
 
-**Batch 6 — Remaining interaction flow and docs**
+**Batch 3 — Interaction Flow and Docs**
 
 - [ ] **8 — Prompt to extend iterations at max**
 - [ ] **14 — docs canonicalization + broken plan reference fix**
 
 ## Detailed checklist
 
-Ordered by recommended implementation batches. This section is the execution order to use for planning → implementation work, and it now absorbs the relevant cleanup detail directly.
+Only unresolved work is listed below. Each item is phrased as an open problem with the most relevant analysis kept in place.
 
 ## Architecture assumptions and implementation goal
 
@@ -61,36 +37,12 @@ Every checklist item below should be implemented against the same architectural 
 
 The implementation goal for this roadmap is a **clean, scalable, high-quality harness architecture**: fewer duplicated rules, fewer hidden couplings, smaller orchestration files, explicit runtime contracts, and only purposeful modules added where they improve clarity and long-term maintenance.
 
-**Batch 1 — Core runtime cleanup**
+**Batch 1 — Runner and Provider Hardening**
 
-- [x] **1 — structured error labeling fix.** Make `structuredMessage` adapter-aware instead of hardcoding opencode wording for shared failure paths; move opencode-specific remediation behind an adapter hook; and update the tests that currently lock in the mislabel, including the assertions that pin literal `"opencode rejected model"` / `"opencode provider/credential error"` strings.
-- [x] **9 — `loop.ts` + spawner refactor.** Extract stable runtime seams from `loop.ts` rather than scattering convenience helpers. Introduce focused responsibilities such as step execution, artifact persistence, render dispatch, and shared process execution only where they form clear reusable contracts. Use that refactor to close the adapter-parity gap and absorb surrounding duplication: the `loop.ts` god-function shape, duplicated `StepKind`, duplicated stderr-tail trimming, repeated `parseVerdict` classification logic, and the duplicated status-panel render path that item 6 will later branch.
-- [x] **2 — Pattern rendering/parsing centralization.** Move the repeated `{n}` / `{agent}` path expansion and inverse regex logic into one small, pure, responsibility-named module so `loop.ts`, `prompt-composer.ts`, and `state.ts` use the same source of truth.
-- [x] **4 — Next-step decision centralization.** Unify the repeated “what happens next?” logic currently split across `scan`, `loop`, and `status` behind one pure decision module so restart behavior and status messaging cannot drift. Resolve the dead `ScanResult.proposedNext` field at the same time by either deleting it or promoting it to the single source of truth.
-- [x] **16 — legacy provenance cleanup.** Remove speculative back-compat parsing that the tool does not actually use today, specifically `parseProvenance` / `parseLegacyProvenance` support for legacy comment and `Auditor:` formats, unless a real migration source is identified.
-- [x] **17 — execution-completeness contract for streaming adapters.** Promote meaningful adapter completion signals into the runtime contract where they prevent misclassification of truncated generations. In this repo, `stopReason` is currently verified only for `opencode`; codex and claude remain exit-code / structured-error based until similar support is explicitly proven and implemented.
-- [x] **18 — state-scan dead-code cleanup.** Remove dead parameters and redundant filesystem work in state scanning, including the unused `baseDir` parameter in `getAllFiles()` and the double-read behavior where `scan()` re-reads each artifact during enrichment.
-
-**Batch 2 — CLI/runtime ergonomics**
-
-- [x] **10 — Logging layer.** Introduce a deliberately small output abstraction for the CLI surface so loop/command output is not hardwired to `console.log` + `chalk` + `ora`. Keep it thin: structured events in, renderer implementation out; no heavyweight logging framework, no global singleton, and no generic utility bucket.
-- [x] **6 — Debug / non-graphical mode.** Add a plain, scrollback-preserving execution mode for `smash` on top of the refactored loop surface and thin output abstraction. Prefer a user-facing flag shape that reflects behavior (`--plain`, optionally with `--debug` as an alias), and keep interactive prompting semantics unchanged.
-- [x] **11 — Command flow cleanup.** Refactor `smash.ts` / `status.ts` to return results and exit once at the CLI boundary instead of calling `process.exit()` throughout the command logic. Fold in the duplicated interactive vs non-interactive start-point / runner-resolution logic and replace the loose `any` config typing in the command layer while touching those flows.
-- [x] **19 — CI / typecheck workflow.** Add explicit repository automation that runs `typecheck` and deterministic tests on push / PR, and define how env-gated real-provider checks participate in sign-off. The quality bar should be machine-enforced, not just described in docs.
-- [x] **20 — fake-adapter registry boundary.** Make the boundary between production adapters and test-only infrastructure explicit. Keeping `fake` in the main registry is acceptable only if the contract is intentional, documented, and low-risk; otherwise isolate test adapters behind a separate registration path.
-
-**Batch 3 — Test infrastructure & follow-up outcome contract**
-
-- [x] **12 — Test helpers extraction.** Add shared test helpers (`createTempDir`, `withTempDir`, `runFakePlanLoop`, `makeMeta`, `makeErrorResult`) plus a `resetFakeAdapterState()` helper and test setup wiring. Keep these helpers narrowly scoped around test mechanics; do not hide core assertions or business behavior inside opaque mega-helpers. This batch should absorb the repeated temp-dir setup, repeated fake-runner setup, repeated `ArtifactMeta` builders, repeated adapter contract assertions, repeated `RunResult` test fixtures, and the missing `vitest.config` / shared setup-file support.
-- [x] **21 — follow-up outcome contract centralization.** Centralize the `## Follow-up Outcome` / `patched|blocked` wire format, which is currently defined in multiple skill files plus fake-adapter output and parser logic, so wording changes hit one source of truth instead of four.
-
-**Batch 4 — Runner/model UX and loop exposure**
-
-- [ ] **7 — Model registry config (single source of truth).** Introduce one canonical registry of providers, allowed models, and defaults, then have workflow config reference that registry instead of hardcoding raw model strings in multiple places. Preserve useful per-skill runner choice by referencing named/default models from the registry rather than removing all per-skill configurability.
-- [ ] **15 — Loop exposure for existing skills.** Keep existing skills in `skills/` even if they are not yet wired into the main flow, and make loop-capable stages available through the product surface rather than treating them as candidates for removal. In particular, `30-simple-implement` should remain available to pick from the loop list after an approved plan and also be selectable when starting the script, reflecting the intended two-loop model (`plan` and `implement`).
 - [ ] **22 — Inspect opencode model naming boundary.** Decide whether identifiers such as `opencode-go/deepseek-v4-flash` should remain a single model string or be split into provider/endpoint plus model name, for example `opencode-go` as endpoint/provider metadata and `deepseek-v4-flash` as the actual model identifier. The current repo behavior requires the `opencode-go/` prefix, but the architecture should make clear whether that prefix is truly part of the model namespace or a transport/endpoint concern that should live elsewhere in config and validation. The outcome should define the correct ownership boundary for config, validation, interactive selection, and docs.
+- [ ] **25 — Provider execution contract hardening.** Close the remaining real-provider contract gaps discovered during implementation-stage runs. In particular, codify the correct non-interactive autonomy mode for `codex`, make implementation-stage artifact expectations explicit and verifiable, and decide whether `opencode`'s default timeout policy should stay fixed, become configurable-first, or become stage/provider-specific. The goal is to stop clean-exit/missing-artifact and timeout-path surprises from slipping through the harness as generic `unknown` failures.
 
-Interactive workflow direction within Batch 4:
+Current interaction behavior that still needs to be preserved while finishing this area:
 
 - When a loop is in an approved state, start-point selection should expose both:
   - `new-round`
@@ -99,214 +51,30 @@ Interactive workflow direction within Batch 4:
   - `stop`
   - `run-second-opinion`
   - `implement`
-- Choosing `implement` should take the operator through agent/model selection and then run
-  `30-simple-implement`.
+- Choosing `implement` should take the operator through agent/model selection and then run `30-simple-implement`.
 
-**Batch 5 — Rendering and output polish**
+**Batch 2 — Rendering and Output Polish**
 
 - [ ] **5 — Live status panel.** Replace the current static redraw model incrementally: first establish a stable render region, then layer in adapter lifecycle events, then add richer per-provider progress where the signal is trustworthy. Avoid a one-shot TUI rewrite.
 - [ ] **23 — TUI border simplification.** Review the current status panel rendering and remove unnecessary table borders / grid lines so the TUI uses less horizontal space and reads more cleanly. The timeline table should prefer a borderless or minimally-lined layout, and the outer panel border should also be reviewed for whether it needs a single consistent treatment instead of layered decorative framing. If the border remains, use stage / skill-specific color signaling so the operator can distinguish states such as `plan-audit` vs `plan-follow-up` directly from the panel chrome rather than relying only on text labels. Prefer a consistent mapping that is stable and easy to learn across loops.
 - [ ] **24 — Plain mode multiline readability.** Rework `--plain` output so panel/state information is emitted as readable multiline blocks instead of collapsing too much content into single-line log records. Optimize for mobile terminal apps and narrow screens: emit loop / iteration / active runner / next-step fields on separate lines, render the timeline as stacked entries with timestamps, allow long fields such as model names to wrap onto follow-on lines, and prefer visually separated timeline records (for example `---` between entries) over dense comma-heavy one-line summaries. Treat the multiline separated form as the preferred direction over a compact single-line dump.
 
-**Batch 6 — Remaining interaction flow and docs**
+**Batch 3 — Interaction Flow and Docs**
 
 - [ ] **8 — Prompt to extend iterations at max (consideration).** When the loop hits `max-iterations`, offer interactive users a controlled continuation choice without changing non-interactive behavior. Prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) with optional custom input only if it proves necessary.
 - [ ] **14 — Docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runner/model, loop, and rendering changes have landed so the docs only need one final alignment pass.
 
 ---
 
-## 9 — `loop.ts` + spawner refactor
+## Batch 1 notes
 
-Goal: collapse the largest duplications in the runtime so the file is safe to change, every adapter has the
-same error model, and items 5 / 6 / 8 land on a clean substrate.
-
-**Why now:** `loop.ts` is the single file that 5 (live panel), 6 (debug render), and 8 (extend-iterations) all
-touch, and it currently mixes rendering, step execution, artifact I/O, provenance, prompt composition, and
-interactive prompts in one 334-line function built from two near-duplicate step blocks. Refactoring it first
-prevents three future features from each re-implementing the same loop.
-
-**Scope:**
-
-- Extract `runStep(kind, …)` and `writeStepArtifact(…)` from the follow-up (`loop.ts:63-156`) and audit
-  (`:158-224`) blocks; the `ArtifactMeta` object is rebuilt almost identically at `:139-145` and `:262-268`.
-- Extract `renderStep(ctx)` from the 4 inline `renderStatusPanel` call sites (`:77,171,240,280`) — this is also
-  the hook point for item 6's debug render.
-- Unify `spawnAgentProcess` + `spawnOpencode` (`src/adapters/utils.ts`) into one spawner with
-  `{ parseStream?, scanStderr?, timeoutMs? }`, and fix the `structuredMessage` adapter-mislabel bug
-  (`src/adapters/errors.ts`) along the way.
-- Define a shared execution-completeness seam so the loop can distinguish provider/process failure,
-  generation truncation/interruption, and successful completion before artifact parsing begins.
-
-**Effort:** M–L. Highest leverage of any item here; do it before 5/6/8, not alongside them.
-
----
-
-## 6 — Debug / non-graphical mode
-
-Goal: run the audit loop as a plain, scrollback-preserving text log — no status panel, no spinner, no
-screen clears — for debugging and headless/CI runs.
-
-> Current observation: every loop step renders the boxen **status panel** and runs an `ora` spinner,
-> each preceded by `console.clear()`, so the run is a "graphical" TUI that wipes scrollback.
-
-**Findings so far:** there is **no** existing debug/verbose/plain mode — grep for
-`debug|verbose|silent|--no-|--plain` in `src/` returns nothing. The "graphical interface" is three
-concrete pieces:
-
-- `renderStatusPanel` (`src/status.ts:16`) — a boxen box + cli-table3 timeline, drawn in `src/loop.ts`
-  before each follow-up (`:77`), audit (`:171`), on unknown verdict (`:240`), and after each iteration (`:280`).
-- `ora` spinner (`src/loop.ts:112`, `:205`) running for the whole spawn, with `succeed`/`fail` callbacks.
-- `console.clear()` before each of those renders (`src/loop.ts:77`, `:171`, `:240`, `:280`).
-
-The only related flag is `isInteractive` (`src/commands/smash.ts:45`, set by `--loop`), which controls the
-inquirer prompts, **not** the panel/spinner — so a non-interactive run is still fully graphical.
-
-**Fix:**
-
-- Introduce a plain-output execution mode for `smash`; prefer `--plain` as the behavior flag and support
-  `--debug` only if you want an alias for discoverability. Thread the mode through `SmashOptions`
-  (`src/commands/smash.ts`) → `LoopOptions` (`src/loop.ts`).
-- Put mode-dependent rendering behind a small output/render interface: plain renderer for scrollback-safe logs,
-  TUI renderer for panel mode. Keep the interface event-oriented so item 5 can reuse it.
-- In plain mode, skip `console.clear()`, skip the panel, and replace long-lived spinners with deterministic
-  step markers and terminal summaries. Preserve interactive prompts and exit semantics exactly as they work now.
-
-**Effort:** S–M. Establishes the plain-render branch item 5's live panel should coexist with.
-
----
-
-## 7 — Model registry config (single source of truth)
-
-Goal: model names come from **one** dedicated config file that maps `provider → model(s)` plus the default
-agent/model, as the single source of truth — selectable in the interactive picker and validated against a
-known-good list. Model strings must not be spread across multiple files.
-
-**Consolidation principle — one canonical registry, referenced elsewhere.** Today a model string can live in
-_two_ places: `.env` (per-agent defaults) and `skills.yaml` (per-skill `model:`). The high-quality target is
-not “remove all references outside one file,” but “one authoritative registry with references everywhere else.”
-Instead:
-
-- The new config file owns provider→model allow-lists and default selections.
-- `skills.yaml` stays the _workflow manifest_ (roles / skills / loops / patterns) and stops hardcoding raw
-  model strings; when a skill needs a non-default runner, it should reference a named/default model from the
-  registry rather than inventing a new string.
-- `.env` should stop carrying model defaults once the registry exists; environment variables can remain for
-  true secrets or provider-specific runtime needs, not general model selection.
-
-Result: model definitions live in one authoritative place, while workflow files can still choose among
-registered options without duplicating raw strings.
-
-> Current observation: only three agents (opencode/codex/claude) are offered in the interactive picker,
-> and the model field is free text — there is no list of "known models" to choose from.
-
-**Findings so far — this partially exists already:**
-
-- **Model strings are already free-form.** Any model name can be set via `.env`
-  (`OPENCODE_DEFAULT_MODEL` / `CODEX_DEFAULT_MODEL` / `CLAUDE_DEFAULT_MODEL`, loaded in `src/config.ts:40-45`)
-  or per-skill in `skills.yaml` (`model:` field, `src/manifest.ts:23`). Neither is checked against a list —
-  only the loose per-agent regex/prefix in `isValidModelForAgent` (`src/runner.ts:3-17`).
-- **The `.env` API keys are dead weight.** `config.apiKeys` is built (`src/config.ts:47-56`) and returned
-  (`:62`) but consumed **nowhere** — every adapter spawns an installed CLI binary (`spawnAgentProcess` /
-  `spawnOpencode` in `src/adapters/utils.ts`); there is no `fetch`/HTTP/SDK and no reader of
-  `process.env.*_API_KEY`. `scanStderrForError` only _reads_ stderr for auth failures, it doesn't _use_ a key.
-  So `.env`'s only live role is the default agent/model — which moves into the new config, making `.env`
-  droppable now. (If HTTP adapters are added later, keys can be plain env vars read by those adapters
-  directly — no need to restore `.env`.)
-- **There is no model _registry_.** Grep for rcfile / config.json / toml / cosmiconfig in `src/` returns
-  nothing.
-- **The agent list is hardcoded** in three places: validation (`src/runner.ts:20` `allowedAgents`) and the
-  two interactive pickers (`src/interactive.ts:67` and `:116`) — both show only opencode/codex/claude (no
-  `fake`). So the "three" are really the three offered agents; a model is an open string per agent.
-- **Recent real-run findings expose provider contract gaps, not just registry gaps.**
-  - `opencode` runs are forcibly terminated after 180000 ms unless `OPENCODE_RUN_TIMEOUT_MS` overrides it
-    (`src/adapters/utils.ts:122-154`). The implementation-stage timeout report came from this watchdog, not
-    from loop-specific implementation logic.
-  - `codex` implementation runs can exit `0` without producing the required ledger file
-    (`docs/dev/impl-v{n}-codex.md`), which then fails the loop's post-run artifact check in
-    `src/loop.ts:201-223`. This is a real provider-path correctness issue, not a user-project issue.
-  - Local `codex exec --help` verification on 2026-06-30 shows the non-interactive autonomy flag is
-    `--dangerously-bypass-approvals-and-sandbox`. The current adapter only passes
-    `codex exec -m <model> --skip-git-repo-check <prompt>` (`src/adapters/codex.ts:7-16`) and does not pass
-    the required autonomy flag described in `AGENTS.md`. That mismatch is the strongest harness-level cause
-    for the observed "execution completed but missing output ledger" failure.
-  - The existing real-provider codex contract test proves only a trivial audit-file write
-    (`tests/adapters-contract.test.ts:70-89`). It does not cover the implementation-stage prompt shape or the
-    required `docs/dev/impl-v{n}-codex.md` ledger contract, so this failure mode can slip past sign-off.
-
-**Industry-standard format (decision point):** a single discoverable config file **is** the convention for
-CLI tools (git's `.gitconfig`, npm's `.npmrc`, aider's `.aider.conf.{yml,toml,json}`); no exotic alternative
-is needed. Recommend **one YAML file** (e.g. `orc.config.yaml` / `~/.config/orc/config.yaml`) — `yaml` is
-already a dependency (`src/manifest.ts`), so this adds no parser, and YAML supports comments. If discovery
-flexibility matters, adopt the **cosmiconfig** search convention (`.orcrc`, `orc.config.{js,json,yaml}`, an
-`orc` key in `package.json`). Shape:
-
-```yaml
-providers:
-  opencode: [opencode-go/deepseek-v4-flash, opencode/deepseek-v4-flash-free]
-  claude: [claude-sonnet-4-6]
-defaults:
-  agent: opencode
-  model: opencode-go/deepseek-v4-flash
-```
-
-**Fix:**
-
-- Add a canonical config file for provider → model allow-lists plus default selections; load it in
-  `src/config.ts`, replacing `.env` for model-default resolution. Define a clear search order
-  (project-local first, then user-global).
-- Replace raw per-skill `model:` strings in `skills.yaml` with references into the registry when a skill needs
-  a non-default runner. Keep the workflow manifest expressive without letting it become a second uncontrolled
-  source of raw model names.
-- Feed registered providers/models into `promptRunners` / `promptSecondOpinionRunner` (`src/interactive.ts`)
-  so selection is registry-backed. Model selection should be list-based for the chosen provider, with a final
-  `custom` option that allows manual entry of a model string. If a custom model escape hatch exists, it should
-  be explicit and validated, not the default path.
-- Make validation consult the registry first and use prefix/regex checks only as a fallback migration aid, not
-  the long-term source of truth.
-- Remove dead `.env` model-default plumbing and dead `apiKeys` plumbing from `config.ts`; keep env vars only
-  for actual secret/runtime concerns. Document the new registry and migration path in the README.
-- Out of scope but still true: adding new _agents/providers_ still requires a real adapter under
-  `src/adapters/`; the registry governs model choices for existing providers, not provider creation itself.
-
-**Effort:** M. Decide the config-file format, search path, and skills.yaml model-removal migration first.
-
----
-
-## 17 — execution-completeness contract for streaming adapters
-
-Goal: ensure the harness can distinguish “the process exited” from “the model completed cleanly enough to trust
-artifact inspection.”
-
-> Current observation: `opencode` can expose a completion reason like `stop`, `tool-calls`, or `length`, but
-> the harness mainly treats exit-code success as execution success. Equivalent support is not yet verified for
-> codex or claude in this repo.
-
-**Why this matters:** if a model stops because of truncation or interruption, the process can still exit `0`.
-Without a completion contract, the loop falls through into artifact parsing and misclassifies a generation or
-infrastructure problem as “the model failed to write a valid verdict.”
-
-**Fix:**
-
-- Treat `stopReason` as an owned runtime signal for adapters that can provide it. In Batch 1, that means
-  `opencode` specifically.
-- Add a small shared execution-completeness check in the runtime path before artifact inspection:
-  - success with trustworthy completion
-  - unknown / terminal due to truncation or interruption
-  - process / transport failure
-- Keep provider-specific mapping in the adapter layer. The loop should not hardcode raw vendor semantics beyond
-  consuming a normalized completion signal.
-- Trim or de-emphasize other parsed opencode payload fields (`finishReasons`, `tokenUsage`, `unparsed`) unless
-  they are intentionally promoted into the runtime contract.
-- Preserve compatibility for adapters that do not expose a verified completion signal yet: they continue to rely
-  on exit code + structured error handling until similar support is intentionally added.
-
-**Effort:** S–M. This belongs in Batch 1 because it changes correctness and diagnostics in the core run loop.
+This batch is about runtime correctness and provider semantics. It should land before UI polish because it affects what the harness considers a trustworthy implementation run and how model/provider identifiers are owned.
 
 ---
 
 ## 8 — Prompt to extend iterations at max (consideration)
 
-Goal: when the loop reaches `max-iterations`, instead of a hard stop, offer the (interactive) user a choice —
+Goal: when the loop reaches `max-iterations`, instead of a hard stop, offer the interactive user a choice —
 extend by N more iterations, or stop — so a run that's converging isn't cut off just because the up-front
 guess was too low.
 
@@ -315,55 +83,104 @@ guess was too low.
 
 **Findings so far:**
 
-- **It is a hard stop today.** `src/loop.ts:327-333` — the `while (iteration < options.maxIterations)` loop
-  (`src/loop.ts:62`) falls out and returns `{ success: false, verdict: 'REJECTED', message:
-'hit max-iterations, awaiting human', lastAuditPath }`, in **both** interactive and non-interactive modes.
-- **A similar prompt already exists** at the other decision point: on `APPROVED`, interactive mode already
-  calls `promptSecondOpinionDecision` (`src/interactive.ts:88`, invoked at `src/loop.ts:294`) to ask stop vs.
-  second-opinion. And `promptMaxIterations` (`src/interactive.ts:20`) already asks for the count up-front. So
-  this mirrors both: a stop/extend decision plus an amount.
-- **Extending is mechanically cheap.** `maxIterations` is `options.maxIterations` (`LoopOptions`,
-  `src/loop.ts:16`), mutable in place, so extending is `options.maxIterations += N` then resume. At the
-  exit point the latest audit is `REJECTED` and `pendingFollowUp` is already `true` (set on REJECTED at
-  `src/loop.ts:322-324`), so resuming naturally runs follow-up → audit with no state fixup.
-- **Must be interactive-only.** Gate on `options.interactive` (set by `isInteractive = !options.loop`,
-  `src/commands/smash.ts:45`) so CI and `--loop` runs still exit with the existing `REJECTED` verdict / exit
-  code.
+- **It is a hard stop today.** `src/loop.ts` falls out of the `while (iteration < options.maxIterations)` loop and returns `hit max-iterations, awaiting human` in both interactive and non-interactive modes.
+- **A similar prompt already exists** at the other decision point: on `APPROVED`, interactive mode already asks stop vs second-opinion. `promptMaxIterations` also already asks for the count up-front, so this change mirrors existing interaction patterns.
+- **Extending is mechanically cheap.** `maxIterations` lives on `LoopOptions`, so extending is a local control-flow change rather than a state-model rewrite.
+- **Must be interactive-only.** CI and `--loop` runs should keep the current exit behavior.
 
 **Fix (to consider):**
 
-- Add a dedicated continuation prompt to `src/interactive.ts`, but prefer bounded preset actions first
-  (`stop`, `+1`, `+3`, `+5`) over free-form numeric input. A custom amount can remain an escape hatch if the
-  extra complexity proves worthwhile.
-- Restructure the loop-exit branch so interactive continuation happens before the function returns, rather than
-  by relying on awkward post-loop state mutation.
-- Guard against accidental infinite prompting with bounded continuation rules or a clear “ask once per limit
-  hit” policy.
+- Add a dedicated continuation prompt to `src/interactive.ts`, but prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) over free-form numeric input.
+- Restructure the loop-exit branch so interactive continuation happens before the function returns, rather than by relying on awkward post-loop state mutation.
+- Guard against accidental infinite prompting with bounded continuation rules or a clear “ask once per limit hit” policy.
 - Keep non-interactive behavior and exit codes byte-for-byte identical.
 
-**Effort:** S. Shares the `loop.ts` termination branch with item 5 — minor merge surface, not a dependency.
+**Effort:** S. This is a localized control-flow change in the loop termination path.
+
+---
+
+## 25 — Provider execution contract hardening
+
+Goal: make real-provider implementation runs trustworthy by tightening the harness/runtime contract where recent failures exposed gaps.
+
+> Current observation: `codex` can report a clean implementation run yet fail to produce the required `docs/dev/impl-v{n}-codex.md` ledger, while `opencode` can be terminated by the harness timeout before output is generated.
+
+**Findings so far:**
+
+- **`codex` non-interactive autonomy is under-specified in the adapter.** Local `codex exec --help` verification showed the relevant autonomy flag is `--dangerously-bypass-approvals-and-sandbox`, but the current adapter invocation does not pass it.
+- **Implementation-stage success is too weakly defined for providers that exit `0`.** Today a provider can look successful at process level and still fail the run only at the post-hoc ledger existence check.
+- **The implementation-stage ledger contract is not strongly enough enforced at prompt/contract-test level.** The real-provider codex contract test proves a trivial audit file write, not the implementation ledger flow.
+- **`opencode` timeout handling is harness-owned and currently policy-light.** The default watchdog exists at the adapter layer, but the roadmap still needs an explicit decision about whether timeout policy should be global, provider-specific, stage-specific, or primarily operator-configured.
+
+**Fix:**
+
+- Update the `codex` adapter invocation so headless file-writing runs use the correct autonomy mode for this harness.
+- Strengthen implementation-stage contract tests so real-provider verification includes the required `docs/dev/impl-v{n}-{agent}.md` artifact path and not just trivial audit-file writes.
+- Tighten implementation prompting and/or runtime checks so “process exited successfully” does not masquerade as “implementation execution completed” when the required artifact contract was not actually met.
+- Define and document the intended timeout policy ownership for `opencode`: fixed default, config-driven default, per-stage override, or some combination.
+
+**Effort:** M. This is core runtime hardening work for real-provider implementation reliability.
 
 ---
 
 ## 5 — Live status panel
 
-"Re-render on an interval" is the cheap framing. Accurate live status needs an event-driven adapter
-lifecycle and a stable render path.
+"Re-render on an interval" is the cheap framing. Accurate live status needs an event-driven adapter lifecycle and a stable render path.
 
 > Current observation: when audit v2 is running, the panel only shows step 1 — as if not updating, not refreshing, or later updates aren't visible.
 
-**Root cause:** the panel is rendered _once_ before each spawn (`console.clear` + `console.log` in `src/loop.ts`), then a static spinner runs for the whole spawn. v2 is appended to history only after it completes, so during the run the table shows only v1. `console.clear` reprints also flicker and discard scrollback.
+**Root cause:** the panel is rendered once before each spawn, then a static spinner runs for the whole spawn. v2 is appended to history only after it completes, so during the run the table shows only v1. `console.clear` reprints also flicker and discard scrollback.
 
 **Fix:**
 
-- Ship this incrementally. First establish a stable render region and clean renderer boundary on top of the
-  output abstraction from item 10; only then add richer lifecycle/progress updates.
-- Expose a small, provider-agnostic lifecycle model (`started`, `message`, `completed`, `failed`) and map
-  provider-specific output into it only where the signal is trustworthy. Avoid inventing fake precision just to
-  make the panel feel busy.
-- Add richer per-adapter progress parsing gradually, starting with providers that already expose structured
-  events well. Reuse existing stream parsing where appropriate rather than forcing every adapter into the same
-  richness level on day one.
+- Ship this incrementally. First establish a stable render region and clean renderer boundary on top of the output abstraction; only then add richer lifecycle/progress updates.
+- Expose a small, provider-agnostic lifecycle model (`started`, `message`, `completed`, `failed`) and map provider-specific output into it only where the signal is trustworthy. Avoid inventing fake precision just to make the panel feel busy.
+- Add richer per-adapter progress parsing gradually, starting with providers that already expose structured events well. Reuse existing stream parsing where appropriate rather than forcing every adapter into the same richness level on day one.
 - Disambiguate iteration, version, and step index in the UI model before adding more live behavior.
 
-**Effort:** L (depends on 3's stream parsing and 4's step model).
+**Effort:** L.
+
+---
+
+## Batch 2 notes
+
+This batch is about operator-facing output. The items belong together because they all depend on the same rendering surface: live status updates, cleaner TUI chrome, and readable plain-mode output.
+
+---
+
+## 23 — TUI border simplification
+
+Goal: reduce unnecessary visual density in the panel so the terminal UI uses less width and is easier to scan.
+
+> Current observation: the current panel uses layered borders and a table-heavy presentation that consumes space without adding much information value.
+
+**Focus:**
+
+- Remove unnecessary table borders and grid lines.
+- Re-evaluate whether the outer panel border needs a separate visual treatment from the timeline.
+- If borders remain, use stable color/state signaling that helps distinguish stages directly from the chrome.
+
+**Effort:** S.
+
+---
+
+## 24 — Plain mode multiline readability
+
+Goal: make `--plain` output readable in narrow terminals and mobile terminal apps instead of collapsing state into dense one-line records.
+
+> Current observation: the current plain renderer is scrollback-safe, but it compresses too much panel and timeline state into single lines.
+
+**Focus:**
+
+- Emit loop, iteration, active runner, and next-step fields on separate lines.
+- Render timeline entries as stacked records rather than comma-dense summaries.
+- Let long values such as model names wrap naturally.
+- Prefer clear visual separators between records.
+
+**Effort:** S–M.
+
+---
+
+## Batch 3 notes
+
+This batch is for lower-risk interaction and documentation cleanup after runtime/provider semantics and rendering behavior are settled.
