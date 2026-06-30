@@ -23,13 +23,18 @@ export const DEFAULT_REGISTRY: ModelRegistry = {
   providers: {
     opencode: [
       'opencode-go/deepseek-v4-flash',
-      'opencode/deepseek-v4-flash-free'
+      'opencode-go/deepseek-v4-pro',
+      'opencode-go/glm-5.2',
+      'opencode-go/minimax-m3',
+      'opencode-go/qwen3.7-max'
     ],
     claude: [
       'claude-sonnet-4-6'
     ],
     codex: [
-      'gpt-5-codex'
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini'
     ]
   },
   defaults: {

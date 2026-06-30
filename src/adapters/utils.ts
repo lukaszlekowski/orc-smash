@@ -121,7 +121,7 @@ export function scanStderrForError(stderr: string): RunError | null {
  *  parsing, stderr scanning, error classification, and completion labeling. */
 export function spawnOpencode(input: RunInput, args: string[], options?: { timeoutMs?: number }): Promise<RunResult> {
   const timeoutEnv = process.env['OPENCODE_RUN_TIMEOUT_MS'];
-  const timeoutMs = options?.timeoutMs ?? (timeoutEnv ? parseInt(timeoutEnv, 10) : 180000);
+  const timeoutMs = options?.timeoutMs ?? (timeoutEnv ? parseInt(timeoutEnv, 10) : 600000);
 
   return runProcess({
     command: 'opencode',
