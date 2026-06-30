@@ -34,6 +34,7 @@ describe('Adapter arguments builders', () => {
       '-m',
       'my-model-123',
       '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox',
       'My test prompt'
     ]);
   });

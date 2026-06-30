@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scan } from '../state.js';
 import { resolveNextStep } from '../next-step.js';
-import { assembleNextStepMessage, buildPanelContext } from '../status.js';
+import { assembleNextStepMessage, buildPanelContext, latestAuditVersion } from '../status.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 
@@ -69,11 +69,14 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
   const panelCtx = buildPanelContext(
     projectRoot,
     detectedLoop,
-    stateScan.latestVersion,
+    0,
     5,
     null,
     stateScan.timeline,
-    nextStepMessage
+    nextStepMessage,
+    null,
+    latestAuditVersion(stateScan.timeline),
+    true
   );
 
   options.output.renderPanel(panelCtx);

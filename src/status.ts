@@ -1,4 +1,4 @@
-import type { Step } from './state.js';
+import type { Step, StepKind, StepStatus } from './state.js';
 import type { NextStepDecision } from './next-step.js';
 
 export interface PanelContext {
@@ -9,6 +9,19 @@ export interface PanelContext {
   activeSkillRunner: { skillId: string; agent: string; model: string } | null;
   timeline: Step[];
   nextStepMessage: string;
+  inFlight: {
+    kind: StepKind;
+    skillId: string;
+    agent: string;
+    model: string;
+    version: number;
+    iteration: number;
+    startedAtMs: number;
+    status: StepStatus;
+    message: string;
+  } | null;
+  latestVersion: number;
+  readOnly: boolean;
 }
 
 export function buildPanelContext(
@@ -18,7 +31,10 @@ export function buildPanelContext(
   maxIterations: number,
   activeSkillRunner: { skillId: string; agent: string; model: string } | null,
   timeline: Step[],
-  nextStepMessage: string
+  nextStepMessage: string,
+  inFlight: PanelContext['inFlight'] = null,
+  latestVersion: number = 0,
+  readOnly: boolean = false
 ): PanelContext {
   return {
     projectRoot,
@@ -27,8 +43,19 @@ export function buildPanelContext(
     maxIterations,
     activeSkillRunner,
     timeline,
-    nextStepMessage
+    nextStepMessage,
+    inFlight,
+    latestVersion,
+    readOnly
   };
+}
+
+export function latestAuditVersion(steps: Step[]): number {
+  let max = 0;
+  for (const s of steps) {
+    if (s.kind === 'audit' && s.version > max) max = s.version;
+  }
+  return max;
 }
 
 export function assembleNextStepMessage(decision: NextStepDecision, latestVersion: number): string {

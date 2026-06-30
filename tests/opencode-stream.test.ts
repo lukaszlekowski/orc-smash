@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseOpencodeStream, classifyOpencodeError } from '../src/adapters/opencode-stream.js';
+import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress } from '../src/adapters/opencode-stream.js';
 import { scanStderrForError } from '../src/adapters/utils.js';
 
 describe('opencode stream parser and classifier', () => {
@@ -78,5 +78,45 @@ describe('opencode stream parser and classifier', () => {
 
     const emptyErr = scanStderrForError('');
     expect(emptyErr).toBeNull();
+  });
+});
+
+describe('diffOpencodeProgress (pure non-duplicating diff)', () => {
+  it('returns non-overlapping text suffix + tool-call delta when the buffer grows', () => {
+    const first = parseOpencodeStream('{"type":"text","part":{"type":"text","text":"ab"}}');
+    const second = parseOpencodeStream(
+      '{"type":"text","part":{"type":"text","text":"ab"}}' +
+      '\n{"type":"text","part":{"type":"text","text":"cd"}}' +
+      '\n{"type":"tool_use","part":{"tool":"write","callID":"a","state":{"status":"ok"}}}' +
+      '\n{"type":"tool_use","part":{"tool":"read","callID":"b","state":{"status":"ok"}}}'
+    );
+    const delta = diffOpencodeProgress(first.finalText.length, first.toolCalls.length, second);
+    expect(delta).not.toBeNull();
+    expect(delta!.textDelta).toBe('cd');
+    expect(delta!.toolCallDelta).toBe(2);
+  });
+
+  it('returns null when nothing has changed (no duplicate emissions)', () => {
+    const parsed = parseOpencodeStream('{"type":"text","part":{"type":"text","text":"ab"}}');
+    const delta = diffOpencodeProgress(parsed.finalText.length, parsed.toolCalls.length, parsed);
+    expect(delta).toBeNull();
+  });
+
+  it('returns non-null with toolCallDelta: 0 when only new text arrives', () => {
+    const first = parseOpencodeStream('');
+    const second = parseOpencodeStream('{"type":"text","part":{"type":"text","text":"hello"}}');
+    const delta = diffOpencodeProgress(first.finalText.length, first.toolCalls.length, second);
+    expect(delta).not.toBeNull();
+    expect(delta!.textDelta).toBe('hello');
+    expect(delta!.toolCallDelta).toBe(0);
+  });
+
+  it('returns non-null with textDelta: "" when only new tool calls arrive', () => {
+    const first = parseOpencodeStream('');
+    const second = parseOpencodeStream('{"type":"tool_use","part":{"tool":"write","callID":"a","state":{"status":"ok"}}}');
+    const delta = diffOpencodeProgress(first.finalText.length, first.toolCalls.length, second);
+    expect(delta).not.toBeNull();
+    expect(delta!.textDelta).toBe('');
+    expect(delta!.toolCallDelta).toBe(1);
   });
 });

@@ -14,6 +14,7 @@ import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import type { LoopSpec } from '../manifest.js';
+import { configureSpawnDebug } from '../debug-spawn.js';
 
 export interface SmashOptions {
   project?: string;
@@ -21,8 +22,18 @@ export interface SmashOptions {
   agent?: string;
   model?: string;
   maxIterations?: string;
+  debugSpawn?: boolean;
+  debugSpawnFile?: string;
   output: CliOutput;
   plain?: boolean;
+  /**
+   * Test seam (Step 5, v3-audit M1 fix): the factory used to build the
+   * agent registry. Defaults to `(cfg) => createProductionAdapterRegistry(cfg.registry)`.
+   * Production code never passes this — the test suite (Step 11) injects a
+   * spy to observe that the loaded `config.registry` actually reaches
+   * the production registry call site.
+   */
+  createAdapterRegistry?: (cfg: Config) => AgentRegistry;
 }
 
 interface SmashRunSetup {
@@ -58,7 +69,8 @@ async function resolveSmashRunSetup(
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  const registry = createProductionAdapterRegistry();
+  const buildRegistry = options.createAdapterRegistry ?? buildDefaultAdapterRegistry;
+  const registry = buildRegistry(config);
 
   // 1. Loop selection
   let loopName = options.loop;
@@ -247,6 +259,11 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     return { exitCode: 1, message: msg };
   }
 
+  configureSpawnDebug({
+    enabled: options.debugSpawn,
+    filePath: options.debugSpawnFile
+  });
+
   const projectRoot = resolve(options.project);
   const setupResult = await resolveSmashRunSetup(projectRoot, options);
   if ('errorResult' in setupResult) {
@@ -275,4 +292,20 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     options.output.error(msg);
     return { exitCode: 1, message: msg };
   }
+}
+
+/**
+ * Default factory for the agent registry (the v4-audit M3 helper).
+ * Production code calls `smashAction` without `createAdapterRegistry`,
+ * and `resolveSmashRunSetup` falls back to this function. The helper
+ * exists so a deterministic regression test can import it directly
+ * (static import, no `vi.spyOn` of a module export) and assert that
+ * the default wiring passes `config.registry` to the production
+ * registry. Without this helper, the only way to test the default
+ * factory is a post-import spy on `createProductionAdapterRegistry`,
+ * which is module-binding-sensitive and a weaker assertion than the
+ * seam-based test.
+ */
+export function buildDefaultAdapterRegistry(config: Config): AgentRegistry {
+  return createProductionAdapterRegistry(config.registry);
 }

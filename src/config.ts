@@ -9,6 +9,8 @@ import { loadManifest, type Manifest } from './manifest.js';
 export interface ModelRegistry {
   providers: Record<string, string[]>;
   defaults: { agent: string; model: string };
+  /** Optional opencode execution timeout in ms (0 disables). Only opencode supports timeouts today. */
+  timeouts?: { opencode?: number };
 }
 
 export const ModelRegistrySchema = z.object({
@@ -16,8 +18,16 @@ export const ModelRegistrySchema = z.object({
   defaults: z.object({
     agent: z.string(),
     model: z.string()
-  })
+  }),
+  timeouts: z.object({
+    opencode: z.number().int().nonnegative().optional()
+  }).strict().optional()
 });
+
+/** Resolve a per-agent timeout from the registry, or undefined if unset. Only opencode supports timeouts today. */
+export function registryTimeoutFor(registry: ModelRegistry, agent: string): number | undefined {
+  return agent === 'opencode' ? registry.timeouts?.opencode : undefined;
+}
 
 export const DEFAULT_REGISTRY: ModelRegistry = {
   providers: {

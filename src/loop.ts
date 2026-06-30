@@ -9,13 +9,17 @@ import { renderPattern } from './patterns.js';
 import { composePrompt } from './prompt-composer.js';
 import { writeArtifactWithMeta, type ArtifactMeta, type StepKind } from './provenance.js';
 import { parseVerdict } from './verdict.js';
-import { buildPanelContext } from './status.js';
+import { buildPanelContext, latestAuditVersion, type PanelContext } from './status.js';
+import type { LifecycleEvent } from './adapter-lifecycle.js';
 import { promptSecondOpinionDecision, promptSecondOpinionRunner, promptContinueToReview, promptRunners } from './interactive.js';
 import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
 import { resolveRunner } from './runner.js';
+import { isCompleteImplementLedger } from './implement-ledger.js';
+import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
+import { debugLoopSpawn } from './debug-spawn.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -45,7 +49,8 @@ export async function runLoop(
   const renderPanel = (
     active: { skillId: string; agent: string; model: string } | null,
     currentIteration: number,
-    message: string
+    message: string,
+    inFlight: PanelContext['inFlight'] = null
   ) => {
     options.output.renderPanel(
       buildPanelContext(
@@ -55,7 +60,10 @@ export async function runLoop(
         options.maxIterations,
         active,
         steps,
-        message
+        message,
+        inFlight,
+        latestAuditVersion(steps),
+        false
       )
     );
   };
@@ -79,18 +87,118 @@ export async function runLoop(
     version: number,
     currentIteration: number
   ) => {
-    options.output.stepStarted({
+    const startedAtMs = Date.now();
+
+    let lastMessage = '';
+    let toolCallCount = 0;
+
+    const composeInFlightMessage = (): string => {
+      const parts: string[] = [];
+      if (toolCallCount > 0) parts.push(`${toolCallCount} tool calls`);
+      if (lastMessage) parts.push(lastMessage);
+      return parts.length > 0
+        ? `${spawnLabel} · ${parts.join(' · ')}`
+        : spawnLabel;
+    };
+
+    const onLifecycle = (e: LifecycleEvent) => {
+      if (e.type === 'message') {
+        if (e.text) lastMessage = e.text;
+        toolCallCount += e.toolCalls ?? 0;
+        if (liveInFlight) {
+          liveInFlight.message = composeInFlightMessage();
+        }
+      }
+      if (e.type === 'failed') {
+        if (liveInFlight) {
+          liveInFlight.status = 'failed';
+        }
+      }
+      if (e.type === 'completed') {
+        liveInFlight = null;
+      }
+    };
+
+    let liveInFlight: NonNullable<PanelContext['inFlight']> | null = {
       kind,
       skillId,
       agent: runner.agent,
       model: runner.model,
-      iteration: currentIteration,
       version,
+      iteration: currentIteration,
+      startedAtMs,
+      status: 'running',
       message: spawnLabel
-    });
-    const adapter = getAdapter(options.registry, runner.agent);
-    const result = await adapter.run({ prompt, model: runner.model, cwd: projectRoot });
-    return result;
+    };
+
+    if (options.output.attachLiveRegion) {
+      options.output.attachLiveRegion(() => {
+        const inFlight: PanelContext['inFlight'] = liveInFlight
+          ? {
+              kind: liveInFlight.kind,
+              skillId: liveInFlight.skillId,
+              agent: liveInFlight.agent,
+              model: liveInFlight.model,
+              version: liveInFlight.version,
+              iteration: liveInFlight.iteration,
+              startedAtMs: liveInFlight.startedAtMs,
+              status: liveInFlight.status,
+              message: liveInFlight.message
+            }
+          : null;
+        return buildPanelContext(
+          projectRoot,
+          loopName,
+          currentIteration,
+          options.maxIterations,
+          { skillId, agent: runner.agent, model: runner.model },
+          steps,
+          `Running ${kind} v${version}...`,
+          inFlight,
+          latestAuditVersion(steps),
+          false
+        );
+      });
+    }
+
+    try {
+      options.output.stepStarted({
+        kind,
+        skillId,
+        agent: runner.agent,
+        model: runner.model,
+        iteration: currentIteration,
+        version,
+        message: spawnLabel
+      });
+
+      const adapter = getAdapter(options.registry, runner.agent);
+      debugLoopSpawn({
+        loopName,
+        skillId,
+        kind,
+        agent: runner.agent,
+        model: runner.model,
+        version,
+        cwd: projectRoot,
+        prompt
+      });
+
+      const result = await adapter.run({
+        prompt,
+        model: runner.model,
+        cwd: projectRoot,
+        skillId,
+        version,
+        onLifecycle
+      });
+
+      return result;
+    } finally {
+      if (options.output.detachLiveRegion) {
+        options.output.detachLiveRegion();
+      }
+    }
   };
 
   const stepFailed = (result: RunResult, acceptNonzeroExitWithVerdict: boolean): boolean =>
@@ -131,6 +239,15 @@ export async function runLoop(
       }
     );
 
+    // Seed steps from existing plan audit history so the panel's
+    // `Latest version:` label reflects the approved audit on disk,
+    // not a fabricated `v0` (review v7 Major finding #2).
+    const planHistory = scan(projectRoot, {
+      auditPattern: planSpec.auditPattern ?? '',
+      followUpPattern: planSpec.followUpPattern ?? ''
+    });
+    steps.push(...planHistory.timeline);
+
     // Resolve runner
     let runner = runners[implementSkillId];
     if (!runner && options.interactive) {
@@ -143,7 +260,7 @@ export async function runLoop(
 
     renderPanel(
       { skillId: implementSkillId, agent: runner.agent, model: runner.model },
-      0,
+      1,
       `Running implementation v${nextVersion}...`
     );
 
@@ -166,7 +283,7 @@ export async function runLoop(
       'implement',
       implementSkillId,
       nextVersion,
-      0
+      1
     );
 
     if (stepFailed(result, false)) {
@@ -191,13 +308,9 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', completionMessage(result), null);
     }
 
-    options.output.stepSucceeded({
-      kind: 'implement',
-      skillId: implementSkillId,
-      version: nextVersion,
-      message: `Implementation execution completed`
-    });
-
+    // --- Verify the implementation ledger BEFORE declaring success ---
+    // A clean process exit is not "implementation completed"; the required
+    // ledger artifact must exist, be non-empty, and match the ledger contract.
     const relOutputPath = renderPattern(loopSpec.implementPattern!, { n: nextVersion, agent: runner.agent });
     const absOutputPath = resolve(projectRoot, relOutputPath);
 
@@ -206,23 +319,117 @@ export async function runLoop(
         kind: 'implement',
         skillId: implementSkillId,
         version: nextVersion,
-        message: `Implementation failed: missing expected output ledger at ${relOutputPath}`,
+        message: `Implementation failed: ${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`,
         errorKind: 'missing_output'
       });
-      return emitFinalSummary(false, 'unknown', `Missing expected output ledger file at ${relOutputPath}`, null);
+      return emitFinalSummary(false, 'unknown', `${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`, null);
     }
     const ledgerContent = readFileSync(absOutputPath, 'utf-8');
-    if (!ledgerContent.trim()) {
+    if (!isCompleteImplementLedger(ledgerContent)) {
+      const reason = !ledgerContent.trim()
+        ? 'empty'
+        : 'missing the required evidence table, requirement coverage table, and/or confidence declaration (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")';
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,
         version: nextVersion,
-        message: `Implementation failed: empty expected output ledger at ${relOutputPath}`,
-        errorKind: 'empty_output'
+        message: `Implementation failed: ledger at ${relOutputPath} is ${reason}`,
+        errorKind: ledgerContent.trim() ? 'invalid_output' : 'empty_output'
       });
-      return emitFinalSummary(false, 'unknown', `Empty expected output ledger file at ${relOutputPath}`, null);
+      return emitFinalSummary(false, 'unknown', `Ledger at ${relOutputPath} is ${reason}`, null);
     }
 
+    // --- Plan closeout (Step 7b): update plan front matter + Change Log ---
+    // The skill's §"Closeout Checklist" requires (1) updating the plan's
+    // front-matter `status:` to `done` or `blocked` and (2) recording the run
+    // in the plan's `## Change Log`. This MUST happen here (after the artifact
+    // gate passes, BEFORE `writeArtifactWithMeta`) — the v5-audit C1 fix.
+    // The harness's front-matter stamp is the durable state-detection
+    // signal that `state.ts:scanImplementArtifacts()` reads via
+    // `provenance.ts:parseArtifactMeta()`'s `priorAudit:` field. If we
+    // stamped the file before closeout and closeout later failed, the
+    // scanner would see `priorAudit: docs/dev/plan-audit-v{N}-<agent>.md`
+    // and `resolveImplementFacts()` would return `currentPlanImplemented:
+    // true` — letting a half-done run drive `smash.ts`'s interactive
+    // default to `review` and bypass the `unknown` rule (AGENTS.md §3).
+    // The fix is: stamp the harness front matter ONLY after closeout
+    // succeeds, so a `closeout_failed` run leaves the ledger file on disk
+    // without the harness's `priorAudit:` link and the state scanner
+    // counts it as `currentPlanImplemented: false`. The wiring uses the
+    // dedicated helper from Step 7b — `src/plan-closeout.ts` — not inline
+    // parsing inside the loop, so the closeout logic is a single source
+    // of truth reusable by any future closeout entry point (e.g.
+    // `31-simple-implement-closeout`).
+    const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
+    const closeoutSignal = deriveCloseoutSignal(ledgerContent);
+    const closeoutOutcome = writePlanCloseout({
+      planPath: projectPlanPath,
+      version: nextVersion,
+      agent: runner.agent,
+      signal: closeoutSignal
+    });
+    if (!closeoutOutcome.ok) {
+      // CRITICAL (v5-audit C1): do NOT call writeArtifactWithMeta on
+      // this branch. The agent's ledger file remains on disk without
+      // the harness's front matter. `state.ts:scanImplementArtifacts()`
+      // will read `priorAudit: 'none'` (no front matter → fallback
+      // `priorAudit: 'none'` from `provenance.ts:parseArtifactMeta`),
+      // `resolveImplementFacts()` will return `currentPlanImplemented:
+      // false`, and `smash.ts` will default the next interactive start
+      // to `implement` (not `review`). The regression test in Step 12
+      // ("closeout_failed run does not advance the state scanner")
+      // pins this contract end-to-end.
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation failed: plan closeout error: ${closeoutOutcome.error}`,
+        errorKind: 'closeout_failed'
+      });
+      return emitFinalSummary(false, 'unknown', `Plan closeout failed: ${closeoutOutcome.error}`, null);
+    }
+
+    // --- Branch on closeout status (v9-audit Critical fix) ---
+    // A `blocked` closeout (confidence < 0.95) is terminal for
+    // implementation advancement: the harness emits stepFailed, does
+    // NOT stamp the harness's front matter, and returns `unknown` so
+    // the next interactive startup defaults to `implement` (not
+    // `review`). The agent's ledger file remains on disk without the
+    // harness's `priorAudit:` link, so `state.ts:scanImplementArtifacts()`
+    // reads `priorAudit: 'none'` and `resolveImplementFacts()` returns
+    // `currentPlanImplemented: false`. Only a `done` closeout stamps
+    // the front matter and advances state.
+    if (closeoutOutcome.status === 'blocked') {
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation blocked: ${closeoutSignal.reason ?? 'confidence below 0.95 threshold'}`,
+        errorKind: 'implementation_blocked'
+      });
+      // CRITICAL: do NOT call writeArtifactWithMeta on this branch.
+      // The ledger file stays on disk without the harness's
+      // `priorAudit:` link, so the state scanner does NOT advance.
+      return emitFinalSummary(false, 'unknown', `Implementation blocked: confidence below 0.95 threshold`, null);
+    }
+
+    // --- Success emit (v5-audit C1: emitted AFTER closeout, before stamp) ---
+    // The success message now reports verified reality: the ledger was
+    // verified AND the plan closeout succeeded with status `done`.
+    // A `closeout_failed` or `blocked` run does NOT reach this line.
+    options.output.stepSucceeded({
+      kind: 'implement',
+      skillId: implementSkillId,
+      version: nextVersion,
+      message: `Implementation completed: ledger verified at ${relOutputPath} and plan closeout wrote status: done`
+    });
+
+    // --- Stamp the harness's front matter (v5-audit C1: after closeout) ---
+    // Closeout succeeded with `done`; the file is now an authentic
+    // record of a completed implementation. Stamp the harness's front
+    // matter onto it so `state.ts:scanImplementArtifacts()` can see the
+    // `priorAudit: <plan-audit-path>` link and
+    // `resolveImplementFacts()` returns `currentPlanImplemented: true`.
     const meta: ArtifactMeta = {
       loop: loopName,
       skill: implementSkillId,
@@ -325,7 +532,7 @@ export async function runLoop(
   });
 
   while (iteration < options.maxIterations) {
-    options.output.iterationStarted({ iteration, maxIterations: options.maxIterations });
+    options.output.iterationStarted({ iteration: iteration + 1, maxIterations: options.maxIterations });
 
     // --- Step A: Follow-up ---
     if (pendingFollowUp) {
@@ -342,7 +549,7 @@ export async function runLoop(
       const followUpVersion = N - 1;
       renderPanel(
         { skillId: followUpSkillId, agent: runner.agent, model: runner.model },
-        iteration,
+        iteration + 1,
         `Executing follow-up on version ${N - 1} rejection...`
       );
 
@@ -354,7 +561,7 @@ export async function runLoop(
         'follow-up',
         followUpSkillId,
         followUpVersion,
-        iteration
+        iteration + 1
       );
 
       if (stepFailed(result, false)) {
@@ -415,7 +622,7 @@ export async function runLoop(
 
     renderPanel(
       { skillId: auditSkillId, agent: runner.agent, model: runner.model },
-      iteration,
+      iteration + 1,
       `Running audit for version ${N}...`
     );
 
@@ -427,7 +634,7 @@ export async function runLoop(
       'audit',
       auditSkillId,
       N,
-      iteration
+      iteration + 1
     );
 
     if (stepFailed(result, true)) {
@@ -472,7 +679,7 @@ export async function runLoop(
     iteration++;
 
     if (verdict === 'unknown') {
-      renderPanel(null, iteration, chalk.red(`Terminal: unknown verdict on version ${N}`));
+      renderPanel(null, iteration + 1, chalk.red(`Terminal: unknown verdict on version ${N}`));
       const errMessage = `Audit failed to write a valid verdict. Output file path: ${relOutputPath}. Process output: ${result.stdout}`;
       return emitFinalSummary(false, 'unknown', errMessage, lastAuditPath);
     }

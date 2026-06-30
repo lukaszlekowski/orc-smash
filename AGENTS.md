@@ -47,10 +47,17 @@ itself.
   native binaries invoked over `stdio + args`. orc-smash never imports them or shares a runtime.
 - Headless agents that must write files require the provider's autonomy flag
   (`--dangerously-skip-permissions` for opencode, `--permission-mode bypassPermissions` for
-  claude, full-auto for codex); without it the run silently stalls.
+  claude, and `--dangerously-bypass-approvals-and-sandbox` for codex); without it the run silently stalls.
+- **Model ID namespaces are strictly validated**: `runner.ts` resolves model names, and opencode
+  specifically enforces namespace patterns (e.g. `opencode-go/` or `opencode/`) via the
+  `isOpencodeModelId` regex-based predicate to prevent cross-agent model leakage.
+- **Watchdog timeout policy**: Runs are protected by config-driven execution timeouts. For `opencode`,
+  the watchdog timeout is determined by the following precedence: `OPENCODE_RUN_TIMEOUT_MS` environment
+  variable > registry configuration `timeouts.opencode` > built-in default of `600000` ms (10 minutes).
+  A timeout value of `0` disables the watchdog.
 - **Adding a provider is not "one file."** It requires one adapter file **plus** registry
   wiring, a per-agent default model in config, agent/model-namespace validation, an env-gated
-  contract test, live-smoke participation, an interactive option, and doc updates across
+  contract test, an interactive option, and doc updates across
   `AGENTS.md` / `README.md` / `docs/architecture/overview.md`.
 
 ## 3. `unknown` is terminal; follow-up is gated on REJECTED
@@ -87,6 +94,6 @@ itself.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). **Each
   real provider path** (opencode, codex, claude) is gated by its own env-gated contract test
-  plus a live mixed-CLI end-to-end smoke — approval requires all of them.
+  — approval requires all of them.
 - A GitHub Actions CI workflow runs typecheck and deterministic tests on push and pull requests,
   while real-provider verification remains an env-gated/manual release sign-off requirement.

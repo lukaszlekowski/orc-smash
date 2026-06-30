@@ -106,6 +106,19 @@ export function parseOpencodeStream(raw: string): ParseResult {
   return result;
 }
 
+export interface OpencodeProgressDelta { textDelta: string; toolCallDelta: number; }
+
+export function diffOpencodeProgress(
+  prevTextLen: number,
+  prevToolCount: number,
+  parsed: ParseResult
+): OpencodeProgressDelta | null {
+  const textDelta = parsed.finalText.slice(prevTextLen);
+  const toolCallDelta = parsed.toolCalls.length - prevToolCount;
+  if (textDelta.length === 0 && toolCallDelta === 0) return null;
+  return { textDelta, toolCallDelta };
+}
+
 export function classifyOpencodeError(e: OpencodeStreamError): RunError {
   const nameStr = (e.name || '').toLowerCase();
   const msgStr = (e.message || '').toLowerCase();

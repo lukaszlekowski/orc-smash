@@ -1,7 +1,12 @@
+import type { LifecycleEvent } from '../adapter-lifecycle.js';
+
 export interface RunInput {
   prompt: string;
   model: string;
   cwd: string;
+  skillId?: string;
+  version?: number;
+  onLifecycle?: (e: LifecycleEvent) => void;
 }
 
 export type RunErrorKind =

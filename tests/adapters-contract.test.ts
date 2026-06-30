@@ -6,7 +6,13 @@ import { execSync } from 'node:child_process';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
 import { codexAdapter } from '../src/adapters/codex.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
+import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { parseVerdict } from '../src/verdict.js';
+import { runLoop } from '../src/loop.js';
+import { loadConfig } from '../src/config.js';
+import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
+import { resolveImplementFacts } from '../src/state.js';
+import { isCompleteImplementLedger } from '../src/implement-ledger.js';
 
 describe('Real-provider contract tests', () => {
   const tempDir = join(process.cwd(), 'temp-contract-test');
@@ -27,17 +33,22 @@ describe('Real-provider contract tests', () => {
     removeTempDir(tempDir);
   });
 
-  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode spawn', async () => {
+  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode spawn and asserts lifecycle (≥1 message, ends completed)', async () => {
     const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
     const outputPath = 'docs/dev/plan-audit-v1-opencode.md';
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
     const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
 
+    const lifecycleEvents: LifecycleEvent[] = [];
+
     const result = await opencodeAdapter.run({
       prompt,
       model,
-      cwd: tempDir
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 1,
+      onLifecycle: (e) => lifecycleEvents.push(e)
     });
 
     expect(result.error).toBeUndefined();
@@ -48,6 +59,12 @@ describe('Real-provider contract tests', () => {
     expect(existsSync(filePath)).toBe(true);
     const content = readFileSync(filePath, 'utf-8');
     expect(parseVerdict(content)).toBe('APPROVED');
+
+    // Lifecycle assertions: opencode emits ≥1 message and ends completed
+    const messageEvents = lifecycleEvents.filter(e => e.type === 'message');
+    expect(messageEvents.length).toBeGreaterThanOrEqual(1);
+    const lastEvent = lifecycleEvents[lifecycleEvents.length - 1];
+    expect(lastEvent?.type).toBe('completed');
   }, 60000);
 
   it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode error path', async () => {
@@ -67,17 +84,22 @@ describe('Real-provider contract tests', () => {
     expect(typeof result.exitCode).toBe('number');
   }, 60000);
 
-  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex spawn', async () => {
+  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex spawn and asserts lifecycle (started→completed, no message)', async () => {
     const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
     const outputPath = 'docs/dev/plan-audit-v1-codex.md';
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
     const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
 
+    const lifecycleEvents: LifecycleEvent[] = [];
+
     const result = await codexAdapter.run({
       prompt,
       model,
-      cwd: tempDir
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 1,
+      onLifecycle: (e) => lifecycleEvents.push(e)
     });
 
     expect(result.exitCode).toBe(0);
@@ -86,19 +108,29 @@ describe('Real-provider contract tests', () => {
     expect(existsSync(filePath)).toBe(true);
     const content = readFileSync(filePath, 'utf-8');
     expect(parseVerdict(content)).toBe('APPROVED');
+
+    // Lifecycle assertions: codex emits started→completed, never message
+    expect(lifecycleEvents[0]?.type).toBe('started');
+    expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
+    expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
   }, 60000);
 
-  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude spawn', async () => {
-    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'claude-sonnet-4-6';
+  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude spawn and asserts lifecycle (started→completed, no message)', async () => {
+    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
     const outputPath = 'docs/dev/plan-audit-v1-claude.md';
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
     const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
 
+    const lifecycleEvents: LifecycleEvent[] = [];
+
     const result = await claudeAdapter.run({
       prompt,
       model,
-      cwd: tempDir
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 1,
+      onLifecycle: (e) => lifecycleEvents.push(e)
     });
 
     expect(result.exitCode).toBe(0);
@@ -107,5 +139,136 @@ describe('Real-provider contract tests', () => {
     expect(existsSync(filePath)).toBe(true);
     const content = readFileSync(filePath, 'utf-8');
     expect(parseVerdict(content)).toBe('APPROVED');
+
+    // Lifecycle assertions: claude emits started→completed, never message
+    expect(lifecycleEvents[0]?.type).toBe('started');
+    expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
+    expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
   }, 60000);
+
+  const REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS = 600000;
+
+  const mockOutput = {
+    note: () => {},
+    warn: (msg: string) => { console.warn('LOOP WARN:', msg); },
+    error: (msg: string) => { console.error('LOOP ERROR:', msg); },
+    iterationStarted: () => {},
+    stepStarted: () => {},
+    stepSucceeded: () => {},
+    stepFailed: () => {},
+    renderPanel: () => {},
+    finalSummary: () => {}
+  };
+
+  async function runRealProviderImplementLoopTest(agent: string, model: string) {
+    const outputPath = `docs/dev/impl-v1-${agent}.md`;
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+
+    // Write a tiny approved plan fixture
+    const planContent =
+      '---\n' +
+      'status: ready\n' +
+      'confidence: 0.96\n' +
+      'owners: harness-runtime\n' +
+      '---\n\n' +
+      '# Plan\n\n' +
+      '## Step list\n\n' +
+      '### Step 1\n' +
+      `Write exactly the following content to the file "${outputPath}" and nothing else:\n` +
+      '# Implementation Evidence Ledger\n\n' +
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+      '| --- | --- | --- | --- | --- |\n' +
+      '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
+      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
+      '| --- | --- | --- | --- |\n' +
+      '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
+      'State overall confidence: 0.95\n';
+
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), planContent);
+
+    // Write plan audit approved
+    const auditContent =
+      '---\n' +
+      `loop: plan\n` +
+      `skill: plan-audit\n` +
+      `kind: audit\n` +
+      `role: auditor\n` +
+      `version: 1\n` +
+      `agent: ${agent}\n` +
+      `model: ${model}\n` +
+      `target: docs/dev/plan.md\n` +
+      `priorAudit: none\n` +
+      `timestamp: 2026-06-30T12:00:00.000Z\n` +
+      '---\n\n' +
+      '# Plan Audit\n\n' +
+      '## Verdict\n\n' +
+      'APPROVED\n';
+    writeFileSync(join(tempDir, `docs/dev/plan-audit-v1-${agent}.md`), auditContent);
+
+    const config = loadConfig(tempDir);
+    const implementSpec = config.manifest.loops['implement']!;
+
+    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
+      maxIterations: 1,
+      registry: createProductionAdapterRegistry(config.registry),
+      output: mockOutput,
+      globalOverrides: { agent, model }
+    });
+    if (!result.success) {
+      console.error('RUN_LOOP FAILED:', result.message);
+      const filePath = join(tempDir, outputPath);
+      if (existsSync(filePath)) {
+        console.error('FILE CONTENT:\n', readFileSync(filePath, 'utf-8'));
+      } else {
+        console.error('FILE DOES NOT EXIST');
+      }
+    }
+    expect(result.success).toBe(true);
+    expect(result.lastAuditPath).toContain(outputPath);
+
+    const filePath = join(tempDir, outputPath);
+    expect(existsSync(filePath)).toBe(true);
+    const content = readFileSync(filePath, 'utf-8');
+
+    // Verify provenance and ledger verification standards
+    expect(content.startsWith('---\nloop:')).toBe(true);
+    expect(content).toContain(`priorAudit: docs/dev/plan-audit-v1-${agent}.md`);
+    // Pass the actual content past front matter to ledger verification
+    const bodyWithoutFrontMatter = content.replace(/^---[\s\S]+?---\r?\n/, '');
+    expect(isCompleteImplementLedger(bodyWithoutFrontMatter)).toBe(true);
+
+    // Verify plan status closeout
+    const updatedPlan = readFileSync(join(tempDir, 'docs/dev/plan.md'), 'utf-8');
+    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
+    expect(updatedPlan).toMatch(/## Change Log/);
+    expect(updatedPlan).toMatch(new RegExp(`### Implementation v1-${agent}`));
+
+    // Verify resolveImplementFacts advancement
+    const facts = resolveImplementFacts(
+      tempDir,
+      {
+        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
+        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
+      },
+      {
+        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
+      }
+    );
+    expect(facts.currentPlanImplemented).toBe(true);
+  }
+
+  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode implement loop ledger writing', async () => {
+    const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
+    await runRealProviderImplementLoopTest('opencode', model);
+  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+
+  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex implement loop ledger writing', async () => {
+    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+    await runRealProviderImplementLoopTest('codex', model);
+  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+
+  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude implement loop ledger writing', async () => {
+    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+    await runRealProviderImplementLoopTest('claude', model);
+  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
 });

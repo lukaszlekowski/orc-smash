@@ -17,3 +17,6 @@ providers:
 defaults:
   agent: opencode
   model: opencode-go/deepseek-v4-flash
+
+timeouts:
+  opencode: 0  # watchdog timeout in milliseconds (0 disables the opencode watchdog)

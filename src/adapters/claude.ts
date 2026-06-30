@@ -1,5 +1,6 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess } from './utils.js';
+import { debugCommandBuild } from '../debug-spawn.js';
 
 export const claudeAdapter: AgentAdapter = {
   name: 'claude',
@@ -22,6 +23,18 @@ export const claudeAdapter: AgentAdapter = {
 
   async run(input: RunInput): Promise<RunResult> {
     const { command, args } = this.buildRun(input);
-    return spawnAgentProcess(command, args, input.cwd);
+    debugCommandBuild({
+      adapter: 'claude',
+      command,
+      args,
+      cwd: input.cwd
+    });
+    return spawnAgentProcess(command, args, input.cwd, {
+      agent: this.name,
+      model: input.model,
+      skillId: input.skillId,
+      version: input.version,
+      onLifecycle: input.onLifecycle
+    });
   }
 };
