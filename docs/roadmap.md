@@ -217,6 +217,21 @@ registered options without duplicating raw strings.
 - **The agent list is hardcoded** in three places: validation (`src/runner.ts:20` `allowedAgents`) and the
   two interactive pickers (`src/interactive.ts:67` and `:116`) — both show only opencode/codex/claude (no
   `fake`). So the "three" are really the three offered agents; a model is an open string per agent.
+- **Recent real-run findings expose provider contract gaps, not just registry gaps.**
+  - `opencode` runs are forcibly terminated after 180000 ms unless `OPENCODE_RUN_TIMEOUT_MS` overrides it
+    (`src/adapters/utils.ts:122-154`). The implementation-stage timeout report came from this watchdog, not
+    from loop-specific implementation logic.
+  - `codex` implementation runs can exit `0` without producing the required ledger file
+    (`docs/dev/impl-v{n}-codex.md`), which then fails the loop's post-run artifact check in
+    `src/loop.ts:201-223`. This is a real provider-path correctness issue, not a user-project issue.
+  - Local `codex exec --help` verification on 2026-06-30 shows the non-interactive autonomy flag is
+    `--dangerously-bypass-approvals-and-sandbox`. The current adapter only passes
+    `codex exec -m <model> --skip-git-repo-check <prompt>` (`src/adapters/codex.ts:7-16`) and does not pass
+    the required autonomy flag described in `AGENTS.md`. That mismatch is the strongest harness-level cause
+    for the observed "execution completed but missing output ledger" failure.
+  - The existing real-provider codex contract test proves only a trivial audit-file write
+    (`tests/adapters-contract.test.ts:70-89`). It does not cover the implementation-stage prompt shape or the
+    required `docs/dev/impl-v{n}-codex.md` ledger contract, so this failure mode can slip past sign-off.
 
 **Industry-standard format (decision point):** a single discoverable config file **is** the convention for
 CLI tools (git's `.gitconfig`, npm's `.npmrc`, aider's `.aider.conf.{yml,toml,json}`); no exotic alternative
