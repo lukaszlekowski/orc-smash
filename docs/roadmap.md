@@ -4,31 +4,28 @@
 
 Current pending work, grouped into recommended implementation batches.
 
-**Batch 3 — Provider & Runtime Hardening**
-
-- [ ] **30 — Add Antigravity provider (`agy`)**
-- [ ] **31 — Add watchdog timeouts for `claude` and `codex`**
-- [ ] **29 — Timeline state accuracy and interrupted-run handling**
-
 **Batch 4 — Panel & Active-Loop Correctness**
 
 - [ ] **32 — Review-loop active role labels in TUI**
 - [ ] **34 — TUI "Next Step" line is loop-agnostic (plan-loop steps shown during the review loop)**
 
-**Batch 5 — Interaction, Provenance & Docs**
+**Batch 5 — Artifact Integrity & Operator UX**
 
-- [ ] **8 — Prompt to extend iterations at max**
 - [ ] **33 — Follow-up artifacts carry duplicate front-matter blocks**
-- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error**
-- [ ] **14 — docs canonicalization + broken plan reference fix**
+- [ ] **8 — Prompt to extend iterations at max**
 
-**Batch 6 — CLI Integration and Timeout Hardening**
+**Batch 6 — Runtime Contract and CLI Hardening**
 
 - [ ] **36 — Agent CLI connection hanging and follow-up validation gaps**
+- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error**
+
+**Batch 7 — Docs Canonicalization**
+
+- [ ] **14 — docs canonicalization + broken plan reference fix**
 
 ## Detailed checklist
 
-Open work is listed below, with recently completed milestones retained where their outcome still provides context for the remaining batches.
+Open work is listed below.
 
 ## Architecture assumptions and implementation goal
 
@@ -43,110 +40,24 @@ Every checklist item below should be implemented against the same architectural 
 
 The implementation goal for this roadmap is a **clean, scalable, high-quality harness architecture**: fewer duplicated rules, fewer hidden couplings, smaller orchestration files, explicit runtime contracts, and only purposeful modules added where they improve clarity and long-term maintenance.
 
-**Batch 3 — Provider & Runtime Hardening**
-
-- [ ] **30 — Add Antigravity provider (`agy`).** Introduce Antigravity as a real runnable provider behind the existing adapter seam, invoked through the `agy` CLI. The implementation must follow the same provider contract as the existing real adapters: add a dedicated adapter module, register it only in the production registry, define its default model and any model-id validation rules, wire it into per-skill runner resolution and interactive selection, and add env-gated contract coverage. Document the autonomy/non-interactive file-writing requirements for `agy` explicitly if the provider requires its own bypass flag or equivalent. Keep provider-specific invocation, stderr parsing, and completion semantics in the adapter layer rather than leaking them into shared orchestration.
-- [ ] **31 — Add watchdog timeouts for `claude` and `codex`.** Extend the harness timeout policy beyond `opencode` so long-running or internally looping `claude` and `codex` runs cannot hang a simple audit or follow-up step indefinitely. Preserve the provider adapter seam: shared process execution should own the generic timeout mechanism, while each adapter owns its invocation shape and any provider-specific timeout diagnostics. The outcome should define config/default ownership for both providers, integrate with existing structured timeout error handling, and add contract coverage proving the timeout reaches the real adapter call sites rather than existing only as dead config.
-- [ ] **29 — Timeline state accuracy and interrupted-run handling.** Couple parent-interruption to child-process termination in the shared process runner, add an interrupted/quarantined state so late or partial artifacts cannot be mistaken for completed work, and extend timeline rendering to show interrupted runs as interrupted. Keep the fix in the shared lifecycle / artifact-validation path, not as a provider-specific workaround; coordinate the panel sub-task with #32 / #34 in Batch 4.
-
 **Batch 4 — Panel & Active-Loop Correctness**
 
 - [ ] **32 — Review-loop active role labels in TUI.** Fix the active-step role naming shown in the panel during the `review` loop. The current TUI can show `planner` / `auditor` in the active-step area even though the review loop roles should be `reviewer` and `implementer`. Preserve the existing correct timeline naming and scope the fix to the active/panel context derivation so the review loop's live labels match the configured review skills without regressing plan-loop labels.
 - [ ] **34 — TUI "Next Step" line is loop-agnostic (plan-loop steps shown during the review loop).** The panel renders `nextStepMessage` verbatim, and that message is loop-agnostic: `assembleNextStepMessage` (`src/status.ts`) for the read-only view and the hardcoded per-stage strings in `src/loop.ts` (`Running audit for version N…`, `Executing follow-up…`) were written against the plan loop and never parameterized by the active loop, so during the review loop the Next Step line reads as plan-loop steps rather than the review loop's own `review` → `review-follow-up` sequence. Skill→role config is already correct (`skills.yaml`), and the review loop has no live panel coverage (`tests/loop-live.test.ts` runs only `plan`/`implement`). Parameterize the messaging by active loop, revisit `statusAction` loop detection, and add review-loop live panel tests; coordinate with #32.
 
-**Batch 5 — Interaction, Provenance & Docs**
+**Batch 5 — Artifact Integrity & Operator UX**
 
-- [ ] **8 — Prompt to extend iterations at max (consideration).** When the loop hits `max-iterations`, offer interactive users a controlled continuation choice without changing non-interactive behavior. Prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) with optional custom input only if it proves necessary.
 - [ ] **33 — Follow-up artifacts carry duplicate front-matter blocks.** Follow-up docs (`review-followup-vN-*`, `plan-followup-vN-*`) end up with two YAML front-matter blocks: the agent writes its own and the harness prepends a second via `writeArtifactWithMeta` (`src/provenance.ts`) without stripping the first, because the follow-up skills lack the "harness owns metadata" note the audit skills carry. Strip any existing leading block before stamping (and/or mirror the audit-skill instruction) and add a one-block-per-artifact regression test.
-- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error.** A real `claude` implementation wrote [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md) with both required tables and `State overall confidence: 0.96`, yet the harness still terminated with the generic "missing evidence table / requirement coverage table / confidence declaration" message. The real mismatch is stricter: `src/implement-ledger.ts` currently requires every `Result` / `Status` cell in the required tables to match the passing-status allow-list, and this ledger contains non-passing rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate`. Decide one explicit contract for pending release-gate items, improve the runtime error in `src/loop.ts` so it reports the true failure reason, and add regression coverage for this exact ledger shape.
-- [ ] **14 — Docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runner/model, loop, and rendering changes have landed so the docs only need one final alignment pass. Intentionally sequenced last in this batch.
+- [ ] **8 — Prompt to extend iterations at max (consideration).** When the loop hits `max-iterations`, offer interactive users a controlled continuation choice without changing non-interactive behavior. Prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) with optional custom input only if it proves necessary.
 
-**Batch 6 — CLI Integration and Timeout Hardening**
+**Batch 6 — Runtime Contract and CLI Hardening**
 
 - [ ] **36 — Agent CLI connection hanging and follow-up validation gaps.** Address cases where generic agent CLIs (`codex`, `agy`) hang indefinitely in certain execution environments (e.g. `codex` reading from a piped stdin, or `agy` waiting on blocked network/daemon connectivity) without completing. Under the default config where agent watchdog timeouts are disabled (`0`), these hangs block the loop indefinitely without output. Additionally, establish a validation check to ensure that the follow-up step actually writes the required report file before proceeding, preventing the loop from advancing silently without producing the follow-up artifact.
+- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error.** A real `claude` implementation wrote [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md) with both required tables and `State overall confidence: 0.96`, yet the harness still terminated with the generic "missing evidence table / requirement coverage table / confidence declaration" message. The real mismatch is stricter: `src/implement-ledger.ts` currently requires every `Result` / `Status` cell in the required tables to match the passing-status allow-list, and this ledger contains non-passing rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate`. Decide one explicit contract for pending release-gate items, improve the runtime error in `src/loop.ts` so it reports the true failure reason, and add regression coverage for this exact ledger shape.
 
----
+**Batch 7 — Docs Canonicalization**
 
-## Batch 1 notes
-
-This batch is complete. It established the runtime correctness and provider-semantics baseline that the later UI, interaction, and documentation work now builds on.
-
----
-
-## Batch 3 notes
-
-This batch expands and hardens real-provider support and shared runtime resilience. Provider work (#30) stays adapter-local; runtime hardening (#31 watchdog timeouts, #29 interrupted-run handling) lives in the shared process runner and artifact-validation path. #29's panel sub-task (rendering interrupted state) touches the same surface as Batch 4 and should be coordinated with #32 / #34.
-
-## 30 — Add Antigravity provider (`agy`)
-
-Goal: add Antigravity as a fourth real provider, runnable through the `agy` CLI, without weakening the current per-provider adapter contract or reintroducing hardcoded runner assumptions into shared orchestration.
-
-> Current observation: the harness currently supports only three real providers (`opencode`, `codex`, `claude`). Adding another provider is not represented in the roadmap even though the architecture and repo rules explicitly treat provider addition as a cross-cutting implementation task.
-
-**Findings so far:**
-
-- **Adding a provider is not a one-file change.** The repo rules require adapter implementation, registry wiring, per-agent default model handling, model-namespace validation, interactive exposure, contract tests, and documentation updates.
-- **Provider-specific behavior must stay behind the adapter seam.** `agy` invocation shape, autonomy flags, structured stderr parsing, and any completion signal should remain provider-local rather than branching shared loop logic ad hoc.
-- **Production and testing registries must stay explicit.** `agy` belongs in the production registry once real support exists; test-only infrastructure should remain isolated in the testing registry.
-- **Real-provider sign-off must cover the new path.** The quality bar in this repo requires an env-gated contract test for every real provider path.
-
-**Fix:**
-
-- Add a dedicated Antigravity adapter that runs the `agy` binary and implements the shared `AgentAdapter` contract.
-- Register `agy` in the production adapter registry, add its default model/config wiring, and define any provider-specific model-id validation needed by `runner.ts`.
-- Expose `agy` in interactive runner selection and ensure per-skill/run-wide override precedence still behaves correctly when switching agents.
-- Add env-gated contract coverage for the Antigravity path.
-- Update `AGENTS.md`, `README.md`, and `docs/architecture/overview.md` so the real-provider set and verification requirements stay synchronized.
-
-**Effort:** M–L.
-
----
-
-## 31 — Add watchdog timeouts for `claude` and `codex`
-
-Goal: prevent `claude` and `codex` from running indefinitely on simple audit/follow-up tasks by extending the harness watchdog model beyond `opencode`.
-
-> Current observation: `claude` and `codex` currently run through the generic spawn path with no harness-owned timeout, so a provider can continue consuming time and context long after a step should have been considered stuck.
-
-**Findings so far:**
-
-- **Only `opencode` has a harness timeout today.** The current config/docs and spawn plumbing treat timeout policy as `opencode`-only.
-- **`claude` and `codex` use the generic spawn path.** That path captures stdout/stderr and spawn failures, but it does not currently enforce a watchdog deadline.
-- **This is a provider-hardening concern, not just UX.** A hung or wandering provider run delays loops, obscures operator intent, and weakens the harness guarantee that simple steps fail fast when the provider is not converging.
-- **The timeout contract must be observable in tests.** Config-only support is not enough; the registry and adapter call sites need coverage proving the value is actually applied.
-
-**Fix:**
-
-- Generalize the shared process runner so `claude` and `codex` adapters can opt into the same watchdog mechanism already used for `opencode`.
-- Define timeout ownership and precedence for `claude` and `codex` in config/docs, keeping the rules explicit and provider-scoped.
-- Preserve provider-local diagnostics and structured error reporting so timeout failures still name the correct provider and surface useful context.
-- Add env-gated and/or adapter-level contract tests proving the timeout reaches the real `claude` and `codex` spawn paths.
-
-**Effort:** M.
-
----
-
-## 29 — Timeline state accuracy and interrupted-run handling
-
-Goal: make interrupted and in-flight runs observable and state-safe, so late or partial artifacts cannot be mistaken for completed work.
-
-> Current observation: in a real Claude implement-loop repro, killing the harness did not immediately stop the provider process. A delayed `impl-v1-claude.md` artifact appeared afterward with mixed / corrupted content, which means a child process can outlive the harness and write a late invalid artifact after cancellation.
-
-**Findings so far:**
-
-- **Parent interruption and child termination are not tightly coupled.** Stopping the harness does not yet guarantee the spawned provider process is terminated promptly.
-- **Late artifacts can appear after cancellation.** A provider can continue writing `docs/dev/impl-v{n}-{agent}.md` after the operator thinks the run is dead.
-- **The current artifact model is too binary for interrupted runs.** Files are either present or absent, but there is no first-class interrupted/quarantined state for late or partial outputs.
-- **Timeline semantics are incomplete for interruption.** The user-facing state does not clearly distinguish "running", "interrupted but child still alive", and "artifact written after cancellation".
-
-**Fix:**
-
-- Treat interruption as a first-class lifecycle path in the shared process runner: when the harness is interrupted, explicitly terminate the child provider process and wait for a bounded shutdown outcome.
-- Add interrupted-run artifact handling in the shared validation path: if a late artifact appears after cancellation, delete it, quarantine it, or mark it as interrupted so it cannot be mistaken for a valid completed implementation.
-- Extend timeline/state rendering so interrupted runs are visible as interrupted rather than silently disappearing or looking completed.
-- Keep this fix in the shared process lifecycle / artifact-validation path, not as a provider-specific workaround for Claude.
-
-**Effort:** M.
+- [ ] **14 — docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runtime and rendering changes have landed so the docs only need one final alignment pass.
 
 ---
 
@@ -197,7 +108,31 @@ Goal: make the panel's "Next Step" line reflect the active loop's actual skill s
 
 ## Batch 5 notes
 
-This batch is lower-risk interaction, provenance, and documentation cleanup. #33 (duplicate front-matter) is a small, independent correctness fix that can be slotted in anytime. #14 (docs canonicalization) is intentionally last: it performs one final alignment pass after the provider/runtime (Batch 3) and rendering (Batch 4) changes have landed.
+This batch groups two small, operator-visible fixes: one artifact-integrity correction and one interactive control-flow improvement. Neither should materially reshape the runtime architecture.
+
+## 33 — Follow-up artifacts carry duplicate front-matter blocks
+
+Goal: ensure every loop artifact (audit, follow-up, implement) carries exactly one harness-owned metadata block, so provenance is unambiguous and the agent cannot leave a stale, hallucinated second block on disk.
+
+> Current observation: the follow-up docs in `docs/dev/` (`review-followup-vN-opencode.md`, `plan-followup-v11-opencode.md`) each carry **two** YAML front-matter blocks (4 `---` fences), while audit docs and `impl-v1-opencode.md` carry only one. The second block is agent-written and dead — nothing reads it.
+
+**Findings so far:**
+
+- **Two independent writers each emit a block.** The follow-up agent writes its own front matter when it writes the report, then the harness prepends a canonical block on top via `writeArtifactWithMeta` (`src/provenance.ts:27-32`), which does `buildFrontMatter(meta) + body` without stripping any front matter already present in `body`. The follow-up stage reads the agent-written file and re-stamps it (`src/loop.ts:583-587`).
+- **The follow-up skills lack the "harness owns metadata" instruction.** The audit skills carry an explicit note — _"Document metadata … is written as YAML front matter by the orc-smash harness. Do not write metadata headers yourself"_ (`skills/40-simple-review/SKILL.md:138`, `skills/21-simple-plans-audit/SKILL.md:95`) — but `skills/42-simple-review-follow-up/SKILL.md` and `skills/22-simple-plans-follow-up/SKILL.md` do not, so the follow-up agent emits its own block.
+- **The two blocks disagree, confirming distinct authors.** In `review-followup-v4-opencode.md` the harness block (top) has `loop: review` + `role: implementer` + a real-precision timestamp from `new Date().toISOString()`, while the agent block (lower) has `loop: review-follow-up`, no `role`, and a round synthetic `.000Z` timestamp.
+- **Only the first block is ever read.** `parseArtifactMeta` → `extractFrontMatter` (`src/provenance.ts:35-38`) is a `^`-anchored non-greedy regex that matches only the leading block, so the agent's lower block is silently ignored dead metadata carrying hallucinated values. The duplicate is cosmetic today but becomes a latent correctness bug if write-ordering ever flips or a reader parses the wrong block.
+- **Audits and the implement ledger are clean by contrast.** Audit skills tell the agent not to write metadata (one block), and the implement skill's output shape is a ledger table with no front matter (one block); only follow-ups hit both writers at once.
+
+**Fix:**
+
+- Make `writeArtifactWithMeta` robust: strip any leading `---\n…\n---\n` block from `body` before prepending the canonical block, so a second writer can never produce a duplicate regardless of skill wording.
+- And/or add the "metadata is written by the harness; do not write metadata headers yourself" instruction to the two follow-up skills so the agent stops emitting its own block (consistent with the audit skills).
+- Add a regression test asserting every emitted artifact (audit, follow-up, implement) contains exactly one leading front-matter block after the harness stamps it.
+
+**Effort:** S.
+
+---
 
 ## 8 — Prompt to extend iterations at max (consideration)
 
@@ -226,27 +161,27 @@ guess was too low.
 
 ---
 
-## 33 — Follow-up artifacts carry duplicate front-matter blocks
+## Batch 6 notes
 
-Goal: ensure every loop artifact (audit, follow-up, implement) carries exactly one harness-owned metadata block, so provenance is unambiguous and the agent cannot leave a stale, hallucinated second block on disk.
+This batch is the highest-risk runtime work still open. It groups loop-liveness failures and contract-validation failures because both affect whether the harness can safely advance state after a provider run.
 
-> Current observation: the follow-up docs in `docs/dev/` (`review-followup-vN-opencode.md`, `plan-followup-v11-opencode.md`) each carry **two** YAML front-matter blocks (4 `---` fences), while audit docs and `impl-v1-opencode.md` carry only one. The second block is agent-written and dead — nothing reads it.
+## 36 — Agent CLI connection hanging and follow-up validation gaps
 
-**Findings so far:**
+Goal: Prevent loops from hanging indefinitely due to external CLI issues and prevent the loop from silently proceeding when a follow-up step produces no output file.
 
-- **Two independent writers each emit a block.** The follow-up agent writes its own front matter when it writes the report, then the harness prepends a canonical block on top via `writeArtifactWithMeta` (`src/provenance.ts:27-32`), which does `buildFrontMatter(meta) + body` without stripping any front matter already present in `body`. The follow-up stage reads the agent-written file and re-stamps it (`src/loop.ts:583-587`).
-- **The follow-up skills lack the "harness owns metadata" instruction.** The audit skills carry an explicit note — _"Document metadata … is written as YAML front matter by the orc-smash harness. Do not write metadata headers yourself"_ (`skills/40-simple-review/SKILL.md:138`, `skills/21-simple-plans-audit/SKILL.md:95`) — but `skills/42-simple-review-follow-up/SKILL.md` and `skills/22-simple-plans-follow-up/SKILL.md` do not, so the follow-up agent emits its own block.
-- **The two blocks disagree, confirming distinct authors.** In `review-followup-v4-opencode.md` the harness block (top) has `loop: review` + `role: implementer` + a real-precision timestamp from `new Date().toISOString()`, while the agent block (lower) has `loop: review-follow-up`, no `role`, and a round synthetic `.000Z` timestamp.
-- **Only the first block is ever read.** `parseArtifactMeta` → `extractFrontMatter` (`src/provenance.ts:35-38`) is a `^`-anchored non-greedy regex that matches only the leading block, so the agent's lower block is silently ignored dead metadata carrying hallucinated values. The duplicate is cosmetic today but becomes a latent correctness bug if write-ordering ever flips or a reader parses the wrong block.
-- **Audits and the implement ledger are clean by contrast.** Audit skills tell the agent not to write metadata (one block), and the implement skill's output shape is a ledger table with no front matter (one block); only follow-ups hit both writers at once.
+**Findings:**
+- **External CLI Hanging:** 
+  - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
+  - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
+- **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in [orc.config.yaml](/Users/lukasz/softDev-temp/orc-smash/orc.config.yaml), the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
+- **Follow-up Validation Gap:** In [loop.ts](/Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
 
 **Fix:**
+- Enable a default/fallback watchdog timeout for all config-only agents or ensure the harness warns when timeouts remain disabled.
+- Modify [utils.ts](/Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts#L262) to explicitly handle piped stdin situations by closing stdin or redirecting it to avoid hangs.
+- Add a validator in the loop orchestration to assert that the follow-up report file was written before advancing the state machine, analogous to the implement ledger verification.
 
-- Make `writeArtifactWithMeta` robust: strip any leading `---\n…\n---\n` block from `body` before prepending the canonical block, so a second writer can never produce a duplicate regardless of skill wording.
-- And/or add the "metadata is written by the harness; do not write metadata headers yourself" instruction to the two follow-up skills so the agent stops emitting its own block (consistent with the audit skills).
-- Add a regression test asserting every emitted artifact (audit, follow-up, implement) contains exactly one leading front-matter block after the harness stamps it.
-
-**Effort:** S.
+**Effort:** M.
 
 ---
 
@@ -274,108 +209,21 @@ Goal: make implementation-ledger validation truthful and contract-aligned, so a 
 
 ---
 
-## Completed work (retained for context)
+## Batch 7 notes
 
-## 25 — Provider execution contract hardening
+This batch is intentionally last. It consolidates architecture documentation only after the remaining runtime, rendering, and contract changes have settled.
 
-Status: shipped in the current codebase.
+## 14 — Docs canonicalization + broken plan reference fix
 
-Goal: make real-provider implementation runs trustworthy by tightening the harness/runtime contract where recent failures exposed gaps.
+Goal: make the architecture documentation internally consistent, reduce duplication, and remove stale references that no longer match the repo's current source-of-truth layout.
 
-> Current observation: `codex` can report a clean implementation run yet fail to produce the required `docs/dev/impl-v{n}-codex.md` ledger, while `opencode` can be terminated by the harness timeout before output is generated.
-
-**Findings so far:**
-
-- **`codex` non-interactive autonomy is under-specified in the adapter.** Local `codex exec --help` verification showed the relevant autonomy flag is `--dangerously-bypass-approvals-and-sandbox`, but the current adapter invocation does not pass it.
-- **Implementation-stage success is too weakly defined for providers that exit `0`.** Today a provider can look successful at process level and still fail the run only at the post-hoc ledger existence check.
-- **The implementation-stage ledger contract is not strongly enough enforced at prompt/contract-test level.** The real-provider codex contract test proves a trivial audit file write, not the implementation ledger flow.
-- **`opencode` timeout handling is harness-owned and currently policy-light.** The default watchdog exists at the adapter layer, but the roadmap still needs an explicit decision about whether timeout policy should be global, provider-specific, stage-specific, or primarily operator-configured.
-
-**Fix:**
-
-- Update the `codex` adapter invocation so headless file-writing runs use the correct autonomy mode for this harness.
-- Strengthen implementation-stage contract tests so real-provider verification includes the required `docs/dev/impl-v{n}-{agent}.md` artifact path and not just trivial audit-file writes.
-- Tighten implementation prompting and/or runtime checks so “process exited successfully” does not masquerade as “implementation execution completed” when the required artifact contract was not actually met.
-- Define and document the intended timeout policy ownership for `opencode`: fixed default, config-driven default, per-stage override, or some combination.
-
-**Effort:** M. This is core runtime hardening work for real-provider implementation reliability.
-
----
-
-## Batch 2 notes
-
-Status: shipped. This batch was about operator-facing output; its items belong together because they all depend on the same rendering surface: live status updates, cleaner TUI chrome, and readable plain-mode output.
-
-## 5 — Live status panel
-
-"Re-render on an interval" is the cheap framing. Accurate live status needs an event-driven adapter lifecycle and a stable render path.
-
-> Current observation: when audit v2 is running, the panel only shows step 1 — as if not updating, not refreshing, or later updates aren't visible.
-
-**Root cause:** the panel is rendered once before each spawn, then a static spinner runs for the whole spawn. v2 is appended to history only after it completes, so during the run the table shows only v1. `console.clear` reprints also flicker and discard scrollback.
-
-**Fix:**
-
-- Ship this incrementally. First establish a stable render region and clean renderer boundary on top of the output abstraction; only then add richer lifecycle/progress updates.
-- Expose a small, provider-agnostic lifecycle model (`started`, `message`, `completed`, `failed`) and map provider-specific output into it only where the signal is trustworthy. Avoid inventing fake precision just to make the panel feel busy.
-- Add richer per-adapter progress parsing gradually, starting with providers that already expose structured events well. Reuse existing stream parsing where appropriate rather than forcing every adapter into the same richness level on day one.
-- Disambiguate iteration, version, and step index in the UI model before adding more live behavior.
-
-**Effort:** L.
-
----
-
-## 23 — TUI border simplification
-
-Goal: reduce unnecessary visual density in the panel so the terminal UI uses less width and is easier to scan.
-
-> Current observation: the current panel uses layered borders and a table-heavy presentation that consumes space without adding much information value.
+> Current observation: architecture guidance is split across multiple documents, and some references still point at `docs/dev/plan.md` even though that file is no longer a stable canonical target.
 
 **Focus:**
 
-- Remove unnecessary table borders and grid lines.
-- Re-evaluate whether the outer panel border needs a separate visual treatment from the timeline.
-- If borders remain, use stable color/state signaling that helps distinguish stages directly from the chrome.
+- Make [docs/architecture/overview.md](/Users/lukasz/softDev-temp/orc-smash/docs/architecture/overview.md) the canonical architecture reference.
+- Reduce duplicated architecture prose in [README.md](/Users/lukasz/softDev-temp/orc-smash/README.md), [AGENTS.md](/Users/lukasz/softDev-temp/orc-smash/AGENTS.md), and other supporting docs where the same rules are repeated.
+- Fix or remove stale references to `docs/dev/plan.md` and any other outdated roadmap-era anchors.
+- Do one final wording-alignment pass only after the remaining runtime and rendering items are finished, so this cleanup does not need to be repeated.
 
 **Effort:** S.
-
----
-
-## 24 — Plain mode multiline readability
-
-Goal: make `--plain` output readable in narrow terminals and mobile terminal apps instead of collapsing state into dense one-line records.
-
-> Current observation: the current plain renderer is scrollback-safe, but it compresses too much panel and timeline state into single lines.
-
-**Focus:**
-
-- Emit loop, iteration, active runner, and next-step fields on separate lines.
-- Render timeline entries as stacked records rather than comma-dense summaries.
-- Let long values such as model names wrap naturally.
-- Prefer clear visual separators between records.
-
-**Effort:** S–M.
-
----
-
-## Batch 6 notes
-
-Status: proposed. This batch focuses on identifying and hardening execution integration points for `agy` and `codex` CLIs, preventing infinite hangs on connection/stdin issues, and enforcing follow-up artifact validation.
-
-## 36 — Agent CLI connection hanging and follow-up validation gaps
-
-Goal: Prevent loops from hanging indefinitely due to external CLI issues and prevent the loop from silently proceeding when a follow-up step produces no output file.
-
-**Findings:**
-- **External CLI Hanging:** 
-  - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
-  - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
-- **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in [orc.config.yaml](file:///Users/lukasz/softDev-temp/orc-smash/orc.config.yaml), the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
-- **Follow-up Validation Gap:** In [loop.ts](file:///Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628-L632), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
-
-**Fix:**
-- Enable a default/fallback watchdog timeout for all config-only agents (or ensure the harness warns about `0` timeout limits).
-- Modify [spawnAgentProcess](file:///Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts#L262-L331) to explicitly handle piped stdin situations by closing stdin or redirecting to avoid hangs.
-- Add a validator in the loop orchestration to assert that the follow-up report file was written before advancing the state machine (analogous to the implement ledger verification).
-
-**Effort:** M.
