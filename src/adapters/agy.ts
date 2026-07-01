@@ -17,6 +17,7 @@ import { spawnAgentProcess, resolveAgyTimeoutMs, type ProcessRunner } from './ut
  * the auth-failure artifact cleanup (quarantine of the resolved `absOutputPath`).
  */
 export const AGY_AUTH_FAILURE_PATTERNS: RegExp[] = [
+  /\bauthentication failed\b/i,
   /\b401\b/i,
   /\bunauthori[sz]ed\b/i,
   /\bauthentication required\b/i,
@@ -24,28 +25,46 @@ export const AGY_AUTH_FAILURE_PATTERNS: RegExp[] = [
   /\bmissing credentials?\b/i
 ];
 
-/** 
- * Returns true when the agy output matches a bounded auth-failure phrase.
- * Weight detection toward stderr for generic tokens (401, unauthorized) to avoid
- * false positives from generated code or comments in stdout.
- */
-export function isAgyAuthFailure(stdout: string, stderr?: string): boolean {
-  // If only one argument is provided (e.g. in some pattern-matching unit tests), check all patterns on it
-  if (stderr === undefined) {
-    return AGY_AUTH_FAILURE_PATTERNS.some((re) => re.test(stdout));
-  }
+const AGY_AUTH_BANNER = /^\s*(?:WARNING:\s*)?Error:\s*authentication failed\b/i;
 
-  // Weight detection toward stderr: check all patterns on stderr
-  if (AGY_AUTH_FAILURE_PATTERNS.some((re) => re.test(stderr))) {
+const STRONG_AUTH_PATTERNS = [
+  /\bauthentication required\b/i,
+  /\binvalid api[_ -]?key\b/i,
+  /\bmissing credentials?\b/i
+];
+
+const GENERIC_AUTH_PATTERNS = [
+  /\b401\b/i,
+  /\bunauthori[sz]ed\b/i
+];
+
+function stripFencedCode(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, '');
+}
+
+/**
+ * Returns true when the agy output matches a bounded auth-failure phrase.
+ *
+ * Checks for the real unauthenticated banner shape on stdout/stderr, and keeps
+ * generic-token (401/unauthorized) handling stderr-only so stdout prose/code
+ * cannot trip auth cleanup.
+ */
+export function isAgyAuthFailure(stdout: string, stderr: string): boolean {
+  const cleanStdout = stripFencedCode(stdout);
+  const cleanStderr = stripFencedCode(stderr);
+
+  // 1. Check for the real banner shape on stdout or stderr.
+  if (AGY_AUTH_BANNER.test(cleanStdout) || AGY_AUTH_BANNER.test(cleanStderr)) {
     return true;
   }
 
-  // Check stdout only for specific, non-generic auth patterns
-  const specificPatterns = AGY_AUTH_FAILURE_PATTERNS.filter((re) => {
-    const src = re.source;
-    return !src.includes('401') && !src.includes('unauthori');
-  });
-  if (specificPatterns.some((re) => re.test(stdout))) {
+  // 2. Check for strong non-generic auth patterns on stdout or stderr.
+  if (STRONG_AUTH_PATTERNS.some((re) => re.test(cleanStdout) || re.test(cleanStderr))) {
+    return true;
+  }
+
+  // 3. Generic tokens stay stderr-only.
+  if (GENERIC_AUTH_PATTERNS.some((re) => re.test(cleanStderr))) {
     return true;
   }
 
@@ -103,7 +122,7 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
           const err: RunError = {
             kind: 'auth',
             message:
-              'Antigravity (agy) authentication failed: re-authenticate (e.g. `agy login`) and retry. agy may otherwise fall back to an unconfigured provider while exiting successfully.'
+              'Authentication failed: re-authenticate (e.g. `agy login`) and retry. agy may otherwise fall back to an unconfigured provider while exiting successfully.'
           };
           return { ...result, error: err };
         }
