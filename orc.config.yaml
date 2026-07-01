@@ -24,8 +24,8 @@ defaults:
   model: opencode-go/deepseek-v4-flash
 
 timeouts:
-  opencode: 0  # watchdog timeout in ms (0 disables). opencode also honors OPENCODE_RUN_TIMEOUT_MS (env > config > built-in).
   # claude / codex / agy are config-only (config > built-in 0; no env vars).
   claude: 0
   codex: 0
   agy: 0
+
