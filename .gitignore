@@ -32,6 +32,8 @@ coverage/
 # Local docs / scratch
 /docs/dev
 /temp-debug
+/temp-agy-real-contract
+.orc-smash/
 
 # OS files
 .ds_store

@@ -190,7 +190,8 @@ describe('Real-provider agy contract (AGY_CONTRACT=1)', () => {
   it.runIf(process.env['AGY_CONTRACT'] === '1')('exercises real agy spawn: writes artifact, lifecycle started→completed, APPROVED', async () => {
     const model = process.env['AGY_DEFAULT_MODEL'] || 'Gemini 3.5 Flash (Medium)';
     const outputPath = 'docs/dev/plan-audit-v1-agy.md';
-    const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
+    const filePath = join(tempDir, outputPath);
+    const prompt = `Write exactly the following content to the file "${filePath}" and nothing else:\n## Verdict\nAPPROVED\n`;
     const lifecycleEvents: LifecycleEvent[] = [];
 
     const adapter = createAgyAdapter();
@@ -205,11 +206,33 @@ describe('Real-provider agy contract (AGY_CONTRACT=1)', () => {
 
     expect(result.error).toBeUndefined();
     expect(result.exitCode).toBe(0);
-    const filePath = join(tempDir, outputPath);
     expect(existsSync(filePath)).toBe(true);
     expect(parseVerdict(readFileSync(filePath, 'utf-8'))).toBe('APPROVED');
     expect(lifecycleEvents[0]?.type).toBe('started');
     expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
+  }, 60000);
+
+  it.runIf(process.env['AGY_CONTRACT'] === '1')('real agy run in an unauthenticated environment returns error.kind "auth"', async () => {
+    const model = process.env['AGY_DEFAULT_MODEL'] || 'Gemini 3.5 Flash (Medium)';
+    const originalHome = process.env['HOME'];
+    const dummyHome = join(tempDir, 'dummy-home');
+    mkdirSync(dummyHome, { recursive: true });
+    process.env['HOME'] = dummyHome;
+    try {
+      const adapter = createAgyAdapter();
+      const result = await adapter.run({
+        prompt: 'hello',
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1
+      });
+      expect(result.error?.kind).toBe('auth');
+      expect(result.error?.message).toMatch(/authentication failed/i);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/Error:\s*authentication failed or timed out/i);
+    } finally {
+      process.env['HOME'] = originalHome;
+    }
   }, 60000);
 
   it.runIf(process.env['AGY_CONTRACT'] === '1')('real agy run with a tiny configured timeout fails as error.kind timeout', async () => {

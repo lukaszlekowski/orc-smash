@@ -41,29 +41,51 @@ describe('agy adapter — command construction (no CLI timeout flag)', () => {
 });
 
 describe('agy auth-failure detection (bounded, provider-specific)', () => {
-  it('detects each bounded auth-failure phrase over combined stdout+stderr', () => {
-    expect(isAgyAuthFailure('Error: 401 Unauthorized')).toBe(true);
-    expect(isAgyAuthFailure('response status: 401')).toBe(true);
-    expect(isAgyAuthFailure('unauthorised access')).toBe(true);
-    expect(isAgyAuthFailure('unauthorized: token expired')).toBe(true);
-    expect(isAgyAuthFailure('Authentication required')).toBe(true);
-    expect(isAgyAuthFailure('invalid api key')).toBe(true);
-    expect(isAgyAuthFailure('invalid api-key')).toBe(true);
-    expect(isAgyAuthFailure('invalid api_key')).toBe(true);
-    expect(isAgyAuthFailure('missing credential')).toBe(true);
-    expect(isAgyAuthFailure('missing credentials')).toBe(true);
+  it('detects the real auth-failure banner on either stream', () => {
+    expect(isAgyAuthFailure('Error: authentication failed or timed out', '')).toBe(true);
+    expect(isAgyAuthFailure('', 'Error: authentication failed or timed out')).toBe(true);
+  });
+
+  it('detects the generic auth tokens only when they appear on stderr', () => {
+    expect(isAgyAuthFailure('', 'Error: 401 Unauthorized')).toBe(true);
+    expect(isAgyAuthFailure('', 'response status: 401')).toBe(true);
+    expect(isAgyAuthFailure('', 'unauthorised access')).toBe(true);
+    expect(isAgyAuthFailure('', 'unauthorized: token expired')).toBe(true);
+  });
+
+  it('detects the strong auth phrases on either stream', () => {
+    expect(isAgyAuthFailure('Authentication required', '')).toBe(true);
+    expect(isAgyAuthFailure('invalid api key', '')).toBe(true);
+    expect(isAgyAuthFailure('invalid api-key', '')).toBe(true);
+    expect(isAgyAuthFailure('invalid api_key', '')).toBe(true);
+    expect(isAgyAuthFailure('missing credential', '')).toBe(true);
+    expect(isAgyAuthFailure('missing credentials', '')).toBe(true);
+    expect(isAgyAuthFailure('', 'Authentication required')).toBe(true);
+    expect(isAgyAuthFailure('', 'invalid api key')).toBe(true);
+    expect(isAgyAuthFailure('', 'missing credentials')).toBe(true);
+  });
+
+  it('does NOT classify auth-looking stdout as auth failure on the generic-token path', () => {
+    expect(isAgyAuthFailure('Error: 401 Unauthorized', '')).toBe(false);
+    expect(isAgyAuthFailure('response status: 401', '')).toBe(false);
+    expect(isAgyAuthFailure('unauthorised access', '')).toBe(false);
+    expect(isAgyAuthFailure('unauthorized: token expired', '')).toBe(false);
   });
 
   it('does NOT classify benign auth-substring output as auth failure (no false positives)', () => {
-    expect(isAgyAuthFailure('The author of this module')).toBe(false);
-    expect(isAgyAuthFailure('certificate authority verified')).toBe(false);
-    expect(isAgyAuthFailure('authentication succeeded')).toBe(false);
-    expect(isAgyAuthFailure('')).toBe(false);
+    expect(isAgyAuthFailure('The author of this module', '')).toBe(false);
+    expect(isAgyAuthFailure('certificate authority verified', '')).toBe(false);
+    expect(isAgyAuthFailure('authentication succeeded', '')).toBe(false);
+    expect(isAgyAuthFailure('The generated code returns 401 or handles unauthorized requests.', '')).toBe(false);
+    expect(isAgyAuthFailure('page 401 not found', '')).toBe(false);
+    expect(isAgyAuthFailure('unauthorized use is logged', '')).toBe(false);
+    expect(isAgyAuthFailure("if (resp.status === 401) throw new Error('unauthorized');", '')).toBe(false);
+    expect(isAgyAuthFailure('', '')).toBe(false);
   });
 
   it('the pattern list is case-insensitive and whole-token bounded', () => {
     // Whole-token: "4012" must NOT match \b401\b.
-    expect(isAgyAuthFailure('status 4012 ok')).toBe(false);
+    expect(isAgyAuthFailure('status 4012 ok', '')).toBe(false);
     expect(AGY_AUTH_FAILURE_PATTERNS.length).toBeGreaterThanOrEqual(5);
   });
 });
@@ -76,8 +98,20 @@ describe('agy adapter — auth detection owns detection only (no filesystem muta
     expect(result.error?.message).toMatch(/authentication failed/i);
   });
 
-  it('does NOT return error.kind "auth" when generic phrases like "401" or "unauthorized" appear only in stdout', async () => {
-    const adapter = createAgyAdapter({ processRunner: runnerOf({ stdout: 'The generated code returns 401 or handles unauthorized requests.' }) });
+  it('returns error.kind "auth" when the real authentication failure banner appears in stdout', async () => {
+    const adapter = createAgyAdapter({
+      processRunner: runnerOf({ stdout: 'Error: authentication failed or timed out' })
+    });
+    const result = await adapter.run({ ...baseInput, skillId: 'plan-audit', version: 1 });
+    expect(result.error?.kind).toBe('auth');
+  });
+
+  it('does NOT return error.kind "auth" when generic phrases like "401" or "unauthorized" appear in stdout (prose or code)', async () => {
+    const adapter = createAgyAdapter({
+      processRunner: runnerOf({
+        stdout: "Some logs\nif (resp.status === 401) throw new Error('unauthorized');\nPage 401 not found\nAll succeeded."
+      })
+    });
     const result = await adapter.run({ ...baseInput, skillId: 'plan-audit', version: 1 });
     expect(result.error).toBeUndefined();
   });
