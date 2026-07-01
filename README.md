@@ -80,17 +80,19 @@ pnpm typecheck
 pnpm test                                       # run deterministic unit/e2e tests locally
 ```
 
-In contrast, **real-provider verification** remains a separate sign-off requirement before releases. Real-provider checks are env-gated and must be executed manually or on a dedicated runner:
+In contrast, **real-provider verification** remains a separate sign-off requirement before releases. The contract-gated providers use env-gated suites, while `agy` is verified manually from an already-authenticated shell because its login flow is browser-interactive:
 
 ```bash
 OPENCODE_CONTRACT=1 CODEX_CONTRACT=1 \
-  CLAUDE_CONTRACT=1 AGY_CONTRACT=1 \
-  AGY_DEFAULT_MODEL="Gemini 3.5 Flash (Medium)" pnpm test   # env-gated contract tests
+  CLAUDE_CONTRACT=1 pnpm test   # env-gated contract tests
+
+agy -p "return hi" --model "Gemini 3.5 Flash (Medium)" --dangerously-skip-permissions
 ```
 
 The repo-local e2e (`tests/e2e/smash.test.ts` via the `fake` adapter) covers every exit branch,
-mixed-runner loops, and dual-target isolation without external credentials or network. **Each
-real provider path** is proven by its own env-gated contract test — none is optional.
+mixed-runner loops, and dual-target isolation without external credentials or network. `opencode`,
+`codex`, and `claude` remain contract-gated; `agy` is covered by deterministic contracts plus
+manual operator verification.
 
 ## Project layout
 

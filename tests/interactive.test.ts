@@ -130,7 +130,7 @@ describe('Interactive registry selection', () => {
   it('selecting agy re-defaults to providers.agy[0] and does not mutate global defaults', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
-      agy: ['Gemini 3.5 Flash (Medium)', 'Gemini 3.5 Pro (Medium)']
+      agy: ['Gemini 3.5 Flash (Medium)', 'Claude Sonnet 4.6 (Thinking)']
     }, { agent: 'opencode', model: 'opencode-model' });
 
     const prodRegistry = createProductionAdapterRegistry(); // now includes agy
@@ -147,7 +147,7 @@ describe('Interactive registry selection', () => {
   it('agy model choices come from providers.agy (foreign models are not offered)', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
-      agy: ['Gemini 3.5 Flash (Medium)']
+      agy: ['Gemini 3.5 Flash (Medium)', 'GPT-OSS 120B (Medium)']
     }, { agent: 'opencode', model: 'opencode-model' });
     const prodRegistry = createProductionAdapterRegistry();
 
@@ -161,6 +161,7 @@ describe('Interactive registry selection', () => {
     const modelSelectArgs = vi.mocked(select).mock.calls[1]![0] as any;
     const modelChoices = modelSelectArgs.choices.map((c: any) => c.value);
     expect(modelChoices).toContain('Gemini 3.5 Flash (Medium)');
+    expect(modelChoices).toContain('GPT-OSS 120B (Medium)');
     expect(modelChoices).not.toContain('gpt-5.5');
   });
 

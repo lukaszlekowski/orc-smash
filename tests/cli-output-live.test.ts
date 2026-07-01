@@ -72,8 +72,8 @@ describe('createPanelCliOutput — live region seam', () => {
     (process.stdout as any).isTTY = originalIsTTY;
   });
 
-  it('PANEL_RENDER_INTERVAL_MS is 3000ms', () => {
-    expect(PANEL_RENDER_INTERVAL_MS).toBe(3000);
+  it('PANEL_RENDER_INTERVAL_MS is 1000ms', () => {
+    expect(PANEL_RENDER_INTERVAL_MS).toBe(1000);
   });
 
   it('attachLiveRegion starts an interval that calls renderStatusPanel on each tick', () => {

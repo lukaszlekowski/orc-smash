@@ -8,7 +8,7 @@ import type { StepKind } from './provenance.js';
 const ENTER_ALT_SCREEN = '\u001B[?1049h';
 const EXIT_ALT_SCREEN = '\u001B[?1049l';
 const CURSOR_HOME_CLEAR = '\u001B[H\u001B[2J';
-export const PANEL_RENDER_INTERVAL_MS = 3000;
+export const PANEL_RENDER_INTERVAL_MS = 1000;
 
 export interface CliOutput {
   note(message: string): void;

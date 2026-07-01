@@ -113,9 +113,11 @@ itself.
   contradict an un-approved plan. Keep audit-response bookkeeping in versioned audit artifacts,
   not in the plan body.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
-  **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). **Each
-  real provider path** (opencode, codex, claude, agy) is gated by its own env-gated contract test
-  — approval requires all of them. `codex`/`claude`/`agy` watchdog timeouts and `agy` auth-failure
-  cleanup are also proven by deterministic seam tests plus a loop-level contract.
+  **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The
+  contract-gated real provider paths are `opencode`, `codex`, and `claude`; `agy` remains a real
+  adapter but is verified through deterministic seam coverage plus manual operator verification from
+  an already-authenticated shell because its browser login flow is not suitable for an automated
+  contract gate. `codex`/`claude`/`agy` watchdog timeouts and `agy` auth-failure cleanup are also
+  proven by deterministic seam tests plus a loop-level contract.
 - A GitHub Actions CI workflow runs typecheck and deterministic tests on push and pull requests,
   while real-provider verification remains an env-gated/manual release sign-off requirement.

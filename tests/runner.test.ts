@@ -18,7 +18,13 @@ describe('Runner selection and verification', () => {
         ],
         agy: [
           'Gemini 3.5 Flash (Medium)',
-          'Gemini 3.5 Pro (Medium)'
+          'Gemini 3.5 Flash (High)',
+          'Gemini 3.5 Flash (Low)',
+          'Gemini 3.1 Pro (Low)',
+          'Gemini 3.1 Pro (High)',
+          'Claude Sonnet 4.6 (Thinking)',
+          'Claude Opus 4.6 (Thinking)',
+          'GPT-OSS 120B (Medium)'
         ],
         fake: [
           'fake-model'
@@ -82,7 +88,9 @@ describe('Runner selection and verification', () => {
   // ---------------------------------------------------------------------
   it('agy accepts only configured providers.agy names (strict allow-list)', () => {
     expect(isValidModelForAgent('agy', 'Gemini 3.5 Flash (Medium)', dummyConfig.registry)).toBe(true);
-    expect(isValidModelForAgent('agy', 'Gemini 3.5 Pro (Medium)', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', 'Gemini 3.1 Pro (High)', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', 'Claude Sonnet 4.6 (Thinking)', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', 'GPT-OSS 120B (Medium)', dummyConfig.registry)).toBe(true);
     // Input trimming normalizes surrounding whitespace.
     expect(isValidModelForAgent('agy', '  Gemini 3.5 Flash (Medium)  ', dummyConfig.registry)).toBe(true);
   });
