@@ -1,6 +1,20 @@
 import type { Step, StepKind, StepStatus } from './state.js';
 import type { NextStepDecision } from './next-step.js';
 
+/**
+ * Format a millisecond duration as the compact `Xm Ys` / `Xs` form used in the
+ * status panel and plain timeline. Returns `—` when the duration is unknown
+ * (e.g. artifacts written before per-step timing existed, or interrupted steps).
+ */
+export function formatDurationMs(ms: number | undefined | null): string {
+  if (ms === undefined || ms === null || !Number.isFinite(ms)) return '—';
+  const totalSecs = Math.max(0, Math.floor(ms / 1000));
+  if (totalSecs >= 60) {
+    return `${Math.floor(totalSecs / 60)}m ${totalSecs % 60}s`;
+  }
+  return `${totalSecs}s`;
+}
+
 export interface PanelContext {
   projectRoot: string;
   loopName: string;

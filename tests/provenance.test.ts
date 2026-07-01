@@ -77,4 +77,38 @@ Auditor: codex-gpt-5
     expect(parsed.version).toBe(3);
     expect(parsed.model).toBe('unknown');
   });
+
+  it('round-trips durationMs through front matter (per-step agent runtime)', () => {
+    const meta = makeArtifactMeta({ version: 2, agent: 'codex', durationMs: 125000 });
+    const body = '# Title\nSome content here.';
+
+    writeArtifactWithMeta(tempFile, body, meta);
+    const written = readFileSync(tempFile, 'utf-8');
+    expect(written).toContain('durationMs: 125000');
+
+    const parsed = parseArtifactMeta(written, { agent: 'fake', version: 99 });
+    expect(parsed.durationMs).toBe(125000);
+  });
+
+  it('reports durationMs as undefined when front matter omits it (pre-timing artifacts)', () => {
+    const body = [
+      '---',
+      'loop: plan',
+      'skill: plan-audit',
+      'kind: audit',
+      'role: auditor',
+      'version: 1',
+      'agent: fake',
+      'model: fake-model',
+      'target: docs/dev/plan.md',
+      'priorAudit: none',
+      'timestamp: 2026-06-26T20:00:00.000Z',
+      '---',
+      '',
+      '# Body'
+    ].join('\n');
+
+    const parsed = parseArtifactMeta(body, { agent: 'fake', version: 1 });
+    expect(parsed.durationMs).toBeUndefined();
+  });
 });

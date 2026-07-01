@@ -44,6 +44,10 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
   return false;
 }
 
+export function normalizeModelForAgent(agent: string, model: string): string {
+  return agent === 'agy' ? model.trim() : model;
+}
+
 export function validateAgentAndModel(agent: string, model: string, registry: ModelRegistry): void {
   const allowedAgents = Object.keys(registry.providers);
   if (!allowedAgents.includes(agent)) {
@@ -63,7 +67,10 @@ export function resolveRunner(
   // 1. Interactive override
   if (interactiveOverride) {
     validateAgentAndModel(interactiveOverride.agent, interactiveOverride.model, config.registry);
-    return interactiveOverride;
+    return {
+      agent: interactiveOverride.agent,
+      model: normalizeModelForAgent(interactiveOverride.agent, interactiveOverride.model)
+    };
   }
 
   // 2. Global CLI overrides
@@ -74,7 +81,7 @@ export function resolveRunner(
       resolvedModel = config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
     }
     validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
-    return { agent: resolvedAgent, model: resolvedModel };
+    return { agent: resolvedAgent, model: normalizeModelForAgent(resolvedAgent, resolvedModel) };
   }
 
   // 3. Manifest default
@@ -83,7 +90,7 @@ export function resolveRunner(
     const agent = skill.agent;
     const model = skill.model;
     validateAgentAndModel(agent, model, config.registry);
-    return { agent, model };
+    return { agent, model: normalizeModelForAgent(agent, model) };
   }
 
   throw new Error(`Skill '${skillId}' not found in manifest, and no overrides provided.`);

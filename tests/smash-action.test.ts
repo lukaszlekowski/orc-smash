@@ -352,6 +352,34 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     expect(existsSync(join(tempDir, '.orc-smash/interrupted.json'))).toBe(false);
   });
 
+  it('a partial review audit + marker is quarantined before state resolution, so smash is NOT blocked by "unparseable"', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/review-v2-fake.md'), 'PARTIAL GARBAGE NO VERDICT');
+    writeInterruptedMarker(tempDir, {
+      loop: 'review',
+      kind: 'audit',
+      version: 2,
+      agent: 'fake',
+      model: 'fake-model',
+      skillId: 'review',
+      interruptedAtMs: 750
+    });
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'review',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(0);
+    expect(lastErrorMessage).not.toMatch(/unparseable/);
+    expect(existsSync(join(tempDir, 'docs/dev/review-v2-fake.md'))).toBe(false);
+    expect(existsSync(join(tempDir, 'docs/dev/archived'))).toBe(true);
+    expect(existsSync(join(tempDir, '.orc-smash/interrupted.json'))).toBe(false);
+  });
+
   it('a partial implement artifact + marker is quarantined before resolveImplementFacts, so the next default is implement (not review)', async () => {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
     // Approved plan audit.

@@ -32,6 +32,7 @@ export interface Step {
   outcome?: FollowUpOutcome;    // follow-up steps only
   artifactPath: string;               // absolute path to the artifact file
   mtime: number;
+  durationMs?: number;                // agent wall-clock runtime (status display); undefined when unknown
 }
 
 export interface ScanResult {
@@ -99,7 +100,8 @@ export function scan(
         status: 'done',
         verdict: parseVerdict(content),
         artifactPath: file,
-        mtime: stat.mtimeMs
+        mtime: stat.mtimeMs,
+        durationMs: meta.durationMs
       });
     } else {
       timeline.push({
@@ -111,7 +113,8 @@ export function scan(
         status: 'done',
         outcome: parseFollowUpOutcome(content),
         artifactPath: file,
-        mtime: stat.mtimeMs
+        mtime: stat.mtimeMs,
+        durationMs: meta.durationMs
       });
     }
   }

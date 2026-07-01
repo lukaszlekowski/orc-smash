@@ -306,3 +306,19 @@ describe('renderPlainPanel — interrupted steps render the literal "interrupted
     expect(out).toContain('interrupted');
   });
 });
+
+describe('renderPlainPanel — per-step duration', () => {
+  it('formats durationMs as "time: Xm Ys" in the timeline detail line', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [makeStep({ version: 1, durationMs: 125000 })]
+    }));
+    expect(out).toContain('time: 2m 5s');
+  });
+
+  it('renders "time: —" when durationMs is unknown (old artifacts / interrupted)', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [makeStep({ version: 1 })]
+    }));
+    expect(out).toContain('time: —');
+  });
+});

@@ -103,4 +103,12 @@ describe('Runner selection and verification', () => {
     expect(dummyConfig.registry.defaults.agent).toBe('opencode');
     expect(dummyConfig.registry.defaults.model).toBe('opencode-go/deepseek-v4-flash');
   });
+
+  it('trims whitespace when resolving agy models from CLI overrides', () => {
+    const resolved = resolveRunner('plan-audit', dummyConfig, {
+      agent: 'agy',
+      model: '  Gemini 3.5 Flash (Medium)  '
+    });
+    expect(resolved).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
+  });
 });

@@ -119,7 +119,7 @@ export async function promptRunners(
     });
 
     if (selectedModel === 'custom') {
-      selectedModel = await input({
+      selectedModel = (await input({
         message: `Enter custom model for agent '${agent}' (skill '${skillId}'):`,
         validate: (val) => {
           if (!isValidModelForAgent(agent, val, config.registry)) {
@@ -127,7 +127,7 @@ export async function promptRunners(
           }
           return true;
         }
-      });
+      })).trim();
     }
 
     runners[skillId] = { agent, model: selectedModel };
@@ -208,7 +208,7 @@ export async function promptSecondOpinionRunner(
   });
 
   if (selectedModel === 'custom') {
-    selectedModel = await input({
+    selectedModel = (await input({
       message: `Enter custom model for agent '${agent}':`,
       validate: (val) => {
         if (!isValidModelForAgent(agent, val, config.registry)) {
@@ -216,7 +216,7 @@ export async function promptSecondOpinionRunner(
         }
         return true;
       }
-    });
+    })).trim();
   }
 
   return { agent, model: selectedModel };

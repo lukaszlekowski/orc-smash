@@ -1,4 +1,4 @@
-import type { PanelContext } from './status.js';
+import { formatDurationMs, type PanelContext } from './status.js';
 import { roleAccent, statusAccent, kindAccent } from './status-accent.js';
 
 export function resolveTerminalWidth(): number {
@@ -103,7 +103,7 @@ export function renderPlainPanel(context: PanelContext): string {
       }
 
       const statusAcc = statusAccent(s.status);
-      const detailLine = `   ${timestamp}  result: ${resultText}   status: ${statusAcc.label}`;
+      const detailLine = `   ${timestamp}  result: ${resultText}   time: ${formatDurationMs(s.durationMs)}   status: ${statusAcc.label}`;
       lines.push(detailLine);
 
       if (i < context.timeline.length - 1) {
