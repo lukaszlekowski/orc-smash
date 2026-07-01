@@ -174,9 +174,10 @@ describe('Interactive registry selection', () => {
     vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
     vi.mocked(select).mockResolvedValueOnce('agy'); // choose agent
     vi.mocked(select).mockResolvedValueOnce('custom'); // choose custom model
-    vi.mocked(input).mockResolvedValueOnce('Gemini 3.5 Flash (Medium)');
+    vi.mocked(input).mockResolvedValueOnce('  Gemini 3.5 Flash (Medium)  ');
 
-    await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
+    const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
+    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
 
     // The input prompt carried the validate callback; drive it directly to prove
     // the custom-model path enforces the providers.agy allow-list.

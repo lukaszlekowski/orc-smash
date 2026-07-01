@@ -1,7 +1,7 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
 import chalk from 'chalk';
-import type { PanelContext } from './status.js';
+import { formatDurationMs, type PanelContext } from './status.js';
 import { roleAccent, statusAccent, panelBorderColor, inFlightRole } from './status-accent.js';
 
 export function renderStatusPanel(context: PanelContext): string {
@@ -52,13 +52,10 @@ export function renderStatusPanel(context: PanelContext): string {
 function renderInFlightSection(context: PanelContext): string | null {
   if (!context.inFlight) return null;
 
-  // Elapsed since the spawn started; per the plan, the renderer reads the
-  // closed-over `startedAtMs` at paint time so the displayed elapsed grows
-  // monotonically across 200ms ticks.
-  const elapsedSecs = Math.max(0, Math.floor((Date.now() - context.inFlight.startedAtMs) / 1000));
-  const elapsedStr = elapsedSecs >= 60
-    ? `${Math.floor(elapsedSecs / 60)}m ${elapsedSecs % 60}s`
-    : `${elapsedSecs}s`;
+  // Elapsed since the spawn started; the renderer reads the closed-over
+  // `startedAtMs` at paint time so the displayed elapsed grows monotonically
+  // across 200ms ticks.
+  const elapsedStr = formatDurationMs(Date.now() - context.inFlight.startedAtMs);
 
   const detailLines = [
     `${chalk.bold('Active Step:')} ${chalk.gray(`(elapsed ${elapsedStr})`)}`,
@@ -121,6 +118,7 @@ function renderTimelineSection(context: PanelContext): string {
       s.agent,
       s.model,
       resultStr,
+      chalk.gray(formatDurationMs(s.durationMs)),
       statusStr
     ];
   });
@@ -134,6 +132,7 @@ function renderTimelineSection(context: PanelContext): string {
       context.inFlight.agent,
       context.inFlight.model,
       '\u2014',
+      chalk.gray(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
       statusAcc.chalk(statusAcc.label)
     ]);
   }
@@ -143,7 +142,7 @@ function renderTimelineSection(context: PanelContext): string {
   }
 
   const table = new Table({
-    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Status'],
+    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Time', 'Status'],
     style: { head: ['cyan'], border: [] },
     chars: {
       top: '', 'top-mid': '', 'top-left': '', 'top-right': '',

@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scan, resolveImplementFacts, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
-import { validateAgentAndModel } from '../runner.js';
+import { validateAgentAndModel, normalizeModelForAgent } from '../runner.js';
 import { resolveNextStep, allowedStartPoint } from '../next-step.js';
 import {
   promptLoopSelect,
@@ -226,7 +226,10 @@ async function resolveSmashRunSetup(
         return { errorResult: { exitCode: 1, message: msg } };
       }
 
-      runners[skillId] = { agent: resolvedAgent, model: resolvedModel };
+      runners[skillId] = {
+        agent: resolvedAgent,
+        model: normalizeModelForAgent(resolvedAgent, resolvedModel)
+      };
     }
   }
 

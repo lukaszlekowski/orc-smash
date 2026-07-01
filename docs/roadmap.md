@@ -22,6 +22,10 @@ Current pending work, grouped into recommended implementation batches.
 - [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error**
 - [ ] **14 — docs canonicalization + broken plan reference fix**
 
+**Batch 6 — CLI Integration and Timeout Hardening**
+
+- [ ] **36 — Agent CLI connection hanging and follow-up validation gaps**
+
 ## Detailed checklist
 
 Open work is listed below, with recently completed milestones retained where their outcome still provides context for the remaining batches.
@@ -56,6 +60,10 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 - [ ] **33 — Follow-up artifacts carry duplicate front-matter blocks.** Follow-up docs (`review-followup-vN-*`, `plan-followup-vN-*`) end up with two YAML front-matter blocks: the agent writes its own and the harness prepends a second via `writeArtifactWithMeta` (`src/provenance.ts`) without stripping the first, because the follow-up skills lack the "harness owns metadata" note the audit skills carry. Strip any existing leading block before stamping (and/or mirror the audit-skill instruction) and add a one-block-per-artifact regression test.
 - [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error.** A real `claude` implementation wrote [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md) with both required tables and `State overall confidence: 0.96`, yet the harness still terminated with the generic "missing evidence table / requirement coverage table / confidence declaration" message. The real mismatch is stricter: `src/implement-ledger.ts` currently requires every `Result` / `Status` cell in the required tables to match the passing-status allow-list, and this ledger contains non-passing rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate`. Decide one explicit contract for pending release-gate items, improve the runtime error in `src/loop.ts` so it reports the true failure reason, and add regression coverage for this exact ledger shape.
 - [ ] **14 — Docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runner/model, loop, and rendering changes have landed so the docs only need one final alignment pass. Intentionally sequenced last in this batch.
+
+**Batch 6 — CLI Integration and Timeout Hardening**
+
+- [ ] **36 — Agent CLI connection hanging and follow-up validation gaps.** Address cases where generic agent CLIs (`codex`, `agy`) hang indefinitely in certain execution environments (e.g. `codex` reading from a piped stdin, or `agy` waiting on blocked network/daemon connectivity) without completing. Under the default config where agent watchdog timeouts are disabled (`0`), these hangs block the loop indefinitely without output. Additionally, establish a validation check to ensure that the follow-up step actually writes the required report file before proceeding, preventing the loop from advancing silently without producing the follow-up artifact.
 
 ---
 
@@ -347,3 +355,27 @@ Goal: make `--plain` output readable in narrow terminals and mobile terminal app
 - Prefer clear visual separators between records.
 
 **Effort:** S–M.
+
+---
+
+## Batch 6 notes
+
+Status: proposed. This batch focuses on identifying and hardening execution integration points for `agy` and `codex` CLIs, preventing infinite hangs on connection/stdin issues, and enforcing follow-up artifact validation.
+
+## 36 — Agent CLI connection hanging and follow-up validation gaps
+
+Goal: Prevent loops from hanging indefinitely due to external CLI issues and prevent the loop from silently proceeding when a follow-up step produces no output file.
+
+**Findings:**
+- **External CLI Hanging:** 
+  - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
+  - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
+- **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in [orc.config.yaml](file:///Users/lukasz/softDev-temp/orc-smash/orc.config.yaml), the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
+- **Follow-up Validation Gap:** In [loop.ts](file:///Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628-L632), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
+
+**Fix:**
+- Enable a default/fallback watchdog timeout for all config-only agents (or ensure the harness warns about `0` timeout limits).
+- Modify [spawnAgentProcess](file:///Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts#L262-L331) to explicitly handle piped stdin situations by closing stdin or redirecting to avoid hangs.
+- Add a validator in the loop orchestration to assert that the follow-up report file was written before advancing the state machine (analogous to the implement ledger verification).
+
+**Effort:** M.

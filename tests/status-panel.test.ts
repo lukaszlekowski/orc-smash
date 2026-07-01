@@ -317,4 +317,15 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
     expect(out).toContain('—'); // em dash result cell
     expect(out).not.toMatch(/unknown/i);
   });
+
+  it('renders a Time column with formatted per-step duration (Xm Ys)', () => {
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        { kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
+          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, durationMs: 65000 }
+      ]
+    }));
+    expect(out).toContain('Time');
+    expect(out).toContain('1m 5s');
+  });
 });

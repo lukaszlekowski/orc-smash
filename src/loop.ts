@@ -208,7 +208,12 @@ export async function runLoop(
         onLifecycle
       });
 
-      return result;
+      // Agent wall-clock runtime for this step, measured from the spawn start
+      // captured above. Persisted into the artifact front matter so `orc status`
+      // can show per-step duration after the fact (status-panel/plain-render).
+      const durationMs = Date.now() - startedAtMs;
+
+      return { result, durationMs };
     } finally {
       setStepCtx(null);
       if (options.output.detachLiveRegion) {
@@ -306,7 +311,7 @@ export async function runLoop(
       kind: 'implement'
     });
 
-    const result = await runAdapter(
+    const { result, durationMs } = await runAdapter(
       runner,
       prompt,
       `Spawning ${runner.agent} for implementation...`,
@@ -473,7 +478,8 @@ export async function runLoop(
       model: runner.model,
       target: loopSpec.target,
       priorAudit: priorAuditRel(projectRoot, approvedPlanAuditPath),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      durationMs
     };
     writeArtifactWithMeta(absOutputPath, ledgerContent, meta);
 
@@ -485,7 +491,8 @@ export async function runLoop(
       version: nextVersion,
       status: 'done',
       artifactPath: absOutputPath,
-      mtime: Date.now()
+      mtime: Date.now(),
+      durationMs
     });
 
     const summary = emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
@@ -551,7 +558,7 @@ export async function runLoop(
     });
   };
 
-  const buildStepMeta = (skillId: string, skill: SkillSpec, kind: StepKind, version: number, runner: Runner): ArtifactMeta => ({
+  const buildStepMeta = (skillId: string, skill: SkillSpec, kind: StepKind, version: number, runner: Runner, durationMs: number): ArtifactMeta => ({
     loop: loopName,
     skill: skillId,
     kind,
@@ -561,7 +568,8 @@ export async function runLoop(
     model: runner.model,
     target: loopSpec.target,
     priorAudit: priorAuditRel(projectRoot, latestAuditStep()?.artifactPath),
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    durationMs
   });
 
   while (iteration < options.maxIterations) {
@@ -587,7 +595,7 @@ export async function runLoop(
       );
 
       const prompt = preparePrompt(followUpSkillId, followUpSkill, followUpVersion, runner, 'follow-up');
-      const result = await runAdapter(
+      const { result, durationMs } = await runAdapter(
         runner,
         prompt,
         `Spawning ${runner.agent} for follow-up...`,
@@ -628,12 +636,12 @@ export async function runLoop(
       if (existsSync(absFollowUpPath)) {
         const body = readFileSync(absFollowUpPath, 'utf-8');
         followUpOutcome = parseFollowUpOutcome(body);
-        writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner));
+        writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs));
       }
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
         version: followUpVersion, status: 'done', outcome: followUpOutcome,
-        artifactPath: absFollowUpPath, mtime: Date.now()
+        artifactPath: absFollowUpPath, mtime: Date.now(), durationMs
       });
 
       options.output.stepSucceeded({
@@ -663,7 +671,7 @@ export async function runLoop(
     );
 
     const prompt = preparePrompt(auditSkillId, auditSkill, N, runner, 'audit');
-    const result = await runAdapter(
+    const { result, durationMs } = await runAdapter(
       runner,
       prompt,
       `Spawning ${runner.agent} for audit v${N}...`,
@@ -725,14 +733,14 @@ export async function runLoop(
 
     // Write provenance stamp to audit file
     if (fileContent !== null) {
-      writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner));
+      writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs));
     }
 
     lastAuditPath = absOutputPath;
     steps.push({
       kind: 'audit', role: auditSkill.role, agent: runner.agent, model: runner.model,
       version: N, status: 'done', verdict,
-      artifactPath: absOutputPath, mtime: Date.now()
+      artifactPath: absOutputPath, mtime: Date.now(), durationMs
     });
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
