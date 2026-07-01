@@ -42,7 +42,8 @@ describe('Status panel renderer', () => {
     expect(output).toContain('ORC SMASH STATUS PANEL');
     expect(output).toContain('/my/test/project');
     expect(output).toContain('plan');
-    expect(output).toContain('Iteration: not running');
+    expect(output).toContain('Iteration:        ');
+    expect(output).toContain('not running');
     expect(output).not.toContain('2/5');
     expect(output).not.toContain('0/5');
     expect(output).not.toContain('Iteration: 0');

@@ -18,7 +18,9 @@ export interface PanelContext {
     iteration: number;
     startedAtMs: number;
     status: StepStatus;
-    message: string;
+    spawnLabel: string;
+    toolCallCount: number;
+    progressMessage: string | null;
   } | null;
   latestVersion: number;
   readOnly: boolean;
@@ -69,4 +71,21 @@ export function assembleNextStepMessage(decision: NextStepDecision, latestVersio
     case 'unknown-latest-audit':
       return `Terminal error: latest audit is unparseable`;
   }
+}
+
+/**
+ * Interrupted-aware read-only next-step message (§3). This is the ONLY composer
+ * for interrupted display facts — no other module may synthesize user-facing
+ * interrupted copy. An interrupted state MUST NOT render the audit-only fallback
+ * messages from `assembleNextStepMessage()` (no "Ready to smash" / "Completed").
+ */
+export function assembleInterruptedMessage(loopName: string, version: number): string {
+  if (loopName === 'implement') {
+    return `Implementation v${version} was interrupted: partial ledgers are quarantined before state resolution, and a rerun resumes implementation rather than advancing to review.`;
+  }
+  if (loopName === 'review') {
+    return `Review v${version} was interrupted: a rerun resumes review after the partial artifact is quarantined.`;
+  }
+  // 'plan' (and any other doc-audit loop)
+  return `Planning v${version} was interrupted: a rerun resumes from the interrupted version after the partial artifact is quarantined.`;
 }

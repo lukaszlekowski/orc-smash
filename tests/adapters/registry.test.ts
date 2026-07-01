@@ -3,14 +3,17 @@ import { createProductionAdapterRegistry, getAdapter } from '../../src/adapters/
 import { createTestAdapterRegistry } from '../../src/adapters/testing.js';
 
 describe('Adapter Registries', () => {
-  it('production registry has opencode, codex, claude but excludes fake', () => {
+  it('production registry has opencode, codex, claude, agy but excludes fake', () => {
     const registry = createProductionAdapterRegistry();
     expect(registry.adapters.has('opencode')).toBe(true);
     expect(registry.adapters.has('codex')).toBe(true);
     expect(registry.adapters.has('claude')).toBe(true);
+    expect(registry.adapters.has('agy')).toBe(true);
     expect(registry.adapters.has('fake')).toBe(false);
 
     expect(() => getAdapter(registry, 'fake')).toThrow(/unknown agent 'fake'/);
+    // agy is selectable as a fourth real provider.
+    expect(getAdapter(registry, 'agy').name).toBe('agy');
   });
 
   it('test registry includes fake', () => {
@@ -18,6 +21,7 @@ describe('Adapter Registries', () => {
     expect(registry.adapters.has('opencode')).toBe(true);
     expect(registry.adapters.has('codex')).toBe(true);
     expect(registry.adapters.has('claude')).toBe(true);
+    expect(registry.adapters.has('agy')).toBe(true);
     expect(registry.adapters.has('fake')).toBe(true);
 
     const adapter = getAdapter(registry, 'fake');

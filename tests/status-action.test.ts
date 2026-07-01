@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { statusAction } from '../src/commands/status.js';
 import { buildFrontMatter } from '../src/provenance.js';
+import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import * as configModule from '../src/config.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
@@ -118,7 +119,8 @@ describe('statusAction command (consumes resolveNextStep)', () => {
     expect(result.exitCode).toBe(0);
 
     const written = writeSpy.mock.calls.map(c => c[0] as string).join('');
-    expect(written).toContain('Iteration: not running');
+    expect(written).toContain('Iteration:        ');
+    expect(written).toContain('not running');
     expect(written).not.toMatch(/0\/5|0 \/ 5/);
     expect(written).not.toMatch(/Iteration:\s+0\b/);
     // A distinct "Latest version: v2" label proves the artifact version is
@@ -142,8 +144,101 @@ describe('statusAction command (consumes resolveNextStep)', () => {
       latestVersion: 0,
       readOnly: true
     });
-    expect(out).toContain('Iteration: not running');
+    expect(out).toContain('Iteration:        ');
+    expect(out).toContain('not running');
     expect(out).not.toMatch(/0\/5|0 \/ 5/);
     expect(out).not.toMatch(/Iteration:\s+0\b/);
+  });
+});
+
+describe('statusAction — interrupted marker precedence + interrupted display (§3)', () => {
+  const tempDir = join(process.cwd(), 'temp-status-action-interrupted');
+
+  let renderPanelCalledWith: any = null;
+  const mockOutput = {
+    note: () => {},
+    warn: () => {},
+    error: () => {},
+    iterationStarted: () => {},
+    stepStarted: () => {},
+    stepSucceeded: () => {},
+    stepFailed: () => {},
+    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; },
+    finalSummary: () => {}
+  };
+
+  beforeEach(() => {
+    createTempDir('temp-status-action-interrupted');
+    renderPanelCalledWith = null;
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    removeTempDir(tempDir);
+    vi.restoreAllMocks();
+  });
+
+  function writeMarker(loop: string, kind: any, version: number, agent = 'codex') {
+    writeInterruptedMarker(tempDir, {
+      loop, kind, version, agent, model: 'gpt-5.4', skillId: `${loop}-audit`, interruptedAtMs: 999
+    });
+  }
+
+  function writeAudit(version: number, verdict: 'APPROVED' | 'REJECTED', agent = 'fake') {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    const meta = makeArtifactMeta({ version, agent });
+    const body = `# Plan Audit\n\n## Verdict\n\n${verdict}\n`;
+    writeFileSync(join(tempDir, `docs/dev/plan-audit-v${version}-${agent}.md`), buildFrontMatter(meta) + body);
+  }
+
+  it('selects the marker loop first: an interrupted plan marker renders as plan interrupted', async () => {
+    writeMarker('plan', 'audit', 3);
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith.loopName).toBe('plan');
+    // Interrupted-aware message (NOT the audit-only fallback).
+    expect(renderPanelCalledWith.nextStepMessage).toMatch(/Planning v3 was interrupted/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+    // The synthesized interrupted step is in the display timeline.
+    expect(renderPanelCalledWith.timeline.some((s: any) => s.status === 'interrupted')).toBe(true);
+  });
+
+  it('an interrupted review marker renders as review interrupted', async () => {
+    writeMarker('review', 'audit', 2, 'claude');
+    await statusAction({ project: tempDir, output: mockOutput });
+    expect(renderPanelCalledWith.loopName).toBe('review');
+    expect(renderPanelCalledWith.nextStepMessage).toMatch(/Review v2 was interrupted/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+  });
+
+  it('regression: an interrupted implement marker beats richer plan history (marker-first precedence)', async () => {
+    // Rich plan history on disk — the max-history heuristic would normally pick 'plan'.
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeAudit(1, 'REJECTED');
+    writeAudit(2, 'REJECTED');
+    writeAudit(3, 'APPROVED');
+    // But the marker says an implement run was interrupted.
+    writeInterruptedMarker(tempDir, {
+      loop: 'implement', kind: 'implement', version: 1, agent: 'agy',
+      model: 'Gemini 3.5 Flash (Medium)', skillId: '30-simple-implement', interruptedAtMs: 999
+    });
+
+    await statusAction({ project: tempDir, output: mockOutput });
+
+    // Marker wins: the loop selected is 'implement', NOT 'plan' (the heuristic
+    // would otherwise skip implement and pick the loop with the most audits).
+    expect(renderPanelCalledWith.loopName).toBe('implement');
+    expect(renderPanelCalledWith.nextStepMessage).toMatch(/Implementation v1 was interrupted/);
+    expect(renderPanelCalledWith.nextStepMessage).toMatch(/resumes implementation rather than advancing to review/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+  });
+
+  it('falls back to the audit-history heuristic when no marker is present', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeAudit(1, 'REJECTED');
+    await statusAction({ project: tempDir, output: mockOutput });
+    expect(renderPanelCalledWith.loopName).toBe('plan');
+    expect(renderPanelCalledWith.timeline.every((s: any) => s.status !== 'interrupted')).toBe(true);
   });
 });

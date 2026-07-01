@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { smashAction } from './commands/smash.js';
 import { statusAction } from './commands/status.js';
 import { createPanelCliOutput, createPlainCliOutput } from './cli-output.js';
+import { handleInterruptSignal } from './interrupted-artifact.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -54,3 +55,14 @@ program
   });
 
 program.parse(process.argv);
+
+// §3: delegate SIGINT/SIGTERM to the interrupt-context API. cli.ts owns no
+// mutable run context — it only forwards the signal to the runtime module that
+// does. handleInterruptSignal writes an interrupted marker for the active step
+// (if any), terminates active provider children (SIGTERM → SIGKILL), and exits
+// with the conventional signal code. No-op safe before setup / after completion.
+const onInterrupt = (signal: 'SIGINT' | 'SIGTERM'): void => {
+  void handleInterruptSignal(signal);
+};
+process.on('SIGINT', () => onInterrupt('SIGINT'));
+process.on('SIGTERM', () => onInterrupt('SIGTERM'));

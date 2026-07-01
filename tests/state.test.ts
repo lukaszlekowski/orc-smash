@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { scan, resolveApprovedPlanAuditPath, requireApprovedPlanAuditPath } from '../src/state.js';
+import { scan, resolveApprovedPlanAuditPath, requireApprovedPlanAuditPath, scanForStatus } from '../src/state.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 import { renderFollowUpOutcomeSection, parseFollowUpOutcome } from '../src/follow-up-outcome.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
+import { loadConfig } from '../src/config.js';
 
 describe('State Scanner', () => {
   const tempDir = join(process.cwd(), 'temp-state-test');
@@ -296,5 +298,82 @@ describe('State-owner approved path resolution', () => {
     expect(() => {
       requireApprovedPlanAuditPath(tempDir, patterns);
     }).toThrow(/No approved plan audit found/);
+  });
+});
+
+describe('scanForStatus — display-only interrupted scan (§3)', () => {
+  const tempDir = join(process.cwd(), 'temp-state-status-scan');
+
+  beforeEach(() => {
+    if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+  });
+  afterEach(() => {
+    if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  function manifest() {
+    return loadConfig(tempDir).manifest;
+  }
+
+  it('decision-path scan() never includes a synthetic interrupted step', () => {
+    // A partial artifact + marker exist, but scan() (the decision path) must
+    // report only filesystem facts — never a synthesized interrupted step.
+    writeFileSync(join(tempDir, 'docs/dev/plan-audit-v3-codex.md'), '# partial\n');
+    writeInterruptedMarker(tempDir, {
+      loop: 'plan', kind: 'audit', version: 3, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'plan-audit', interruptedAtMs: 123
+    });
+    const result = scan(tempDir, {
+      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md'
+    });
+    expect(result.timeline.every((s) => s.status !== 'interrupted')).toBe(true);
+  });
+
+  it('scanForStatus synthesizes the interrupted step for the matching loop', () => {
+    writeInterruptedMarker(tempDir, {
+      loop: 'plan', kind: 'audit', version: 3, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'plan-audit', interruptedAtMs: 123
+    });
+    const m = manifest();
+    const result = scanForStatus(tempDir, 'plan', m.loops['plan']!, m);
+    expect(result.interruptedStep).not.toBeNull();
+    expect(result.interruptedStep!.status).toBe('interrupted');
+    expect(result.interruptedStep!.kind).toBe('audit');
+    expect(result.timeline.some((s) => s.status === 'interrupted')).toBe(true);
+  });
+
+  it('scanForStatus suppresses the matching partial artifact row (one interrupted step, not a duplicate)', () => {
+    // Partial artifact at the marker's resolved path, plus the marker.
+    const partialPath = join(tempDir, 'docs/dev/plan-audit-v3-codex.md');
+    writeFileSync(partialPath, '# partial\n');
+    writeInterruptedMarker(tempDir, {
+      loop: 'plan', kind: 'audit', version: 3, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'plan-audit', interruptedAtMs: 123
+    });
+    const m = manifest();
+    const result = scanForStatus(tempDir, 'plan', m.loops['plan']!, m);
+    // Exactly one row for that artifact path — the interrupted step — and no
+    // duplicate 'done'/'unknown' row for the partial.
+    const rowsForPath = result.timeline.filter((s) => s.artifactPath === partialPath);
+    expect(rowsForPath).toHaveLength(1);
+    expect(rowsForPath[0]!.status).toBe('interrupted');
+  });
+
+  it('scanForStatus returns no interrupted step when the marker is for a different loop', () => {
+    writeInterruptedMarker(tempDir, {
+      loop: 'review', kind: 'audit', version: 1, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'review', interruptedAtMs: 123
+    });
+    const m = manifest();
+    const result = scanForStatus(tempDir, 'plan', m.loops['plan']!, m);
+    expect(result.interruptedStep).toBeNull();
+  });
+
+  it('scanForStatus returns no interrupted step when no marker exists', () => {
+    const m = manifest();
+    const result = scanForStatus(tempDir, 'plan', m.loops['plan']!, m);
+    expect(result.interruptedStep).toBeNull();
   });
 });

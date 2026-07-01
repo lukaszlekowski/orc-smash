@@ -11,6 +11,7 @@ import {
   promptMaxIterations
 } from '../interactive.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
+import { setActiveProjectRoot, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import type { LoopSpec } from '../manifest.js';
@@ -61,6 +62,12 @@ async function resolveSmashRunSetup(
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
+
+  // §3: register the active project root for interrupt-time marker placement,
+  // and quarantine any in-flight/late artifact left by a prior interrupted run
+  // BEFORE any decision-path scan below can hit `unknown` or advance state.
+  setActiveProjectRoot(projectRoot);
+  quarantineInterruptedResume(projectRoot, config.manifest.loops);
 
   const loopKeys = Object.keys(config.manifest.loops);
   if (loopKeys.length === 0) {
@@ -265,32 +272,38 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
   });
 
   const projectRoot = resolve(options.project);
-  const setupResult = await resolveSmashRunSetup(projectRoot, options);
-  if ('errorResult' in setupResult) {
-    return setupResult.errorResult;
-  }
-
-  const { setup } = setupResult;
-
   try {
-    const result = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
-      maxIterations: setup.maxIterations,
-      startPoint: setup.startPoint,
-      globalOverrides: setup.globalOverrides,
-      interactive: setup.isInteractive,
-      registry: setup.registry,
-      output: options.output
-    });
-
-    if (result.success) {
-      return { exitCode: 0, message: result.message };
-    } else {
-      return { exitCode: result.verdict === 'unknown' ? 1 : 0, message: result.message };
+    const setupResult = await resolveSmashRunSetup(projectRoot, options);
+    if ('errorResult' in setupResult) {
+      return setupResult.errorResult;
     }
-  } catch (err: any) {
-    const msg = `Error running loop: ${err.message}`;
-    options.output.error(msg);
-    return { exitCode: 1, message: msg };
+
+    const { setup } = setupResult;
+
+    try {
+      const result = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
+        maxIterations: setup.maxIterations,
+        startPoint: setup.startPoint,
+        globalOverrides: setup.globalOverrides,
+        interactive: setup.isInteractive,
+        registry: setup.registry,
+        output: options.output
+      });
+
+      if (result.success) {
+        return { exitCode: 0, message: result.message };
+      } else {
+        return { exitCode: result.verdict === 'unknown' ? 1 : 0, message: result.message };
+      }
+    } catch (err: any) {
+      const msg = `Error running loop: ${err.message}`;
+      options.output.error(msg);
+      return { exitCode: 1, message: msg };
+    }
+  } finally {
+    // §3: clear the active project root on completion (normal or error) so a
+    // later signal in the same process cannot write a stale interrupt marker.
+    setActiveProjectRoot(null);
   }
 }
 

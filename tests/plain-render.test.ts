@@ -254,7 +254,13 @@ describe('renderPlainPanel — plain mode is non-live (v10 audit Critical closur
     const out = renderPlainPanel(makeContext({
       inFlight: {
         kind: 'follow-up', skillId: 'plan-follow-up', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash',
-        version: 1, iteration: 1, startedAtMs: 0, status: 'running', message: 'audit v1'
+        version: 1,
+        iteration: 1,
+        startedAtMs: 0,
+        status: 'running',
+        spawnLabel: 'Spawning opencode for follow-up...',
+        toolCallCount: 0,
+        progressMessage: 'audit v1'
       },
       timeline: [
         makeStep({ kind: 'audit', role: 'auditor', version: 1, verdict: 'REJECTED' })
@@ -268,5 +274,35 @@ describe('renderPlainPanel — plain mode is non-live (v10 audit Critical closur
     const out = renderPlainPanel(makeContext({ inFlight: null, readOnly: true }));
     expect(out).not.toContain('\u2500\u2500 IN-FLIGHT');
     expect(out).not.toContain('Active Step:');
+  });
+});
+
+describe('renderPlainPanel — interrupted steps render the literal "interrupted" (§3)', () => {
+  it('renders an interrupted audit step with the "interrupted" status', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [
+        makeStep({ kind: 'audit', role: 'auditor', version: 3, status: 'interrupted', artifactPath: '/x/plan-audit-v3-codex.md' })
+      ]
+    }));
+    expect(out).toContain('interrupted');
+  });
+
+  it('renders an interrupted follow-up step with the "interrupted" status', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [
+        makeStep({ kind: 'follow-up', role: 'planner', version: 2, status: 'interrupted', artifactPath: '/x/plan-followup-v2-claude.md' })
+      ]
+    }));
+    expect(out).toContain('interrupted');
+  });
+
+  it('renders an interrupted implement step with the "interrupted" status', () => {
+    const out = renderPlainPanel(makeContext({
+      loopName: 'implement',
+      timeline: [
+        makeStep({ kind: 'implement', role: 'implementer', version: 1, status: 'interrupted', artifactPath: '/x/impl-v1-agy.md' })
+      ]
+    }));
+    expect(out).toContain('interrupted');
   });
 });

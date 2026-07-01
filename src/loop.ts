@@ -20,6 +20,7 @@ import { resolveRunner } from './runner.js';
 import { isCompleteImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { debugLoopSpawn } from './debug-spawn.js';
+import { quarantineArtifact, quarantineInterruptedResume, setStepCtx } from './interrupted-artifact.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -41,6 +42,12 @@ export async function runLoop(
   runners: Record<string, Runner>,
   options: LoopOptions
 ): Promise<LoopReturn> {
+  // §3: defensive quarantine at loop start. Quarantine any in-flight/late
+  // artifact left by a prior interrupted run (marker-based) before state
+  // resolution. No-op when no marker exists. Composite helper also covers the
+  // recursive plan→implement→review transitions (marker cleared after first run).
+  quarantineInterruptedResume(projectRoot, config.manifest.loops);
+
   const steps: Step[] = [];
 
   const priorAuditRel = (root: string, p: string | null | undefined): string =>
@@ -89,24 +96,16 @@ export async function runLoop(
   ) => {
     const startedAtMs = Date.now();
 
-    let lastMessage = '';
+    let lastProgressMessage = '';
     let toolCallCount = 0;
-
-    const composeInFlightMessage = (): string => {
-      const parts: string[] = [];
-      if (toolCallCount > 0) parts.push(`${toolCallCount} tool calls`);
-      if (lastMessage) parts.push(lastMessage);
-      return parts.length > 0
-        ? `${spawnLabel} · ${parts.join(' · ')}`
-        : spawnLabel;
-    };
 
     const onLifecycle = (e: LifecycleEvent) => {
       if (e.type === 'message') {
-        if (e.text) lastMessage = e.text;
+        if (e.text) lastProgressMessage = e.text;
         toolCallCount += e.toolCalls ?? 0;
         if (liveInFlight) {
-          liveInFlight.message = composeInFlightMessage();
+          liveInFlight.toolCallCount = toolCallCount;
+          liveInFlight.progressMessage = lastProgressMessage || null;
         }
       }
       if (e.type === 'failed') {
@@ -128,7 +127,9 @@ export async function runLoop(
       iteration: currentIteration,
       startedAtMs,
       status: 'running',
-      message: spawnLabel
+      spawnLabel,
+      toolCallCount,
+      progressMessage: null
     };
 
     if (options.output.attachLiveRegion) {
@@ -143,7 +144,9 @@ export async function runLoop(
               iteration: liveInFlight.iteration,
               startedAtMs: liveInFlight.startedAtMs,
               status: liveInFlight.status,
-              message: liveInFlight.message
+              spawnLabel: liveInFlight.spawnLabel,
+              toolCallCount: liveInFlight.toolCallCount,
+              progressMessage: liveInFlight.progressMessage
             }
           : null;
         return buildPanelContext(
@@ -184,6 +187,18 @@ export async function runLoop(
         prompt
       });
 
+      // §3: register the active step context ONLY while the provider subprocess
+      // is live, so an interrupt signal can write an accurate marker. Cleared in
+      // the finally path so a stale context never archives a completed artifact.
+      setStepCtx({
+        loop: loopName,
+        kind,
+        version,
+        agent: runner.agent,
+        model: runner.model,
+        skillId
+      });
+
       const result = await adapter.run({
         prompt,
         model: runner.model,
@@ -195,6 +210,7 @@ export async function runLoop(
 
       return result;
     } finally {
+      setStepCtx(null);
       if (options.output.detachLiveRegion) {
         options.output.detachLiveRegion();
       }
@@ -203,6 +219,20 @@ export async function runLoop(
 
   const stepFailed = (result: RunResult, acceptNonzeroExitWithVerdict: boolean): boolean =>
     Boolean(result.error) || (!acceptNonzeroExitWithVerdict && result.exitCode !== 0);
+
+  /**
+   * §2 auth-failure cleanup: when an adapter returns `error.kind === 'auth'`
+   * (today only `agy`, when unauthenticated), quarantine the step's resolved
+   * artifact so no resumable `docs/dev/*-vN-<agent>.md` file remains. The loop
+   * is the only owner that knows the resolved output path (the adapter cannot).
+   * Safe no-op when the adapter wrote no file. Applies to audit/follow-up/implement.
+   */
+  const quarantineAuthArtifact = (pattern: string | undefined, version: number, agent: string): void => {
+    if (!pattern) return;
+    const rel = renderPattern(pattern, { n: version, agent });
+    const abs = resolve(projectRoot, rel);
+    quarantineArtifact(projectRoot, abs, { reason: 'auth' });
+  };
 
   const isNonCleanCompletion = (result: RunResult): boolean =>
     result.completion === 'truncated' || result.completion === 'interrupted';
@@ -287,6 +317,9 @@ export async function runLoop(
     );
 
     if (stepFailed(result, false)) {
+      if (result.error?.kind === 'auth') {
+        quarantineAuthArtifact(loopSpec.implementPattern, nextVersion, runner.agent);
+      }
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,
@@ -565,6 +598,9 @@ export async function runLoop(
       );
 
       if (stepFailed(result, false)) {
+        if (result.error?.kind === 'auth') {
+          quarantineAuthArtifact(loopSpec.followUpPattern, followUpVersion, runner.agent);
+        }
         options.output.stepFailed({
           kind: 'follow-up',
           skillId: followUpSkillId,
@@ -638,6 +674,9 @@ export async function runLoop(
     );
 
     if (stepFailed(result, true)) {
+      if (result.error?.kind === 'auth') {
+        quarantineAuthArtifact(loopSpec.auditPattern, N, runner.agent);
+      }
       options.output.stepFailed({
         kind: 'audit',
         skillId: auditSkillId,

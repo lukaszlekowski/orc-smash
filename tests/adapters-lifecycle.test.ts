@@ -102,6 +102,48 @@ describe('spawnAgentProcess (codex/claude generic helper) — shared lifecycle c
     }, runner);
     expect(events.some(e => e.type === 'message')).toBe(false);
   });
+
+  it('emits started → failed { errorKind: "timeout" } and RunResult error.kind "timeout" when raw.timedOut is true (watchdog §1)', async () => {
+    const { events, push } = collectEvents();
+    const runner = makeRunner({ stdout: '', stderr: '', exitCode: 0, timedOut: true, signal: null, durationMs: 60000 });
+    const result = await spawnAgentProcess('codex', ['exec'], '/tmp', {
+      agent: 'codex', model: 'm', skillId: 'plan-audit', version: 1, onLifecycle: push,
+      timeoutMs: 1000
+    }, runner);
+    expect(result.error?.kind).toBe('timeout');
+    expect(events.map(e => e.type)).toEqual(['started', 'failed']);
+    if (events[1]!.type === 'failed') {
+      expect(events[1]!.errorKind).toBe('timeout');
+    }
+  });
+
+  it('watchdog timeout classification also applies through the claude lifecycle path', async () => {
+    const { events, push } = collectEvents();
+    const runner = makeRunner({ stdout: '', stderr: '', exitCode: 124, timedOut: true, signal: 'SIGTERM' as any, durationMs: 60000 });
+    const result = await spawnAgentProcess('claude', ['-p'], '/tmp', {
+      agent: 'claude', model: 'm', skillId: 'plan-audit', version: 1, onLifecycle: push,
+      timeoutMs: 2000
+    }, runner);
+    // Timeout takes precedence over nonzero-exit.
+    expect(result.error?.kind).toBe('timeout');
+    const failed = events.find(e => e.type === 'failed');
+    expect(failed).toBeDefined();
+    if (failed && failed.type === 'failed') {
+      expect(failed.errorKind).toBe('timeout');
+    }
+  });
+
+  it('passes the resolved timeoutMs through to the process runner', async () => {
+    let captured: any = undefined;
+    const runner: ProcessRunner = async (options) => {
+      captured = options;
+      return { stdout: '', stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+    };
+    await spawnAgentProcess('codex', ['exec'], '/tmp', {
+      agent: 'codex', model: 'm', skillId: 'plan-audit', version: 1, timeoutMs: 4242
+    }, runner);
+    expect(captured.timeoutMs).toBe(4242);
+  });
 });
 
 describe('codex/claude adapter → spawnAgentProcess → real lifecycle classification (shared contract)', () => {

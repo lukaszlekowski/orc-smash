@@ -11,6 +11,23 @@ export async function promptLoopSelect(loops: string[], defaultLoop: string): Pr
   });
 }
 
+/**
+ * Build the custom-model validation message for an agent. agy surfaces its
+ * strict configured allow-list (the exact `providers.agy` names) rather than a
+ * generic "not a valid model" string, so operators learn the rule that rejects
+ * namespace-style ids like gpt-5.5 / opencode/... / claude-...
+ */
+function invalidModelMessage(agent: string, val: string, registry: Config['registry']): string {
+  if (agent === 'opencode') {
+    return `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`;
+  }
+  if (agent === 'agy') {
+    const example = registry.providers.agy?.[0] ?? 'Gemini 3.5 Flash (Medium)';
+    return `model '${val}' is not a configured agy model; agy accepts only the exact names listed in providers.agy (e.g. ${example})`;
+  }
+  return `model '${val}' is not a valid model for agent '${agent}'`;
+}
+
 export async function promptStartPoint(allowedStartPoints: string[], defaultStartPoint: string): Promise<string> {
   return select({
     message: 'Select a start point:',
@@ -106,9 +123,7 @@ export async function promptRunners(
         message: `Enter custom model for agent '${agent}' (skill '${skillId}'):`,
         validate: (val) => {
           if (!isValidModelForAgent(agent, val, config.registry)) {
-            return agent === 'opencode'
-              ? `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`
-              : `model '${val}' is not a valid model for agent '${agent}'`;
+            return invalidModelMessage(agent, val, config.registry);
           }
           return true;
         }
@@ -197,9 +212,7 @@ export async function promptSecondOpinionRunner(
       message: `Enter custom model for agent '${agent}':`,
       validate: (val) => {
         if (!isValidModelForAgent(agent, val, config.registry)) {
-          return agent === 'opencode'
-            ? `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`
-            : `model '${val}' is not a valid model for agent '${agent}'`;
+          return invalidModelMessage(agent, val, config.registry);
         }
         return true;
       }

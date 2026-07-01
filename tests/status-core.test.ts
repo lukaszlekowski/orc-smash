@@ -53,7 +53,6 @@ describe('buildPanelContext (data model extension)', () => {
   it('builds a context with the documented field shape (inFlight/latestVersion/readOnly)', () => {
     const inFlight = {
       kind: 'audit' as const,
-      role: 'auditor',
       skillId: 'plan-audit',
       agent: 'opencode',
       model: 'opencode-go/deepseek-v4-flash',
@@ -61,7 +60,9 @@ describe('buildPanelContext (data model extension)', () => {
       iteration: 1,
       startedAtMs: 0,
       status: 'running' as const,
-      message: '...'
+      spawnLabel: 'Spawning opencode for audit...',
+      toolCallCount: 0,
+      progressMessage: null
     };
     const ctx = buildPanelContext('/p', 'plan', 1, 5, null, [], 'next', inFlight, 1, false);
     expect(ctx.inFlight).toEqual(inFlight);

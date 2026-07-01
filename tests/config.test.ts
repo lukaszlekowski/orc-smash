@@ -138,6 +138,43 @@ timeouts:
     expect(registryTimeoutFor(registry, 'codex')).toBeUndefined();
   });
 
+  it('parses claude/codex/agy config-only timeouts and exposes them via registryTimeoutFor', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers:
+  opencode: [opencode-go/x]
+  claude: [glm-5.2]
+  codex: [gpt-5.4]
+  agy: ['Gemini 3.5 Flash (Medium)']
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts:
+  opencode: 600000
+  claude: 300000
+  codex: 240000
+  agy: 180000
+`);
+    const registry = loadModelRegistry(tempDir);
+    expect(registryTimeoutFor(registry, 'opencode')).toBe(600000);
+    expect(registryTimeoutFor(registry, 'claude')).toBe(300000);
+    expect(registryTimeoutFor(registry, 'codex')).toBe(240000);
+    expect(registryTimeoutFor(registry, 'agy')).toBe(180000);
+    // An agent with no timeout support still resolves to undefined.
+    expect(registryTimeoutFor(registry, 'fake')).toBeUndefined();
+  });
+
+  it('treats claude/codex/agy timeouts as optional (undefined when omitted)', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: [opencode-go/x] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencode: 60000 }
+`);
+    const registry = loadModelRegistry(tempDir);
+    expect(registryTimeoutFor(registry, 'claude')).toBeUndefined();
+    expect(registryTimeoutFor(registry, 'codex')).toBeUndefined();
+    expect(registryTimeoutFor(registry, 'agy')).toBeUndefined();
+  });
+
   it('rejects negative or non-integer timeout values', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
     writeFileSync(join(tempDir, 'orc.config.yaml'), `
@@ -179,7 +216,7 @@ timeouts: { opencode: 60000, fake: 5000 }
     expect(() => loadModelRegistry(tempDir)).toThrow(/Unrecognized/);
   });
 
-  it('rejects a codex timeouts key (only opencode supports timeouts today)', () => {
+  it('accepts a codex timeouts key (codex/claude/agy are config-only timeout agents)', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
     writeFileSync(join(tempDir, 'orc.config.yaml'), `
 providers:
@@ -190,6 +227,17 @@ defaults: { agent: opencode, model: opencode-go/x }
 timeouts:
   opencode: 60000
   codex: 60000
+`);
+    const registry = loadModelRegistry(tempDir);
+    expect(registryTimeoutFor(registry, 'codex')).toBe(60000);
+  });
+
+  it('rejects a genuinely unknown timeouts key (e.g. an unsupported agent)', () => {
+    vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
+    writeFileSync(join(tempDir, 'orc.config.yaml'), `
+providers: { opencode: [opencode-go/x] }
+defaults: { agent: opencode, model: opencode-go/x }
+timeouts: { opencode: 60000, fake: 5000 }
 `);
     expect(() => loadModelRegistry(tempDir)).toThrow(/Unrecognized/);
   });
