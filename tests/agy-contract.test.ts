@@ -1,11 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { execSync } from 'node:child_process';
 import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../src/adapters/registry.js';
-import { createAgyAdapter } from '../src/adapters/agy.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { parseVerdict } from '../src/verdict.js';
@@ -164,96 +162,4 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     expect(existsSync(implArtifact)).toBe(false);
     expect(existsSync(join(tempDir, 'docs/dev/archived'))).toBe(true);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Env-gated REAL agy contract (AGY_CONTRACT=1). Skipped without credentials.
-// ---------------------------------------------------------------------------
-describe('Real-provider agy contract (AGY_CONTRACT=1)', () => {
-  const tempDir = join(process.cwd(), 'temp-agy-real-contract');
-
-  beforeEach(() => {
-    createTempDir('temp-agy-real-contract');
-    try {
-      execSync('git init', { cwd: tempDir, stdio: 'ignore' });
-    } catch {
-      // git optional for the real contract
-    }
-    writeFileSync(join(tempDir, 'AGENTS.md'), '# Dummy AGENTS\n');
-    writeFileSync(join(tempDir, 'README.md'), '# Dummy README\n');
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-  });
-  afterEach(() => {
-    removeTempDir(tempDir);
-  });
-
-  it.runIf(process.env['AGY_CONTRACT'] === '1')('exercises real agy spawn: writes artifact, lifecycle started→completed, APPROVED', async () => {
-    const model = process.env['AGY_DEFAULT_MODEL'] || 'Gemini 3.5 Flash (Medium)';
-    const outputPath = 'docs/dev/plan-audit-v1-agy.md';
-    const filePath = join(tempDir, outputPath);
-    const prompt = `Write exactly the following content to the file "${filePath}" and nothing else:\n## Verdict\nAPPROVED\n`;
-    const lifecycleEvents: LifecycleEvent[] = [];
-
-    const adapter = createAgyAdapter();
-    const result = await adapter.run({
-      prompt,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      onLifecycle: (e) => lifecycleEvents.push(e)
-    });
-
-    expect(result.error).toBeUndefined();
-    expect(result.exitCode).toBe(0);
-    expect(existsSync(filePath)).toBe(true);
-    expect(parseVerdict(readFileSync(filePath, 'utf-8'))).toBe('APPROVED');
-    expect(lifecycleEvents[0]?.type).toBe('started');
-    expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
-  }, 60000);
-
-  it.runIf(process.env['AGY_CONTRACT'] === '1')('real agy run in an unauthenticated environment returns error.kind "auth"', async () => {
-    const model = process.env['AGY_DEFAULT_MODEL'] || 'Gemini 3.5 Flash (Medium)';
-    const originalHome = process.env['HOME'];
-    const dummyHome = join(tempDir, 'dummy-home');
-    mkdirSync(dummyHome, { recursive: true });
-    process.env['HOME'] = dummyHome;
-    try {
-      const adapter = createAgyAdapter();
-      const result = await adapter.run({
-        prompt: 'hello',
-        model,
-        cwd: tempDir,
-        skillId: 'plan-audit',
-        version: 1
-      });
-      expect(result.error?.kind).toBe('auth');
-      expect(result.error?.message).toMatch(/authentication failed/i);
-      expect(`${result.stdout}\n${result.stderr}`).toMatch(/Error:\s*authentication failed or timed out/i);
-    } finally {
-      process.env['HOME'] = originalHome;
-    }
-  }, 60000);
-
-  it.runIf(process.env['AGY_CONTRACT'] === '1')('real agy run with a tiny configured timeout fails as error.kind timeout', async () => {
-    const model = process.env['AGY_DEFAULT_MODEL'] || 'Gemini 3.5 Flash (Medium)';
-    const lifecycleEvents: LifecycleEvent[] = [];
-    const adapter = createAgyAdapter({ defaultTimeoutMs: 1000 });
-
-    const result = await adapter.run({
-      prompt: 'Write a very long essay about the history of computing, at least 5000 words, to stdout.',
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      onLifecycle: (e) => lifecycleEvents.push(e)
-    });
-
-    expect(result.error?.kind).toBe('timeout');
-    const failed = lifecycleEvents.find((e) => e.type === 'failed');
-    expect(failed).toBeDefined();
-    if (failed && failed.type === 'failed') {
-      expect(failed.errorKind).toBe('timeout');
-    }
-  }, 60000);
 });

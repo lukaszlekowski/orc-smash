@@ -74,8 +74,13 @@ export const DEFAULT_REGISTRY: ModelRegistry = {
     // `agy` is `providers.agy[0]` (no per-agent default config field this batch).
     agy: [
       'Gemini 3.5 Flash (Medium)',
-      'Gemini 3.5 Pro (Medium)',
-      'Gemini 3.5 Flash (High)'
+      'Gemini 3.5 Flash (High)',
+      'Gemini 3.5 Flash (Low)',
+      'Gemini 3.1 Pro (Low)',
+      'Gemini 3.1 Pro (High)',
+      'Claude Sonnet 4.6 (Thinking)',
+      'Claude Opus 4.6 (Thinking)',
+      'GPT-OSS 120B (Medium)'
     ]
   },
   defaults: {

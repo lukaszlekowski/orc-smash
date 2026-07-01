@@ -164,4 +164,4 @@ decision-path `scan()` never includes synthetic interrupted steps.
 - **Stateless; isolated per target:** the tool holds only config; all per-run target state is
   derived from filenames. One runner per target; different targets never interfere (dual-target
   e2e proves it).
-- **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths (opencode, codex, claude) remain covered by env-gated contract tests as a separate, manual release sign-off requirement.
+- **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths for opencode, codex, and claude remain covered by env-gated contract tests; agy stays a real adapter but is verified manually from an already-authenticated shell because its browser login flow is not suitable for an automated contract gate.
