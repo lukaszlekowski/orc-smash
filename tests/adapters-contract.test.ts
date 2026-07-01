@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { execSync } from 'node:child_process';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
-import { codexAdapter } from '../src/adapters/codex.js';
-import { claudeAdapter } from '../src/adapters/claude.js';
+import { codexAdapter, createCodexAdapter } from '../src/adapters/codex.js';
+import { claudeAdapter, createClaudeAdapter } from '../src/adapters/claude.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { parseVerdict } from '../src/verdict.js';
 import { runLoop } from '../src/loop.js';
@@ -271,4 +271,44 @@ describe('Real-provider contract tests', () => {
     const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
     await runRealProviderImplementLoopTest('claude', model);
   }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+
+  // ---------------------------------------------------------------------
+  // Watchdog timeout proof (§1): a real codex/claude run with a tiny
+  // configured timeout must fail as error.kind === 'timeout' and emit the
+  // failed lifecycle event — proving timeouts.codex / timeouts.claude are
+  // live through the production registry-to-adapter-to-run path, not inert.
+  // ---------------------------------------------------------------------
+  async function runRealProviderTimeoutTest(agent: 'codex' | 'claude', model: string) {
+    const lifecycleEvents: LifecycleEvent[] = [];
+    const adapter = agent === 'codex'
+      ? createCodexAdapter({ defaultTimeoutMs: 1000 })
+      : createClaudeAdapter({ defaultTimeoutMs: 1000 });
+
+    const result = await adapter.run({
+      // Deliberately long-running prompt so the watchdog deadline fires first.
+      prompt: 'Write a very long essay about the history of computing, at least 5000 words, to stdout.',
+      model,
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 1,
+      onLifecycle: (e) => lifecycleEvents.push(e)
+    });
+
+    expect(result.error?.kind).toBe('timeout');
+    const failed = lifecycleEvents.find(e => e.type === 'failed');
+    expect(failed).toBeDefined();
+    if (failed && failed.type === 'failed') {
+      expect(failed.errorKind).toBe('timeout');
+    }
+  }
+
+  it.runIf(process.env['CODEX_CONTRACT'] === '1')('real codex run with a tiny configured timeout fails as error.kind timeout', async () => {
+    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+    await runRealProviderTimeoutTest('codex', model);
+  }, 60000);
+
+  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('real claude run with a tiny configured timeout fails as error.kind timeout', async () => {
+    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+    await runRealProviderTimeoutTest('claude', model);
+  }, 60000);
 });

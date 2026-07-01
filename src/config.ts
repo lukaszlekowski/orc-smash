@@ -9,8 +9,12 @@ import { loadManifest, type Manifest } from './manifest.js';
 export interface ModelRegistry {
   providers: Record<string, string[]>;
   defaults: { agent: string; model: string };
-  /** Optional opencode execution timeout in ms (0 disables). Only opencode supports timeouts today. */
-  timeouts?: { opencode?: number };
+  /**
+   * Optional per-agent execution timeouts in ms (`0` disables). Precedence:
+   *   - opencode: `OPENCODE_RUN_TIMEOUT_MS` env > `timeouts.opencode` > built-in 600000.
+   *   - claude / codex / agy: config-only (`timeouts.<agent>` > built-in 0); no env vars.
+   */
+  timeouts?: { opencode?: number; claude?: number; codex?: number; agy?: number };
 }
 
 export const ModelRegistrySchema = z.object({
@@ -20,13 +24,29 @@ export const ModelRegistrySchema = z.object({
     model: z.string()
   }),
   timeouts: z.object({
-    opencode: z.number().int().nonnegative().optional()
+    opencode: z.number().int().nonnegative().optional(),
+    claude: z.number().int().nonnegative().optional(),
+    codex: z.number().int().nonnegative().optional(),
+    agy: z.number().int().nonnegative().optional()
   }).strict().optional()
 });
 
-/** Resolve a per-agent timeout from the registry, or undefined if unset. Only opencode supports timeouts today. */
+/**
+ * Resolve a per-agent timeout from the registry, or `undefined` if unset.
+ *
+ * - `opencode`, `claude`, `codex`, and `agy` each read their own
+ *   `timeouts.<agent>` key. `undefined` means "not configured" (the caller's
+ *   built-in tier decides the fallback).
+ * - Any other agent has no timeout support and resolves to `undefined`.
+ */
 export function registryTimeoutFor(registry: ModelRegistry, agent: string): number | undefined {
-  return agent === 'opencode' ? registry.timeouts?.opencode : undefined;
+  const timeouts = registry.timeouts;
+  if (!timeouts) return undefined;
+  if (agent === 'opencode') return timeouts.opencode;
+  if (agent === 'claude') return timeouts.claude;
+  if (agent === 'codex') return timeouts.codex;
+  if (agent === 'agy') return timeouts.agy;
+  return undefined;
 }
 
 export const DEFAULT_REGISTRY: ModelRegistry = {
@@ -48,6 +68,14 @@ export const DEFAULT_REGISTRY: ModelRegistry = {
       'gpt-5.5',
       'gpt-5.4',
       'gpt-5.4-mini'
+    ],
+    // Antigravity (`agy`): model ids are the human-readable names printed by
+    // `agy models`, passed verbatim. The fallback model when an operator selects
+    // `agy` is `providers.agy[0]` (no per-agent default config field this batch).
+    agy: [
+      'Gemini 3.5 Flash (Medium)',
+      'Gemini 3.5 Pro (Medium)',
+      'Gemini 3.5 Flash (High)'
     ]
   },
   defaults: {

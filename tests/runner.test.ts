@@ -16,6 +16,10 @@ describe('Runner selection and verification', () => {
         codex: [
           'gpt-5-codex'
         ],
+        agy: [
+          'Gemini 3.5 Flash (Medium)',
+          'Gemini 3.5 Pro (Medium)'
+        ],
         fake: [
           'fake-model'
         ]
@@ -70,5 +74,33 @@ describe('Runner selection and verification', () => {
     expect(() => {
       resolveRunner('plan-audit', dummyConfig, { agent: 'unknown-agent' });
     }).toThrow(/unknown agent 'unknown-agent'/);
+  });
+
+  // ---------------------------------------------------------------------
+  // §2 agy strict allow-list: agy accepts ONLY the configured providers.agy
+  // names (with input trimming); namespace-style / foreign ids are rejected.
+  // ---------------------------------------------------------------------
+  it('agy accepts only configured providers.agy names (strict allow-list)', () => {
+    expect(isValidModelForAgent('agy', 'Gemini 3.5 Flash (Medium)', dummyConfig.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', 'Gemini 3.5 Pro (Medium)', dummyConfig.registry)).toBe(true);
+    // Input trimming normalizes surrounding whitespace.
+    expect(isValidModelForAgent('agy', '  Gemini 3.5 Flash (Medium)  ', dummyConfig.registry)).toBe(true);
+  });
+
+  it('agy rejects foreign / namespace-style / unconfigured ids', () => {
+    expect(isValidModelForAgent('agy', 'gpt-5.5', dummyConfig.registry)).toBe(false);
+    expect(isValidModelForAgent('agy', 'opencode-go/deepseek-v4-flash', dummyConfig.registry)).toBe(false);
+    expect(isValidModelForAgent('agy', 'claude-sonnet-4-6', dummyConfig.registry)).toBe(false);
+    // Human-readable but not configured for agy.
+    expect(isValidModelForAgent('agy', 'Gemini 2.0 Flash', dummyConfig.registry)).toBe(false);
+    expect(isValidModelForAgent('agy', 'fake-model', dummyConfig.registry)).toBe(false);
+  });
+
+  it('selecting agy re-defaults to providers.agy[0] without changing the global defaults pair', () => {
+    const resolved = resolveRunner('plan-audit', dummyConfig, { agent: 'agy' });
+    expect(resolved).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
+    // The global defaults pair is unchanged by this resolution.
+    expect(dummyConfig.registry.defaults.agent).toBe('opencode');
+    expect(dummyConfig.registry.defaults.model).toBe('opencode-go/deepseek-v4-flash');
   });
 });

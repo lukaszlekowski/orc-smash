@@ -1,6 +1,6 @@
 # orc-smash
 
-A thin **TypeScript CLI harness** that drives coding-agent CLIs (**opencode, codex, claude** —
+A thin **TypeScript CLI harness** that drives coding-agent CLIs (**opencode, codex, claude, agy** —
 all real) through skill-based `audit ↔ follow-up` loops until a verdict is **APPROVED**, then
 stops for human review (or runs a second-opinion pass). Stateless — all per-run state is derived
 from the target project's filenames. No DB, no S3, no web UI.
@@ -41,12 +41,13 @@ orc status --project <path>         # read-only: detect where we are, render the
 ## How it works
 
 - **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
-- **Three real adapters:** opencode, codex, and claude all run for real; each skill picks its own agent/model, validated against the model registry.
+- **Four real adapters:** opencode, codex, claude, and agy (Antigravity) all run for real; each skill picks its own agent/model, validated against the model registry. `agy` runs headless via `agy -p <prompt> --model <model> --dangerously-skip-permissions`; its model ids are the exact human-readable names from `agy models` (a strict configured allow-list — no namespace fallbacks). When unauthenticated, `agy` can fall back to a default provider while exiting 0, so the adapter detects this with a bounded phrase list and surfaces a structured `auth` error; the loop then quarantines any partial artifact so no resumable file is left behind.
 - **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
 - **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
 - **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.
 - **Ledger Verification & Closeout:** For implementation runs, the harness parses the written ledger to verify required tables (evidence and coverage) and confidence declaration. On success, it updates the plan's front-matter status (to `done` or `blocked` based on a 0.95 confidence threshold) and appends a versioned change log.
-- **Execution Watchdog:** Spawns are protected by a watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default.
+- **Execution Watchdog:** Spawns are protected by a watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default. `claude`, `codex`, and `agy` are config-only: `timeouts.<agent>` > built-in `0` (disabled by default); there are no env vars for these agents. A timeout fires `error.kind === 'timeout'` and a failed lifecycle event.
+- **Interrupted-run handling:** `SIGINT`/`SIGTERM` writes a durable interrupted marker under the active project root, terminates in-flight provider children (SIGTERM → SIGKILL after a grace period), and exits with the conventional signal code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run never resolves to a terminal `unknown` and `orc status` shows the interrupted stage (`plan`/`review`/`implement`) via marker-first loop selection.
 - **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
 
 ## Architecture direction
@@ -68,7 +69,7 @@ Current development is steering the harness toward a cleaner runtime architectur
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 2 implementation plan.
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 3 implementation plan.
 
 ## Verification and CI
 
@@ -83,7 +84,8 @@ In contrast, **real-provider verification** remains a separate sign-off requirem
 
 ```bash
 OPENCODE_CONTRACT=1 CODEX_CONTRACT=1 \
-  CLAUDE_CONTRACT=1 pnpm test                   # env-gated contract tests
+  CLAUDE_CONTRACT=1 AGY_CONTRACT=1 \
+  AGY_DEFAULT_MODEL="Gemini 3.5 Flash (Medium)" pnpm test   # env-gated contract tests
 ```
 
 The repo-local e2e (`tests/e2e/smash.test.ts` via the `fake` adapter) covers every exit branch,

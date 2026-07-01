@@ -45,7 +45,8 @@ export function kindAccent(kind: StepKind): KindAccent {
 const statusMap: Record<StepStatus, StatusAccent> = {
   running: { chalk: chalk.yellow, label: 'running' },
   failed: { chalk: chalk.red, label: 'failed' },
-  done: { chalk: chalk.gray, label: 'done' }
+  done: { chalk: chalk.gray, label: 'done' },
+  interrupted: { chalk: chalk.magenta, label: 'interrupted' }
 };
 
 export function statusAccent(status: StepStatus): StatusAccent {

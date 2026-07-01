@@ -8,9 +8,9 @@ export function renderStatusPanel(context: PanelContext): string {
   const pName = chalk.cyan(context.projectRoot);
   const lName = chalk.yellow(context.loopName);
 
-  const iterStr = context.readOnly
-    ? chalk.magenta('Iteration: not running')
-    : chalk.magenta(`Iteration: ${context.currentIteration}/${context.maxIterations}`);
+  const iterationValue = context.readOnly
+    ? 'not running'
+    : `${context.currentIteration}/${context.maxIterations}`;
 
   let activeStr = 'None';
   if (context.activeSkillRunner) {
@@ -22,22 +22,22 @@ export function renderStatusPanel(context: PanelContext): string {
   const contentLines: string[] = [
     `Project:          ${pName}`,
     `Loop:             ${lName}`,
-    iterStr,
+    `Iteration:        ${chalk.magenta(iterationValue)}`,
     `Active Runner:    ${activeStr}`,
     `Next Step:        ${chalk.white(context.nextStepMessage)}`,
     `Latest version:   v${context.latestVersion}`
   ];
+
+  const timelineSection = renderTimelineSection(context);
+  contentLines.push('');
+  contentLines.push(chalk.bold('Timeline:'));
+  contentLines.push(timelineSection);
 
   const inFlightSection = renderInFlightSection(context);
   if (inFlightSection) {
     contentLines.push('');
     contentLines.push(inFlightSection);
   }
-
-  const timelineSection = renderTimelineSection(context);
-  contentLines.push('');
-  contentLines.push(chalk.bold('Timeline:'));
-  contentLines.push(timelineSection);
 
   return boxen(contentLines.join('\n'), {
     title: chalk.bold.blue(' ORC SMASH STATUS PANEL '),
@@ -52,33 +52,6 @@ export function renderStatusPanel(context: PanelContext): string {
 function renderInFlightSection(context: PanelContext): string | null {
   if (!context.inFlight) return null;
 
-  const roleAcc = roleAccent(inFlightRole(context.inFlight.kind));
-  const statusAcc = statusAccent(context.inFlight.status);
-
-  const rows: string[][] = [[
-    String(context.inFlight.version),
-    roleAcc.chalk(roleAcc.label),
-    context.inFlight.agent,
-    context.inFlight.model,
-    '\u2014',
-    statusAcc.chalk(context.inFlight.status)
-  ]];
-
-  const table = new Table({
-    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Status'],
-    style: { head: ['cyan'], border: [] },
-    chars: {
-      top: '', 'top-mid': '', 'top-left': '', 'top-right': '',
-      bottom: '', 'bottom-mid': '', 'bottom-left': '', 'bottom-right': '',
-      left: '', 'left-mid': '', mid: '', 'mid-mid': '',
-      right: '', 'right-mid': '', middle: ' '
-    },
-    wordWrap: true
-  });
-  for (const row of rows) {
-    table.push(row);
-  }
-
   // Elapsed since the spawn started; per the plan, the renderer reads the
   // closed-over `startedAtMs` at paint time so the displayed elapsed grows
   // monotonically across 200ms ticks.
@@ -87,10 +60,20 @@ function renderInFlightSection(context: PanelContext): string | null {
     ? `${Math.floor(elapsedSecs / 60)}m ${elapsedSecs % 60}s`
     : `${elapsedSecs}s`;
 
-  const messageSuffix = context.inFlight.message && context.inFlight.message !== '...'
-    ? ` · ${chalk.white(context.inFlight.message)}`
-    : '';
-  return `${chalk.bold('Active Step:')} ${chalk.gray(`(elapsed ${elapsedStr})`)}${messageSuffix}\n${table.toString()}`;
+  const detailLines = [
+    `${chalk.bold('Active Step:')} ${chalk.gray(`(elapsed ${elapsedStr})`)}`,
+    `Spawn:            ${chalk.white(context.inFlight.spawnLabel)}`
+  ];
+
+  if (context.inFlight.toolCallCount > 0) {
+    detailLines.push(`Tool calls:       ${chalk.white(String(context.inFlight.toolCallCount))}`);
+  }
+
+  if (context.inFlight.progressMessage) {
+    detailLines.push(`Progress:         ${chalk.white(context.inFlight.progressMessage)}`);
+  }
+
+  return detailLines.join('\n');
 }
 
 function renderTimelineSection(context: PanelContext): string {
@@ -99,8 +82,13 @@ function renderTimelineSection(context: PanelContext): string {
   const rows = context.timeline.map((s, index) => {
     const roleAcc = roleAccent(s.role);
 
+    // An interrupted step has no verdict/outcome — render an em dash so the
+    // status column's literal "interrupted" is the signal, not a misleading
+    // "unknown" result.
     let resultStr = '';
-    if (s.kind === 'audit') {
+    if (s.status === 'interrupted') {
+      resultStr = '—';
+    } else if (s.kind === 'audit') {
       const v = s.verdict;
       if (v === 'APPROVED') {
         resultStr = chalk.bold.green(v);
@@ -136,6 +124,19 @@ function renderTimelineSection(context: PanelContext): string {
       statusStr
     ];
   });
+
+  if (context.inFlight) {
+    const roleAcc = roleAccent(inFlightRole(context.inFlight.kind));
+    const statusAcc = statusAccent(context.inFlight.status);
+    rows.push([
+      String(context.inFlight.version),
+      roleAcc.chalk(roleAcc.label),
+      context.inFlight.agent,
+      context.inFlight.model,
+      '\u2014',
+      statusAcc.chalk(statusAcc.label)
+    ]);
+  }
 
   if (rows.length === 0) {
     return '';

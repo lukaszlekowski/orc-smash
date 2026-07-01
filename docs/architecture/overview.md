@@ -90,22 +90,56 @@ The `provider/` prefix in opencode model ids (e.g. `opencode-go/deepseek-v4-flas
 opencode's own transport/endpoint namespace, not an orc-smash concept — orc-smash validates
 only per-provider shape via `runner.ts:isOpencodeModelId`. codex and claude ids have no
 `provider/` segment and are validated by separate rules (`model.startsWith('claude-')` for
-claude; no opencode/claude prefix for codex).
+claude; no opencode/claude prefix for codex). `agy` (Antigravity) model ids are the exact
+human-readable names printed by `agy models`; `runner.ts` accepts **only** the configured
+`providers.agy` allow-list (with input trimming) — no namespace fallback — so `gpt-5.5`,
+`opencode/...`, and `claude-...` are rejected for `agy`.
 
-### Opencode timeout policy
+### Timeout policy
 
-The opencode execution timeout is config-driven-first with explicit precedence:
-`OPENCODE_RUN_TIMEOUT_MS` env > `registry.timeouts.opencode` (config tier) > built-in
-600000 ms (10 minutes). A value of `0` (or env `"0"`) disables the watchdog. The single
-source of truth is the pure `resolveOpencodeTimeoutMs` function in
-`src/adapters/utils.ts`; `spawnOpencode` and `createOpencodeAdapter` use it. There is no
-per-call programmatic override on `spawnOpencode` — the option is the config-driven
-default, not an override. The production registry accepts an optional `opencodeSpawn` test
-seam; production code never passes it. codex/claude have no harness timeout today.
+- **opencode** (env tier): `OPENCODE_RUN_TIMEOUT_MS` env > `registry.timeouts.opencode`
+  (config tier) > built-in 600000 ms (10 minutes). A value of `0` (or env `"0"`) disables the
+  watchdog. The single source of truth is the pure `resolveOpencodeTimeoutMs` in
+  `src/adapters/utils.ts`; `spawnOpencode` and `createOpencodeAdapter` use it. There is no
+  per-call programmatic override — the option is the config-driven default, not an override. The
+  production registry accepts an optional `opencodeSpawn` test seam; production code never passes it.
+- **claude / codex / agy** (config-only): `registry.timeouts.<agent>` > built-in `0` (disabled by
+  default); there are **no env vars**. The single source of truth is the pure
+  `resolveConfigOnlyTimeoutMs` (aliased as `resolveClaudeTimeoutMs` / `resolveCodexTimeoutMs` /
+  `resolveAgyTimeoutMs`) in `src/adapters/utils.ts`. Each factory adapter
+  (`createClaudeAdapter` / `createCodexAdapter` / `createAgyAdapter`) threads the resolved
+  deadline into `spawnAgentProcess` via its lifecycle/options object (no positional param); no CLI
+  timeout flag is used. A timeout surfaces `error.kind === 'timeout'` and a failed lifecycle event.
+  The production registry resolves these via `registryTimeoutFor` and accepts optional
+  `codexProcessRunner` / `claudeProcessRunner` / `agyProcessRunner` test seams; production code
+  never passes them.
+
+### `agy` auth-failure detection
+
+When unauthenticated, `agy` can ignore `--model`, fall back to a default provider, and exit 0 —
+which would otherwise look like success. `src/adapters/agy.ts` owns **detection only**: a bounded
+phrase list `AGY_AUTH_FAILURE_PATTERNS` (whole-token/whole-phrase matches over combined
+stdout+stderr; benign substrings like `author`/`authority`/`authentication succeeded` do not match)
+sets `error.kind === 'auth'`. The adapter never resolves/mutates artifact paths (`RunInput`
+carries none); `src/loop.ts` owns the cleanup and quarantines the resolved artifact on `'auth'` so
+no resumable `docs/dev/*-vN-agy.md` file remains.
+
+### Interrupted runs
+
+`SIGINT`/`SIGTERM` (wired in `src/cli.ts`) delegate to the interrupt-context API in
+`src/interrupted-artifact.ts`, which writes a durable marker under the active project root,
+terminates in-flight provider children via `terminateActiveChildren` (`src/adapters/utils.ts`:
+SIGTERM → SIGKILL after a bounded grace), and exits with the conventional signal code. A rerun
+quarantines the partial/late artifact before any decision-path scan (`commands/smash.ts` at setup
+time and `loop.ts` at loop start), so an interrupted run never resolves to terminal `unknown` and
+never advances state incorrectly. `orc status` selects the loop **marker-first**
+(`marker.loop` beats the audit-history heuristic in `commands/status.ts`) and renders the
+interrupted stage via the display-only `scanForStatus` helper in `src/state.ts`. Normal
+decision-path `scan()` never includes synthetic interrupted steps.
 
 ## Key invariants
 
-- **Three real adapters; per-skill runners:** opencode, codex, and claude all run for real; each
+- **Four real adapters; per-skill runners:** opencode, codex, claude, and agy all run for real; each
   skill declares its own agent/model (overridable per run). Agent and model are a coupled pair —
   switching agent re-defaults model. The adapter is selected per step, so stages can mix CLIs.
 - **Explicit Registries:** The production adapter registry registers only real adapters; test-only adapters (such as `fake`) are registered via a separate test registry constructor (`testing.ts`).

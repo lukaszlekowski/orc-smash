@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import type { RunInput, RunResult, RunError } from './types.js';
 import type { LifecycleEvent } from '../adapter-lifecycle.js';
 import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress, type OpencodeStreamError } from './opencode-stream.js';
@@ -32,6 +32,35 @@ export function resolveOpencodeTimeoutMs(opts?: { defaultTimeoutMs?: number }): 
   }
   return resolved > 0 ? resolved : 0;
 }
+
+/**
+ * Built-in default for config-only agents (codex / claude / agy). `0` means the
+ * watchdog is disabled unless the operator configures `timeouts.<agent>`.
+ */
+export const CONFIG_ONLY_BUILT_IN_TIMEOUT_MS = 0;
+
+/**
+ * Config-only timeout resolver shared by `claude`, `codex`, and `agy`.
+ *
+ * Precedence: `options.defaultTimeoutMs` (config tier) > built-in `0`.
+ * There is intentionally **no env var** for these agents (unlike opencode) —
+ * `0` (or unset) disables the watchdog. A non-positive configured value also
+ * disables. Pure function so tests can assert precedence without mocking.
+ *
+ * This is the single source of truth for the config-only timeout policy; the
+ * per-agent aliases below name the same rule for the agents that use it.
+ */
+export function resolveConfigOnlyTimeoutMs(opts?: { defaultTimeoutMs?: number }): number {
+  const t = opts?.defaultTimeoutMs ?? CONFIG_ONLY_BUILT_IN_TIMEOUT_MS;
+  return t > 0 ? t : 0;
+}
+
+/** claude watchdog resolver (config > built-in 0; no env). */
+export const resolveClaudeTimeoutMs = resolveConfigOnlyTimeoutMs;
+/** codex watchdog resolver (config > built-in 0; no env). */
+export const resolveCodexTimeoutMs = resolveConfigOnlyTimeoutMs;
+/** agy watchdog resolver (config > built-in 0; no env). */
+export const resolveAgyTimeoutMs = resolveConfigOnlyTimeoutMs;
 
 /** Bound a captured text blob to its tail (default 4000 chars). Shared by the
  *  stderr scanner and the error formatter so the bound lives in one place. */
@@ -107,6 +136,9 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
       stderr += data.toString();
     });
 
+    // Track the live child so an interrupt signal can terminate it (§3).
+    registerActiveChild(proc);
+
     const cleanup = () => {
       if (killTimeout) {
         clearTimeout(killTimeout);
@@ -175,7 +207,58 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
 export type ProcessRunner = (options: ProcessRunOptions) => Promise<RawProcessResult>;
 export const realProcessRunner: ProcessRunner = runProcess;
 
-/** Generic agent spawn (codex/claude): capture + spawn-failure handling + optional lifecycle. */
+// --- Active child tracking + termination (§3 interrupted-run handling) --------
+//
+// `runProcess` registers every spawned provider child here so that an interrupt
+// signal (SIGINT/SIGTERM) can terminate orphaned provider processes. This is the
+// single registry; `terminateActiveChildren` is the only terminator.
+
+const activeChildren = new Set<ChildProcess>();
+
+/** Register a live child for interrupt-time termination. Auto-removes on exit. */
+export function registerActiveChild(proc: ChildProcess): void {
+  activeChildren.add(proc);
+  const remove = () => activeChildren.delete(proc);
+  proc.once('exit', remove);
+  proc.once('error', remove);
+}
+
+/** Test seam: reset the active-child registry between tests. */
+export function resetActiveChildren(): void {
+  activeChildren.clear();
+}
+
+/**
+ * Terminate every active provider child: SIGTERM all, then SIGKILL stragglers
+ * after a bounded grace period. Safe to call with no active children (no-op).
+ * Resolves once the grace window has elapsed so the caller can exit cleanly.
+ */
+export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
+  const procs = [...activeChildren].filter((p) => !p.killed);
+  for (const p of procs) {
+    try {
+      p.kill('SIGTERM');
+    } catch {
+      // Process may have already exited between snapshot and kill.
+    }
+  }
+  if (procs.length === 0) return;
+  await new Promise((r) => setTimeout(r, graceMs));
+  for (const p of procs) {
+    try {
+      if (!p.killed) {
+        p.kill('SIGKILL');
+      }
+    } catch {
+      // Best-effort; the child is likely already gone.
+    }
+  }
+}
+
+/** Generic agent spawn (codex/claude/agy): capture + spawn-failure handling +
+ *  optional watchdog timeout + optional lifecycle. The timeout is threaded
+ *  through the lifecycle/options object (not a positional parameter) to
+ *  preserve the existing call shape. */
 export function spawnAgentProcess(
   command: string,
   args: string[],
@@ -186,6 +269,8 @@ export function spawnAgentProcess(
     skillId?: string;
     version?: number;
     onLifecycle?: (e: LifecycleEvent) => void;
+    /** Watchdog deadline in ms; <= 0 / unset disables timeout handling. */
+    timeoutMs?: number;
   },
   processRunner: ProcessRunner = realProcessRunner
 ): Promise<RunResult> {
@@ -201,22 +286,34 @@ export function spawnAgentProcess(
     });
   }
 
-  return processRunner({ command, args, cwd }).then((raw) => {
+  const timeoutMs = lifecycle?.timeoutMs ?? 0;
+  return processRunner({ command, args, cwd, timeoutMs }).then((raw) => {
+    // Classification precedence: spawn error → timeout → nonzero exit → completed.
+    // A nonzero exit emits a failed lifecycle event but (by existing contract)
+    // does NOT populate RunResult.error; timeout and spawn errors both do.
+    let error: RunError | undefined;
+    let failedKind: string | undefined;
+    if (raw.spawnErrorMessage) {
+      error = { kind: 'spawn', message: `failed to spawn '${command}': ${raw.spawnErrorMessage}` };
+      failedKind = 'spawn';
+    } else if (raw.timedOut) {
+      error = {
+        kind: 'timeout',
+        message: `agent '${lifecycle?.agent ?? command}' exceeded the configured watchdog timeout`,
+        raw: { timeoutMs }
+      };
+      failedKind = 'timeout';
+    } else if (raw.exitCode !== 0) {
+      failedKind = 'nonzero-exit';
+    }
+
     if (lifecycle?.onLifecycle && lifecycle.version !== undefined) {
-      if (raw.spawnErrorMessage) {
+      if (failedKind) {
         lifecycle.onLifecycle({
           type: 'failed',
           agent: lifecycle.agent,
           version: lifecycle.version,
-          errorKind: 'spawn',
-          atMs: Date.now()
-        });
-      } else if (raw.exitCode !== 0) {
-        lifecycle.onLifecycle({
-          type: 'failed',
-          agent: lifecycle.agent,
-          version: lifecycle.version,
-          errorKind: 'nonzero-exit',
+          errorKind: failedKind,
           atMs: Date.now()
         });
       } else {
@@ -229,9 +326,6 @@ export function spawnAgentProcess(
       }
     }
 
-    const error: RunError | undefined = raw.spawnErrorMessage
-      ? { kind: 'spawn', message: `failed to spawn '${command}': ${raw.spawnErrorMessage}` }
-      : undefined;
     return { stdout: raw.stdout, stderr: raw.stderr, exitCode: raw.exitCode, error };
   });
 }

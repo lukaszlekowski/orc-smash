@@ -34,7 +34,9 @@ function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
     iteration: 1,
     startedAtMs: 0,
     status,
-    message: '...'
+    spawnLabel: `Spawning opencode for ${kind}...`,
+    toolCallCount: 0,
+    progressMessage: null
   };
 }
 
@@ -74,6 +76,7 @@ describe('status-accent accent map', () => {
     expect(statusAccent('running').label).toBe('running');
     expect(statusAccent('failed').label).toBe('failed');
     expect(statusAccent('done').label).toBe('done');
+    expect(statusAccent('interrupted').label).toBe('interrupted');
   });
 
   it('does NOT assert chalk object identity (semantic-label contract)', () => {
@@ -127,5 +130,4 @@ describe('panelBorderColor (stage-driven border color)', () => {
     }))).toBe('red');
   });
 });
-
 

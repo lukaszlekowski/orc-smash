@@ -14,9 +14,18 @@ providers:
     - gpt-5.5
     - gpt-5.4
     - gpt-5.4-mini
+  # Antigravity (agy): human-readable model ids from `agy models`, passed verbatim.
+  agy:
+    - Gemini 3.5 Flash (Medium)
+    - Gemini 3.5 Pro (Medium)
+    - Gemini 3.5 Flash (High)
 defaults:
   agent: opencode
   model: opencode-go/deepseek-v4-flash
 
 timeouts:
-  opencode: 0  # watchdog timeout in milliseconds (0 disables the opencode watchdog)
+  opencode: 0  # watchdog timeout in ms (0 disables). opencode also honors OPENCODE_RUN_TIMEOUT_MS (env > config > built-in).
+  # claude / codex / agy are config-only (config > built-in 0; no env vars).
+  claude: 0
+  codex: 0
+  agy: 0

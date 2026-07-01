@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 vi.mock('../src/loop.js', () => ({
@@ -24,6 +24,7 @@ vi.mock('../src/interactive.js', () => ({
 import { smashAction } from '../src/commands/smash.js';
 import { runLoop } from '../src/loop.js';
 import { buildFrontMatter } from '../src/provenance.js';
+import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { resolveImplementFacts } from '../src/state.js';
@@ -301,5 +302,88 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     expect(mockedRunLoop).toHaveBeenCalled();
     const calledLoopName = mockedRunLoop.mock.calls[0]![1];
     expect(calledLoopName).toBe('implement');
+  });
+});
+
+describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () => {
+  const tempDir = join(process.cwd(), 'temp-smash-quarantine');
+
+  beforeEach(() => {
+    createTempDir('temp-smash-quarantine');
+    writeFileSync(
+      join(tempDir, 'orc.config.yaml'),
+      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
+    );
+    mockedRunLoop.mockClear();
+    mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    removeTempDir(tempDir);
+    vi.restoreAllMocks();
+  });
+
+  it('a partial plan audit + marker is quarantined before state resolution, so smash is NOT blocked by "unparseable"', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    // Garbage partial that would otherwise parse as verdict 'unknown' and block smash.
+    writeFileSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'), 'PARTIAL GARBAGE NO VERDICT');
+    writeInterruptedMarker(tempDir, {
+      loop: 'plan', kind: 'audit', version: 1, agent: 'fake', model: 'fake-model',
+      skillId: 'plan-audit', interruptedAtMs: 500
+    });
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    // Not blocked: the partial was quarantined before the decision scan ran.
+    expect(res.exitCode).toBe(0);
+    expect(lastErrorMessage).not.toMatch(/unparseable/);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
+    expect(existsSync(join(tempDir, 'docs/dev/archived'))).toBe(true);
+    expect(readdirSync(join(tempDir, 'docs/dev/archived')).length).toBeGreaterThan(0);
+    // The marker is consumed by the quarantine.
+    expect(existsSync(join(tempDir, '.orc-smash/interrupted.json'))).toBe(false);
+  });
+
+  it('a partial implement artifact + marker is quarantined before resolveImplementFacts, so the next default is implement (not review)', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    // Approved plan audit.
+    const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(auditMeta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+    // Partial implement artifact WITH a front-matter priorAudit link — without
+    // quarantine this would make resolveImplementFacts return currentPlanImplemented
+    // true and the interactive default would advance to 'review'.
+    const implMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'implement', skill: '30-simple-implement', kind: 'implement', priorAudit: 'docs/dev/plan-audit-v1-fake.md' });
+    writeFileSync(
+      join(tempDir, 'docs/dev/impl-v1-fake.md'),
+      buildFrontMatter(implMeta) + `# partial implementation ledger\n`
+    );
+    writeInterruptedMarker(tempDir, {
+      loop: 'implement', kind: 'implement', version: 1, agent: 'fake', model: 'fake-model',
+      skillId: '30-simple-implement', interruptedAtMs: 500
+    });
+
+    lastPromptedDefault = undefined;
+    await smashAction({
+      project: tempDir,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    // Quarantine removed the partial impl before the default-loop derivation,
+    // so currentPlanImplemented is false and the default is 'implement', not 'review'.
+    expect(existsSync(join(tempDir, 'docs/dev/impl-v1-fake.md'))).toBe(false);
+    expect(lastPromptedDefault).toBe('implement');
   });
 });

@@ -26,7 +26,9 @@ function makeInFlight(kind: StepKind, startedAtMs: number, status: StepStatus = 
     iteration: 1,
     startedAtMs,
     status,
-    message: 'Spawning opencode for audit v1...'
+    spawnLabel: 'Spawning opencode for audit v1...',
+    toolCallCount: 0,
+    progressMessage: null
   };
 }
 
@@ -70,8 +72,8 @@ describe('createPanelCliOutput — live region seam', () => {
     (process.stdout as any).isTTY = originalIsTTY;
   });
 
-  it('PANEL_RENDER_INTERVAL_MS is 200ms (per the plan §3 live cadence)', () => {
-    expect(PANEL_RENDER_INTERVAL_MS).toBe(200);
+  it('PANEL_RENDER_INTERVAL_MS is 3000ms', () => {
+    expect(PANEL_RENDER_INTERVAL_MS).toBe(3000);
   });
 
   it('attachLiveRegion starts an interval that calls renderStatusPanel on each tick', () => {
@@ -136,8 +138,8 @@ describe('createPanelCliOutput — live region seam', () => {
       if (m) firstSecs = parseInt(m[1]!, 10);
     }
 
-    vi.advanceTimersByTime(1500);
-    // The second-tick range ends after 1.5s of clock advance; the LAST write
+    vi.advanceTimersByTime(PANEL_RENDER_INTERVAL_MS);
+    // The second-tick range ends after PANEL_RENDER_INTERVAL_MS of clock advance; the LAST write
     // in that range carries the largest elapsed value (elapsed grows
     // monotonically because startedAtMs is the closed-over fixed value).
     let secondSecs: number | null = null;
@@ -181,7 +183,9 @@ describe('createPanelCliOutput — live region seam', () => {
       iteration: 1,
       startedAtMs,
       status: currentStatus,
-      message: 'audit v1'
+      spawnLabel: 'Spawning opencode for audit v1...',
+      toolCallCount: 0,
+      progressMessage: 'audit v1'
     }));
 
     // Simulate a lifecycle failure transition (loop.onLifecycle flips status to 'failed')

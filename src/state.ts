@@ -9,8 +9,17 @@ import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.
 // state.ts imports + re-exports it instead of redeclaring.
 import type { StepKind } from './provenance.js';
 export type { StepKind };
+import type { LoopSpec, Manifest } from './manifest.js';
+import { readInterruptedMarker, resolveInterruptedArtifactPath } from './interrupted-artifact.js';
 
-export type StepStatus = 'running' | 'done' | 'failed';
+export type StepStatus = 'running' | 'done' | 'failed' | 'interrupted';
+
+/** Derive the canonical role label for a step kind (used for synthesized steps). */
+function roleForKind(kind: StepKind): string {
+  if (kind === 'audit') return 'auditor';
+  if (kind === 'follow-up') return 'planner';
+  return 'implementer';
+}
 
 export interface Step {
   kind: StepKind;
@@ -218,4 +227,72 @@ export function requireApprovedPlanAuditPath(
   return approvedPath;
 }
 
+// --- Display-only interrupted scan (§3) ---------------------------------------
+//
+// `scan()` is a decision-path fact scanner and MUST stay free of synthetic
+// interrupted steps (the loop/smash decision logic never acts on an interrupt).
+// This opt-in helper is the ONLY place that merges the durable interrupted
+// marker with artifact facts for status DISPLAY. It is consumed solely by
+// `src/commands/status.ts` (the read-only view).
 
+export interface StatusScanResult {
+  /** Display timeline: artifact facts for the loop, plus a synthesized
+   *  interrupted step when a matching marker exists (matching partial row
+   *  suppressed so the operator sees ONE interrupted step). */
+  timeline: Step[];
+  /** Latest audit version in the display timeline (0 when none). */
+  latestVersion: number;
+  /** The synthesized interrupted step when the marker matches this loop, else null. */
+  interruptedStep: Step | null;
+}
+
+/**
+ * Build the read-only status timeline for a loop, merging the interrupted marker
+ * when it matches. Decision-path `scan()` is unchanged; this helper is display-only.
+ *
+ * For audit-style loops the base timeline comes from `scan()`; for implement
+ * loops (no audit pattern) the base is empty and the interrupted step carries the
+ * display. When a matching marker exists, its synthesized `interrupted` step
+ * replaces any same-path partial artifact row in the returned timeline.
+ */
+export function scanForStatus(
+  projectRoot: string,
+  loopName: string,
+  loopSpec: LoopSpec,
+  manifest: Manifest
+): StatusScanResult {
+  let timeline: Step[] = [];
+  if (loopSpec.auditPattern && loopSpec.followUpPattern) {
+    timeline = scan(projectRoot, {
+      auditPattern: loopSpec.auditPattern,
+      followUpPattern: loopSpec.followUpPattern
+    }).timeline;
+  }
+
+  const marker = readInterruptedMarker(projectRoot);
+  let interruptedStep: Step | null = null;
+  if (marker && marker.loop === loopName) {
+    const artifactPath = resolveInterruptedArtifactPath(projectRoot, marker, manifest.loops) ?? '';
+    interruptedStep = {
+      kind: marker.kind,
+      role: roleForKind(marker.kind),
+      agent: marker.agent,
+      model: marker.model,
+      version: marker.version,
+      status: 'interrupted',
+      artifactPath,
+      mtime: marker.interruptedAtMs
+    };
+    // Suppress a matching partial artifact row, then append the synthesized
+    // interrupted step so the display shows exactly one interrupted step.
+    timeline = timeline.filter((s) => s.artifactPath !== artifactPath || s.status === 'interrupted');
+    timeline.push(interruptedStep);
+  }
+
+  const latestVersion = timeline.reduce(
+    (max, s) => (s.kind === 'audit' && s.version > max ? s.version : max),
+    0
+  );
+
+  return { timeline, latestVersion, interruptedStep };
+}

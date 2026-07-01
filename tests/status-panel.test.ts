@@ -22,7 +22,9 @@ function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
     iteration: 1,
     startedAtMs: 0,
     status,
-    message: '...'
+    spawnLabel: `Spawning opencode for ${kind}...`,
+    toolCallCount: 0,
+    progressMessage: null
   };
 }
 
@@ -135,7 +137,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     expect(out).not.toContain('Active Step:');
   });
 
-  it('"Active Step" section content precedes the historical "Timeline" table', () => {
+  it('"Active Step" section content follows the "Timeline" table', () => {
     const out = renderStatusPanel(makeContext({
       inFlight: makeInFlight('follow-up'),
       timeline: [
@@ -145,7 +147,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     const activeIdx = out.indexOf('Active Step:');
     const timelineIdx = out.indexOf('Timeline:');
     expect(activeIdx).toBeGreaterThan(0);
-    expect(timelineIdx).toBeGreaterThan(activeIdx);
+    expect(activeIdx).toBeGreaterThan(timelineIdx);
   });
 
   it('border ↔ in-flight-row mirror: the in-flight Role cell is colored with the role accent (v6 M2 / v9 Major #2 / v9 Minor #1 closure)', () => {
@@ -177,6 +179,34 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     const out = renderStatusPanel(makeContext({ inFlight: makeInFlight('implement') }));
     const expectedRole = roleAccent('implementer').chalk('implementer');
     expect(out).toContain(expectedRole);
+  });
+
+  it('renders the in-flight step as the bottom row of the timeline table', () => {
+    const out = renderStatusPanel(makeContext({
+      inFlight: makeInFlight('follow-up'),
+      timeline: [
+        { kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 }
+      ]
+    }));
+    const rejectedIdx = out.indexOf('REJECTED');
+    const runningIdx = out.indexOf('running');
+    expect(rejectedIdx).toBeGreaterThan(0);
+    expect(runningIdx).toBeGreaterThan(rejectedIdx);
+  });
+
+  it('renders spawn, tool-call count, and progress info on separate active-step lines', () => {
+    const out = renderStatusPanel(makeContext({
+      inFlight: {
+        ...makeInFlight('audit'),
+        toolCallCount: 13,
+        progressMessage: 'Reading audit output'
+      }
+    }));
+    expect(out).toContain('Spawn:');
+    expect(out).toContain('Tool calls:');
+    expect(out).toContain('13');
+    expect(out).toContain('Progress:');
+    expect(out).toContain('Reading audit output');
   });
 });
 
@@ -229,14 +259,62 @@ describe('renderStatusPanel — read-only non-live label (v9 audit Major #1 clos
       currentIteration: 0,
       maxIterations: 5
     }));
-    expect(out).toContain('Iteration: not running');
+    expect(out).toContain('Iteration:        ');
+    expect(out).toContain('not running');
     expect(out).not.toMatch(/0\/5|0 \/ 5/);
     expect(out).not.toContain('Iteration: 0');
   });
 
   it('live view renders "Iteration: 1/5" (1-based display rule)', () => {
     const out = renderStatusPanel(makeContext({ readOnly: false, currentIteration: 1, maxIterations: 5 }));
-    expect(out).toContain('Iteration: 1/5');
+    expect(out).toContain('Iteration:        ');
+    expect(out).toContain('1/5');
     expect(out).not.toContain('Iteration: not running');
+  });
+
+  it('iteration value aligns with the other summary labels', () => {
+    const out = renderStatusPanel(makeContext({ readOnly: false, currentIteration: 1, maxIterations: 5 }));
+    expect(out).toContain('Loop:             ');
+    expect(out).toContain('Iteration:        ');
+  });
+});
+
+describe('renderStatusPanel — interrupted steps render the literal "interrupted" (§3)', () => {
+  it('renders an interrupted audit step with the "interrupted" status label', () => {
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        { kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x/plan-audit-v3-codex.md', mtime: 0 }
+      ]
+    }));
+    expect(out).toContain('interrupted');
+  });
+
+  it('renders an interrupted follow-up step with the "interrupted" status label', () => {
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        { kind: 'follow-up', role: 'planner', version: 2, agent: 'claude', model: 'glm-5.2', status: 'interrupted', artifactPath: '/x/plan-followup-v2-claude.md', mtime: 0 }
+      ]
+    }));
+    expect(out).toContain('interrupted');
+  });
+
+  it('renders an interrupted implement step with the "interrupted" status label', () => {
+    const out = renderStatusPanel(makeContext({
+      loopName: 'implement',
+      timeline: [
+        { kind: 'implement', role: 'implementer', version: 1, agent: 'agy', model: 'Gemini 3.5 Flash (Medium)', status: 'interrupted', artifactPath: '/x/impl-v1-agy.md', mtime: 0 }
+      ]
+    }));
+    expect(out).toContain('interrupted');
+  });
+
+  it('an interrupted step shows an em-dash result cell, not a misleading "unknown" verdict', () => {
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        { kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x', mtime: 0 }
+      ]
+    }));
+    expect(out).toContain('—'); // em dash result cell
+    expect(out).not.toMatch(/unknown/i);
   });
 });

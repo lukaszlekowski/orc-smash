@@ -31,6 +31,13 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
   if (agent === 'codex') {
     return !model.startsWith('opencode/') && !model.startsWith('claude-');
   }
+  if (agent === 'agy') {
+    // agy models are the exact human-readable names from `agy models`. This batch
+    // accepts ONLY the configured `providers.agy` allow-list (with input
+    // trimming), never namespace-style fallbacks like gpt-5.5 / opencode/... /
+    // claude-... / any unconfigured human-readable label.
+    return allowedModels.includes(model.trim());
+  }
   if (agent === 'fake') {
     return true;
   }

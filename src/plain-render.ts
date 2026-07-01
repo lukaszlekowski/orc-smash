@@ -92,7 +92,11 @@ export function renderPlainPanel(context: PanelContext): string {
       const timestamp = new Date(s.mtime).toISOString().slice(0, 19).replace('T', ' ');
 
       let resultText = '';
-      if (s.kind === 'audit') {
+      if (s.status === 'interrupted') {
+        // No verdict/outcome for an interrupted step; the status line carries
+        // the literal "interrupted" signal.
+        resultText = '—';
+      } else if (s.kind === 'audit') {
         resultText = s.verdict ?? 'unknown';
       } else {
         resultText = s.outcome ?? '';

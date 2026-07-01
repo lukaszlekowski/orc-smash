@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
 import { codexAdapter } from '../src/adapters/codex.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
+import { agyAdapter } from '../src/adapters/agy.js';
 
 describe('Adapter arguments builders', () => {
   const input = {
@@ -52,5 +53,19 @@ describe('Adapter arguments builders', () => {
       '--permission-mode',
       'bypassPermissions'
     ]);
+  });
+
+  it('builds correct arguments for agy and never includes a CLI timeout flag', () => {
+    const build = agyAdapter.buildRun(input);
+    expect(build.command).toBe('agy');
+    expect(build.args).toEqual([
+      '-p',
+      'My test prompt',
+      '--model',
+      'my-model-123',
+      '--dangerously-skip-permissions'
+    ]);
+    // Timeout is harness-owned via spawnAgentProcess lifecycle options; no CLI flag.
+    expect(build.args.some((a) => /timeout/i.test(a))).toBe(false);
   });
 });
