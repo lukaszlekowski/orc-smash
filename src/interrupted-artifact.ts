@@ -222,7 +222,7 @@ export function quarantineLateArtifactsForLoop(
   loopSpec: LoopSpec,
   notBeforeMs: number
 ): string[] {
-  const patterns = [loopSpec.auditPattern, loopSpec['follow-up'], loopSpec.implementPattern].filter(
+  const patterns = [loopSpec.auditPattern, loopSpec.followUpPattern, loopSpec.implementPattern].filter(
     (p): p is string => typeof p === 'string' && p.length > 0
   );
   if (patterns.length === 0) return [];

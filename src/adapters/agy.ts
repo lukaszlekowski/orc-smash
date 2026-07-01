@@ -24,10 +24,32 @@ export const AGY_AUTH_FAILURE_PATTERNS: RegExp[] = [
   /\bmissing credentials?\b/i
 ];
 
-/** @returns true when the combined agy output matches a bounded auth-failure phrase. */
-export function isAgyAuthFailure(combined: string): boolean {
-  if (!combined) return false;
-  return AGY_AUTH_FAILURE_PATTERNS.some((re) => re.test(combined));
+/** 
+ * Returns true when the agy output matches a bounded auth-failure phrase.
+ * Weight detection toward stderr for generic tokens (401, unauthorized) to avoid
+ * false positives from generated code or comments in stdout.
+ */
+export function isAgyAuthFailure(stdout: string, stderr?: string): boolean {
+  // If only one argument is provided (e.g. in some pattern-matching unit tests), check all patterns on it
+  if (stderr === undefined) {
+    return AGY_AUTH_FAILURE_PATTERNS.some((re) => re.test(stdout));
+  }
+
+  // Weight detection toward stderr: check all patterns on stderr
+  if (AGY_AUTH_FAILURE_PATTERNS.some((re) => re.test(stderr))) {
+    return true;
+  }
+
+  // Check stdout only for specific, non-generic auth patterns
+  const specificPatterns = AGY_AUTH_FAILURE_PATTERNS.filter((re) => {
+    const src = re.source;
+    return !src.includes('401') && !src.includes('unauthori');
+  });
+  if (specificPatterns.some((re) => re.test(stdout))) {
+    return true;
+  }
+
+  return false;
 }
 
 export interface CreateAgyAdapterOptions {
@@ -77,8 +99,7 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
       // structured `auth` error so the loop can quarantine any resolved artifact.
       // Detection only — no path resolution or filesystem mutation here.
       if (!result.error) {
-        const combined = `${result.stdout}\n${result.stderr ?? ''}`;
-        if (isAgyAuthFailure(combined)) {
+        if (isAgyAuthFailure(result.stdout, result.stderr ?? '')) {
           const err: RunError = {
             kind: 'auth',
             message:

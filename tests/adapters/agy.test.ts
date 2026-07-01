@@ -69,11 +69,23 @@ describe('agy auth-failure detection (bounded, provider-specific)', () => {
 });
 
 describe('agy adapter — auth detection owns detection only (no filesystem mutation)', () => {
-  it('returns error.kind "auth" when unauthenticated phrases appear in stdout', async () => {
-    const adapter = createAgyAdapter({ processRunner: runnerOf({ stdout: 'ERROR 401 Unauthorized' }) });
+  it('returns error.kind "auth" when specific non-generic unauthenticated phrases appear in stdout', async () => {
+    const adapter = createAgyAdapter({ processRunner: runnerOf({ stdout: 'ERROR missing credentials' }) });
     const result = await adapter.run({ ...baseInput, skillId: 'plan-audit', version: 1 });
     expect(result.error?.kind).toBe('auth');
     expect(result.error?.message).toMatch(/authentication failed/i);
+  });
+
+  it('does NOT return error.kind "auth" when generic phrases like "401" or "unauthorized" appear only in stdout', async () => {
+    const adapter = createAgyAdapter({ processRunner: runnerOf({ stdout: 'The generated code returns 401 or handles unauthorized requests.' }) });
+    const result = await adapter.run({ ...baseInput, skillId: 'plan-audit', version: 1 });
+    expect(result.error).toBeUndefined();
+  });
+
+  it('returns error.kind "auth" when generic unauthenticated phrases appear in stderr', async () => {
+    const adapter = createAgyAdapter({ processRunner: runnerOf({ stderr: 'ERROR 401 Unauthorized' }) });
+    const result = await adapter.run({ ...baseInput, skillId: 'plan-audit', version: 1 });
+    expect(result.error?.kind).toBe('auth');
   });
 
   it('returns error.kind "auth" when unauthenticated phrases appear in stderr', async () => {

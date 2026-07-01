@@ -184,23 +184,39 @@ describe('interrupted-artifact quarantine', () => {
   it('quarantineLateArtifactsForLoop moves only pattern-matching files newer than the threshold', () => {
     const loops = makeLoops();
     const planSpec = loops['plan']!;
+    const implementSpec = loops['implement']!;
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    const newer = join(tempDir, 'docs/dev/plan-audit-v3-codex.md');
-    const older = join(tempDir, 'docs/dev/plan-audit-v2-codex.md');
+    
+    const newerAudit = join(tempDir, 'docs/dev/plan-audit-v3-codex.md');
+    const newerFollowUp = join(tempDir, 'docs/dev/plan-followup-v3-codex.md');
+    const olderAudit = join(tempDir, 'docs/dev/plan-audit-v2-codex.md');
+    const olderFollowUp = join(tempDir, 'docs/dev/plan-followup-v2-codex.md');
     const unrelated = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(newer, 'new');
-    writeFileSync(older, 'old');
+    
+    writeFileSync(newerAudit, 'new audit');
+    writeFileSync(newerFollowUp, 'new follow-up');
+    writeFileSync(olderAudit, 'old audit');
+    writeFileSync(olderFollowUp, 'old follow-up');
     writeFileSync(unrelated, 'plan body');
-    // Backdate "older" so its mtime precedes the resume threshold.
+    
     const past = new Date(Date.now() - 60_000);
-    utimesSync(older, past, past);
+    utimesSync(olderAudit, past, past);
+    utimesSync(olderFollowUp, past, past);
     const threshold = Date.now() - 30_000;
 
     const archived = quarantineLateArtifactsForLoop(tempDir, planSpec, threshold);
-    expect(archived.length).toBe(1);
-    expect(existsSync(newer)).toBe(false);      // quarantined
-    expect(existsSync(older)).toBe(true);       // too old, kept
-    expect(existsSync(unrelated)).toBe(true);   // not a pattern match, kept
+    expect(archived.length).toBe(2);
+    expect(existsSync(newerAudit)).toBe(false);       // quarantined
+    expect(existsSync(newerFollowUp)).toBe(false);    // quarantined
+    expect(existsSync(olderAudit)).toBe(true);        // too old, kept
+    expect(existsSync(olderFollowUp)).toBe(true);     // too old, kept
+    expect(existsSync(unrelated)).toBe(true);        // not a pattern match, kept
+
+    const newerImpl = join(tempDir, 'docs/dev/impl-v3-codex.md');
+    writeFileSync(newerImpl, 'new implement');
+    const archivedImpl = quarantineLateArtifactsForLoop(tempDir, implementSpec, threshold);
+    expect(archivedImpl.length).toBe(1);
+    expect(existsSync(newerImpl)).toBe(false);        // quarantined
   });
 
   it('quarantineInterruptedResume: marker present → quarantine in-flight + clear marker', () => {
