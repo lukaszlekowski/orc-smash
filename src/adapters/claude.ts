@@ -1,6 +1,7 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess, resolveClaudeTimeoutMs, type ProcessRunner } from './utils.js';
 import { debugCommandBuild } from '../debug-spawn.js';
+import { parseClaudeResult } from './claude-result.js';
 
 export interface CreateClaudeAdapterOptions {
   /** Config-tier watchdog deadline in ms (0 / unset disables). */
@@ -19,18 +20,25 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
     name: 'claude',
 
     buildRun(input: RunInput): { command: string; args: string[] } {
+      const args = [
+        '-p',
+        input.prompt,
+        '--model',
+        input.model
+      ];
+      if (input.kind !== 'implement') {
+        args.push('--output-format', 'json');
+      }
+      args.push(
+        '--permission-mode',
+        'bypassPermissions'
+      );
+      if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+        args.push('--resume', input.continuity.sessionId);
+      }
       return {
         command: 'claude',
-        args: [
-          '-p',
-          input.prompt,
-          '--model',
-          input.model,
-          '--output-format',
-          'json',
-          '--permission-mode',
-          'bypassPermissions'
-        ]
+        args
       };
     },
 
@@ -43,7 +51,7 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
         cwd: input.cwd
       });
       // claude is config-only: timeouts.claude > built-in 0; no env var.
-      return spawnAgentProcess(command, args, input.cwd, {
+      const result = await spawnAgentProcess(command, args, input.cwd, {
         agent: this.name,
         model: input.model,
         skillId: input.skillId,
@@ -51,6 +59,36 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
         onLifecycle: input.onLifecycle,
         timeoutMs: resolveClaudeTimeoutMs({ defaultTimeoutMs })
       }, processRunner);
+
+      if (!result.error && result.exitCode === 0) {
+        if (input.kind === 'implement') {
+          return result;
+        }
+        try {
+          const parsed = parseClaudeResult(result.stdout);
+          if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+            if (parsed.sessionId !== input.continuity.sessionId) {
+              throw new Error(`Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${parsed.sessionId}`);
+            }
+          }
+          return {
+            ...result,
+            stdout: parsed.assistantText,
+            sessionId: parsed.sessionId
+          };
+        } catch (err: any) {
+          return {
+            ...result,
+            error: {
+              kind: 'server',
+              message: err.message,
+              raw: result.stdout
+            }
+          };
+        }
+      }
+
+      return result;
     }
   };
 }

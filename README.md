@@ -27,7 +27,7 @@ orc smash --project <path>          # run the audit↔follow-up loop (interactiv
 orc smash --project <path> --plain  # run the loop in append-only scrollback-safe plain mode
 orc smash --project <path> \        # run-wide runner override, non-interactive
   --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
-orc smash --project <path> --codex-audit-continuity # run in Codex audit continuity mode (plan/review loops)
+orc smash --project <path> --audit-continuity # run in audit continuity mode (plan/review loops)
 orc status --project <path>         # read-only: detect where we are, render the status panel
 ```
 
@@ -50,7 +50,7 @@ orc status --project <path>         # read-only: detect where we are, render the
 - **Execution Watchdog:** Spawns are protected by a watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default. `claude`, `codex`, and `agy` are config-only: `timeouts.<agent>` > built-in `0` (disabled by default); there are no env vars for these agents. A timeout fires `error.kind === 'timeout'` and a failed lifecycle event.
 - **Interrupted-run handling:** `SIGINT`/`SIGTERM` writes a durable interrupted marker under the active project root, terminates in-flight provider children (SIGTERM → SIGKILL after a grace period), and exits with the conventional signal code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run never resolves to a terminal `unknown` and `orc status` shows the interrupted stage (`plan`/`review`/`implement`) via marker-first loop selection.
 - **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
-- **Codex Audit Continuity (Opt-in):** By passing `--codex-audit-continuity`, subsequent Codex audit steps in the `plan` or `review` loop primary rejected chain will resume the session ID of the first run. Resumption is artifact-driven (using the `sessionMode` and `sessionId` metadata stamped in front matter), never `--last`-driven, and second-opinion audits are kept fresh and independent.
+- **Audit Continuity (Opt-in):** By passing `--audit-continuity`, subsequent audit steps in the `plan` or `review` loop primary rejected chain will resume the session ID of the first run. Supported for `codex`, `opencode`, and `claude` providers. Resumption is artifact-driven (using the `sessionMode` and `sessionId` metadata stamped in front matter), never `--last`-driven or history-driven, and second-opinion audits are kept fresh and independent. The legacy `--codex-audit-continuity` remains supported as a temporary alias for Codex runs, but is mutually exclusive with `--audit-continuity`.
 
 ## Architecture direction
 

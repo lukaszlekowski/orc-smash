@@ -2,6 +2,31 @@ import { describe, it, expect } from 'vitest';
 import { buildProgram } from '../src/cli.js';
 
 describe('CLI Commander Option Parsing', () => {
+  it('recognizes and parses --audit-continuity flag', () => {
+    const program = buildProgram();
+    const smashCmd = program.commands.find(c => c.name() === 'smash');
+    if (smashCmd) {
+      smashCmd.action(() => {});
+    }
+
+    // Parse a dummy argument list
+    program.parse([
+      'node',
+      'orc',
+      'smash',
+      '--project',
+      '/tmp/project',
+      '--audit-continuity'
+    ]);
+
+    expect(smashCmd).toBeDefined();
+    if (smashCmd) {
+      const opts = smashCmd.opts();
+      expect(opts['auditContinuity']).toBe(true);
+      expect(opts['project']).toBe('/tmp/project');
+    }
+  });
+
   it('recognizes and parses --codex-audit-continuity flag', () => {
     const program = buildProgram();
     const smashCmd = program.commands.find(c => c.name() === 'smash');
@@ -27,7 +52,7 @@ describe('CLI Commander Option Parsing', () => {
     }
   });
 
-  it('defaults --codex-audit-continuity flag to undefined/false when absent', () => {
+  it('defaults continuity flags to undefined/false when absent', () => {
     const program = buildProgram();
     const smashCmd = program.commands.find(c => c.name() === 'smash');
     if (smashCmd) {
@@ -45,7 +70,9 @@ describe('CLI Commander Option Parsing', () => {
     expect(smashCmd).toBeDefined();
     if (smashCmd) {
       const opts = smashCmd.opts();
+      expect(opts['auditContinuity']).toBeUndefined();
       expect(opts['codexAuditContinuity']).toBeUndefined();
     }
   });
 });
+

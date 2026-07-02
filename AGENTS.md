@@ -105,7 +105,7 @@ itself.
   target's `docs/dev/` filenames on each run; nothing is persisted or resumed by the tool.
 - One runner per target. Concurrent runs on *different* targets are fine and must not
   interfere (proven by the dual-target isolation e2e).
-- **Codex audit continuity exception**: When `--codex-audit-continuity` is enabled on the `plan` or `review` loop, the harness offers an opt-in mode where subsequent Codex audit steps in the primary rejected chain resume the same session ID. The session ID is captured from the live `thread.started` event stream on the first step and recorded explicitly in artifact metadata (`sessionMode`, `sessionId`). Resuming does not use `codex exec resume --last` or local shell history; the artifact metadata remains the source of truth, and second opinions do not inherit the session.
+- **Audit continuity exception**: When `--audit-continuity` is enabled on the `plan` or `review` loop, the harness offers an opt-in mode where subsequent audit steps in the primary rejected chain resume the same session ID. Supported for `codex`, `opencode`, and `claude` providers. The session ID is captured from the live provider streams on the first step and recorded explicitly in artifact metadata (`sessionMode`, `sessionId`). Resuming does not use `--last` or local shell/process history; the artifact metadata remains the source of truth, and second opinions do not inherit the session. The legacy `--codex-audit-continuity` is kept as a temporary Codex-only alias. Both flags are mutually exclusive.
 
 ## 5a. Commit message hygiene
 

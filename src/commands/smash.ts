@@ -28,6 +28,7 @@ export interface SmashOptions {
   output: CliOutput;
   plain?: boolean;
   codexAuditContinuity?: boolean;
+  auditContinuity?: boolean;
   /**
    * Test seam (Step 5, v3-audit M1 fix): the factory used to build the
    * agent registry. Defaults to `(cfg) => createProductionAdapterRegistry(cfg.registry)`.
@@ -49,7 +50,7 @@ interface SmashRunSetup {
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
-  auditContinuity: 'off' | 'codex-resume';
+  auditContinuity: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume';
 }
 
 async function resolveSmashRunSetup(
@@ -129,6 +130,20 @@ async function resolveSmashRunSetup(
   }
 
   const loopSpec = config.manifest.loops[loopName]!;
+
+  if (options.auditContinuity && options.codexAuditContinuity) {
+    const msg = `Error: --audit-continuity and --codex-audit-continuity are mutually exclusive.`;
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
+  }
+
+  if (options.auditContinuity) {
+    if (loopName !== 'plan' && loopName !== 'review') {
+      const msg = `Error: --audit-continuity is only valid for plan and review loops.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+  }
 
   if (options.codexAuditContinuity) {
     if (loopName !== 'plan' && loopName !== 'review') {
@@ -256,6 +271,8 @@ async function resolveSmashRunSetup(
     }
   }
 
+  let auditContinuity: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume' = 'off';
+
   if (options.codexAuditContinuity) {
     const auditSkillId = loopSpec.audit;
     const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
@@ -264,9 +281,24 @@ async function resolveSmashRunSetup(
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
+    auditContinuity = 'codex-resume';
+  } else if (options.auditContinuity) {
+    const auditSkillId = loopSpec.audit;
+    const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
+    const agent = auditRunner?.agent;
+    if (!agent || (agent !== 'codex' && agent !== 'opencode' && agent !== 'claude')) {
+      const msg = `Error: --audit-continuity requires the audit runner to be codex, opencode, or claude.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+    if (agent === 'codex') {
+      auditContinuity = 'codex-resume';
+    } else if (agent === 'opencode') {
+      auditContinuity = 'opencode-resume';
+    } else if (agent === 'claude') {
+      auditContinuity = 'claude-resume';
+    }
   }
-
-  const auditContinuity = options.codexAuditContinuity ? 'codex-resume' : 'off';
 
   return {
     setup: {

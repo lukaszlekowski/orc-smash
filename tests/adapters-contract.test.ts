@@ -22,184 +22,284 @@ describe('Real-provider contract tests', () => {
 
     // Initialize git repository to keep coding agents relative to this test directory
     execSync('git init', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
 
     // Create dummy project authority files to bypass agent-specific preload rules
     writeFileSync(join(tempDir, 'AGENTS.md'), '# Dummy AGENTS\n');
     writeFileSync(join(tempDir, 'CLAUDE.md'), '# Dummy CLAUDE\n');
     writeFileSync(join(tempDir, 'README.md'), '# Dummy README\n');
+
+    execSync('git add AGENTS.md CLAUDE.md README.md', { cwd: tempDir, stdio: 'ignore' });
+    execSync('git commit -m "initial"', { cwd: tempDir, stdio: 'ignore' });
   });
 
   afterEach(() => {
     removeTempDir(tempDir);
   });
 
-  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode spawn and asserts lifecycle (≥1 message, ends completed)', async () => {
-    const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
-    const outputPath = 'docs/dev/plan-audit-v1-opencode.md';
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+  describe('opencode', () => {
+    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('spawn contract — lifecycle and file write', async () => {
+      const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
+      const outputPath = 'docs/dev/plan-audit-v1-opencode.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
-    const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
+      const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
 
-    const lifecycleEvents: LifecycleEvent[] = [];
+      const lifecycleEvents: LifecycleEvent[] = [];
 
-    const result = await opencodeAdapter.run({
-      prompt,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      onLifecycle: (e) => lifecycleEvents.push(e)
-    });
+      const result = await opencodeAdapter.run({
+        prompt,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        onLifecycle: (e) => lifecycleEvents.push(e)
+      });
 
-    expect(result.error).toBeUndefined();
-    expect(result.exitCode).toBe(0);
-    expect(typeof result.stdout).toBe('string');
+      expect(result.error).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+      expect(typeof result.stdout).toBe('string');
 
-    const filePath = join(tempDir, outputPath);
-    expect(existsSync(filePath)).toBe(true);
-    const content = readFileSync(filePath, 'utf-8');
-    expect(parseVerdict(content)).toBe('APPROVED');
+      const filePath = join(tempDir, outputPath);
+      expect(existsSync(filePath)).toBe(true);
+      const content = readFileSync(filePath, 'utf-8');
+      expect(parseVerdict(content)).toBe('APPROVED');
 
-    // Lifecycle assertions: opencode emits ≥1 message and ends completed
-    const messageEvents = lifecycleEvents.filter(e => e.type === 'message');
-    expect(messageEvents.length).toBeGreaterThanOrEqual(1);
-    const lastEvent = lifecycleEvents[lifecycleEvents.length - 1];
-    expect(lastEvent?.type).toBe('completed');
-  }, 60000);
+      const messageEvents = lifecycleEvents.filter(e => e.type === 'message');
+      expect(messageEvents.length).toBeGreaterThanOrEqual(1);
+      const lastEvent = lifecycleEvents[lifecycleEvents.length - 1];
+      expect(lastEvent?.type).toBe('completed');
+    }, 60000);
 
-  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode error path', async () => {
-    // Known bad model that should prompt server error immediately
-    const model = 'opencode/deepseek-v4-flash';
-    const result = await opencodeAdapter.run({
-      prompt: 'return hi',
-      model,
-      cwd: tempDir
-    });
+    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('error contract — bad model returns server error', async () => {
+      const model = 'opencode/deepseek-v4-flash';
+      const result = await opencodeAdapter.run({
+        prompt: 'return hi',
+        model,
+        cwd: tempDir
+      });
 
-    expect(result.error).toBeDefined();
-    expect(result.error?.kind).toBe('server');
-    expect(result.error?.ref).toBeDefined();
-    expect(typeof result.stdout).toBe('string');
-    // Note: The actual exit code for bad model is recorded here
-    expect(typeof result.exitCode).toBe('number');
-  }, 60000);
+      expect(result.error).toBeDefined();
+      expect(result.error?.kind).toBe('server');
+      expect(result.error?.ref).toBeDefined();
+      expect(typeof result.stdout).toBe('string');
+      expect(typeof result.exitCode).toBe('number');
+    }, 60000);
 
-  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex spawn and asserts lifecycle (started→completed, no message)', async () => {
-    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
-    const outputPath = 'docs/dev/plan-audit-v1-codex.md';
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('continuity contract — resumed session preserves id', async () => {
+      const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
+      const outputPath1 = 'docs/dev/plan-audit-v1-opencode.md';
+      const outputPath2 = 'docs/dev/plan-audit-v2-opencode.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
-    const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
+      const prompt1 = `Write exactly the following content to the file "${outputPath1}" and nothing else:\n## Verdict\nREJECTED\n\nAlso respond to me with "REJECTED".`;
+      const result1 = await opencodeAdapter.run({
+        prompt: prompt1,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        continuity: { mode: 'fresh' }
+      });
 
-    const lifecycleEvents: LifecycleEvent[] = [];
+      expect(result1.exitCode).toBe(0);
+      expect(result1.sessionId).toBeDefined();
+      expect(typeof result1.sessionId).toBe('string');
+      expect(result1.sessionId!.length).toBeGreaterThan(0);
+      expect(result1.stdout).toBeDefined();
+      expect(typeof result1.stdout).toBe('string');
 
-    const result = await codexAdapter.run({
-      prompt,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      onLifecycle: (e) => lifecycleEvents.push(e)
-    });
+      const file1Path = join(tempDir, outputPath1);
+      expect(existsSync(file1Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
+      expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
 
-    expect(result.exitCode).toBe(0);
+      const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
+      const result2 = await opencodeAdapter.run({
+        prompt: prompt2,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 2,
+        continuity: { mode: 'resumed', sessionId: result1.sessionId }
+      });
 
-    const filePath = join(tempDir, outputPath);
-    expect(existsSync(filePath)).toBe(true);
-    const content = readFileSync(filePath, 'utf-8');
-    expect(parseVerdict(content)).toBe('APPROVED');
+      expect(result2.exitCode).toBe(0);
+      expect(result2.sessionId).toBe(result1.sessionId);
+      expect(result2.stdout).toBeDefined();
+      expect(typeof result2.stdout).toBe('string');
 
-    // Lifecycle assertions: codex emits started→completed, never message
-    expect(lifecycleEvents[0]?.type).toBe('started');
-    expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
-    expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
-  }, 60000);
+      const file2Path = join(tempDir, outputPath2);
+      expect(existsSync(file2Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
+      expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+    }, 120000);
+  });
 
-  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex session continuity chain', async () => {
-    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
-    const outputPath1 = 'docs/dev/plan-audit-v1-codex.md';
-    const outputPath2 = 'docs/dev/plan-audit-v2-codex.md';
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+  describe('codex', () => {
+    it.runIf(process.env['CODEX_CONTRACT'] === '1')('spawn contract — lifecycle and file write', async () => {
+      const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+      const outputPath = 'docs/dev/plan-audit-v1-codex.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
-    // Step 1: Fresh audit
-    const prompt1 = `Write exactly the following content to the file "${outputPath1}" and nothing else:\n## Verdict\nREJECTED\n\nAlso respond to me with "REJECTED".`;
-    const result1 = await codexAdapter.run({
-      prompt: prompt1,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      continuity: { mode: 'fresh' }
-    });
+      const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
 
-    expect(result1.exitCode).toBe(0);
-    expect(result1.sessionId).toBeDefined();
-    expect(typeof result1.sessionId).toBe('string');
-    expect(result1.sessionId?.length).toBeGreaterThan(0);
-    expect(result1.stdout).toBeDefined();
-    expect(typeof result1.stdout).toBe('string');
+      const lifecycleEvents: LifecycleEvent[] = [];
 
-    const file1Path = join(tempDir, outputPath1);
-    expect(existsSync(file1Path)).toBe(true);
-    expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
-    expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
+      const result = await codexAdapter.run({
+        prompt,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        onLifecycle: (e) => lifecycleEvents.push(e)
+      });
 
-    // Step 2: Resumed audit
-    const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
-    const result2 = await codexAdapter.run({
-      prompt: prompt2,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 2,
-      continuity: { mode: 'resumed', sessionId: result1.sessionId }
-    });
+      expect(result.exitCode).toBe(0);
 
-    expect(result2.exitCode).toBe(0);
-    expect(result2.sessionId).toBe(result1.sessionId);
-    expect(result2.stdout).toBeDefined();
-    expect(typeof result2.stdout).toBe('string');
+      const filePath = join(tempDir, outputPath);
+      expect(existsSync(filePath)).toBe(true);
+      const content = readFileSync(filePath, 'utf-8');
+      expect(parseVerdict(content)).toBe('APPROVED');
 
-    const file2Path = join(tempDir, outputPath2);
-    expect(existsSync(file2Path)).toBe(true);
-    expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
-    expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+      expect(lifecycleEvents[0]?.type).toBe('started');
+      expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
+      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
+    }, 60000);
 
-    // Step 3: unknown-fallback verdict on a missing/malformed artifact
-    expect(parseVerdict(null, '')).toBe('unknown');
-    expect(parseVerdict(null, 'GARBAGE')).toBe('unknown');
-  }, 120000);
+    it.runIf(process.env['CODEX_CONTRACT'] === '1')('continuity contract — resumed session preserves id', async () => {
+      const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+      const outputPath1 = 'docs/dev/plan-audit-v1-codex.md';
+      const outputPath2 = 'docs/dev/plan-audit-v2-codex.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
 
-  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude spawn and asserts lifecycle (started→completed, no message)', async () => {
-    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
-    const outputPath = 'docs/dev/plan-audit-v1-claude.md';
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+      const prompt1 = `Write exactly the following content to the file "${outputPath1}" and nothing else:\n## Verdict\nREJECTED\n\nAlso respond to me with "REJECTED".`;
+      const result1 = await codexAdapter.run({
+        prompt: prompt1,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        continuity: { mode: 'fresh' }
+      });
 
-    const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
+      expect(result1.exitCode).toBe(0);
+      expect(result1.sessionId).toBeDefined();
+      expect(typeof result1.sessionId).toBe('string');
+      expect(result1.sessionId?.length).toBeGreaterThan(0);
+      expect(result1.stdout).toBeDefined();
+      expect(typeof result1.stdout).toBe('string');
 
-    const lifecycleEvents: LifecycleEvent[] = [];
+      const file1Path = join(tempDir, outputPath1);
+      expect(existsSync(file1Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
+      expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
 
-    const result = await claudeAdapter.run({
-      prompt,
-      model,
-      cwd: tempDir,
-      skillId: 'plan-audit',
-      version: 1,
-      onLifecycle: (e) => lifecycleEvents.push(e)
-    });
+      const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
+      const result2 = await codexAdapter.run({
+        prompt: prompt2,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 2,
+        continuity: { mode: 'resumed', sessionId: result1.sessionId }
+      });
 
-    expect(result.exitCode).toBe(0);
+      expect(result2.exitCode).toBe(0);
+      expect(result2.sessionId).toBe(result1.sessionId);
+      expect(result2.stdout).toBeDefined();
+      expect(typeof result2.stdout).toBe('string');
 
-    const filePath = join(tempDir, outputPath);
-    expect(existsSync(filePath)).toBe(true);
-    const content = readFileSync(filePath, 'utf-8');
-    expect(parseVerdict(content)).toBe('APPROVED');
+      const file2Path = join(tempDir, outputPath2);
+      expect(existsSync(file2Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
+      expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+      expect(parseVerdict(null, '')).toBe('unknown');
+      expect(parseVerdict(null, 'GARBAGE')).toBe('unknown');
+    }, 120000);
+  });
 
-    // Lifecycle assertions: claude emits started→completed, never message
-    expect(lifecycleEvents[0]?.type).toBe('started');
-    expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
-    expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
-  }, 60000);
+  describe('claude', () => {
+    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('spawn contract — lifecycle and file write', async () => {
+      const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+      const outputPath = 'docs/dev/plan-audit-v1-claude.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+
+      const prompt = `Write exactly the following content to the file "${outputPath}" and nothing else:\n## Verdict\nAPPROVED\n`;
+
+      const lifecycleEvents: LifecycleEvent[] = [];
+
+      const result = await claudeAdapter.run({
+        prompt,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        onLifecycle: (e) => lifecycleEvents.push(e)
+      });
+
+      expect(result.exitCode).toBe(0);
+
+      const filePath = join(tempDir, outputPath);
+      expect(existsSync(filePath)).toBe(true);
+      const content = readFileSync(filePath, 'utf-8');
+      expect(parseVerdict(content)).toBe('APPROVED');
+
+      expect(lifecycleEvents[0]?.type).toBe('started');
+      expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
+      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
+    }, 60000);
+
+    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('continuity contract — resumed session preserves id', async () => {
+      const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+      const outputPath1 = 'docs/dev/plan-audit-v1-claude.md';
+      const outputPath2 = 'docs/dev/plan-audit-v2-claude.md';
+      mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+
+      const prompt1 = `Write exactly the following content to the file "${outputPath1}" and nothing else:\n## Verdict\nREJECTED\n\nAlso respond to me with "REJECTED".`;
+      const result1 = await claudeAdapter.run({
+        prompt: prompt1,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 1,
+        continuity: { mode: 'fresh' }
+      });
+
+      expect(result1.exitCode).toBe(0);
+      expect(result1.sessionId).toBeDefined();
+      expect(typeof result1.sessionId).toBe('string');
+      expect(result1.sessionId!.length).toBeGreaterThan(0);
+      expect(result1.stdout).toBeDefined();
+      expect(typeof result1.stdout).toBe('string');
+
+      const file1Path = join(tempDir, outputPath1);
+      expect(existsSync(file1Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
+      expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
+
+      const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
+      const result2 = await claudeAdapter.run({
+        prompt: prompt2,
+        model,
+        cwd: tempDir,
+        skillId: 'plan-audit',
+        version: 2,
+        continuity: { mode: 'resumed', sessionId: result1.sessionId }
+      });
+
+      expect(result2.exitCode).toBe(0);
+      expect(result2.sessionId).toBe(result1.sessionId);
+      expect(result2.stdout).toBeDefined();
+      expect(typeof result2.stdout).toBe('string');
+
+      const file2Path = join(tempDir, outputPath2);
+      expect(existsSync(file2Path)).toBe(true);
+      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
+      expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+    }, 120000);
+  });
 
   const REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS = 600000;
 
@@ -260,6 +360,9 @@ describe('Real-provider contract tests', () => {
       'APPROVED\n';
     writeFileSync(join(tempDir, `docs/dev/plan-audit-v1-${agent}.md`), auditContent);
 
+    execSync(`git add -f docs/dev/plan.md docs/dev/plan-audit-v1-${agent}.md`, { cwd: tempDir, stdio: 'ignore' });
+    execSync('git commit -m "add plan and audit"', { cwd: tempDir, stdio: 'ignore' });
+
     const config = loadConfig(tempDir);
     const implementSpec = config.manifest.loops['implement']!;
 
@@ -309,23 +412,34 @@ describe('Real-provider contract tests', () => {
         implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
       }
     );
+    if (!facts.currentPlanImplemented) {
+      console.log('FACTS:', JSON.stringify(facts, null, 2));
+      const implPath = join(tempDir, outputPath);
+      if (existsSync(implPath)) {
+        console.log('IMPL FILE CONTENT:', readFileSync(implPath, 'utf-8'));
+      } else {
+        console.log('IMPL FILE DOES NOT EXIST');
+      }
+    }
     expect(facts.currentPlanImplemented).toBe(true);
   }
 
-  it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('exercises real opencode implement loop ledger writing', async () => {
-    const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
-    await runRealProviderImplementLoopTest('opencode', model);
-  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+  describe('implement loop', () => {
+    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('opencode — ledger writing and closeout', async () => {
+      const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
+      await runRealProviderImplementLoopTest('opencode', model);
+    }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
 
-  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex implement loop ledger writing', async () => {
-    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
-    await runRealProviderImplementLoopTest('codex', model);
-  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+    it.runIf(process.env['CODEX_CONTRACT'] === '1')('codex — ledger writing and closeout', async () => {
+      const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+      await runRealProviderImplementLoopTest('codex', model);
+    }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
 
-  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude implement loop ledger writing', async () => {
-    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
-    await runRealProviderImplementLoopTest('claude', model);
-  }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('claude — ledger writing and closeout', async () => {
+      const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+      await runRealProviderImplementLoopTest('claude', model);
+    }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
+  });
 
   // ---------------------------------------------------------------------
   // Watchdog timeout proof (§1): a real codex/claude run with a tiny
@@ -357,13 +471,15 @@ describe('Real-provider contract tests', () => {
     }
   }
 
-  it.runIf(process.env['CODEX_CONTRACT'] === '1')('real codex run with a tiny configured timeout fails as error.kind timeout', async () => {
-    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
-    await runRealProviderTimeoutTest('codex', model);
-  }, 60000);
+  describe('timeouts', () => {
+    it.runIf(process.env['CODEX_CONTRACT'] === '1')('codex — tiny configured timeout fails as error.kind timeout', async () => {
+      const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+      await runRealProviderTimeoutTest('codex', model);
+    }, 60000);
 
-  it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('real claude run with a tiny configured timeout fails as error.kind timeout', async () => {
-    const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
-    await runRealProviderTimeoutTest('claude', model);
-  }, 60000);
+    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('claude — tiny configured timeout fails as error.kind timeout', async () => {
+      const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
+      await runRealProviderTimeoutTest('claude', model);
+    }, 60000);
+  });
 });
