@@ -22,10 +22,30 @@ Current pending work, grouped into recommended implementation batches.
 **Batch 7 — Docs Canonicalization**
 
 - [ ] **14 — docs canonicalization + broken plan reference fix**
+- [ ] **37 — Escalation stage after repeated rejected audits/reviews**
 
 ## Detailed checklist
 
 Open work is listed below.
+
+> **Verification status (2026-07-02).** Every item was re-checked against the current
+> source — **none have been fixed; all remain open.** Corrections from that pass:
+> - **#32** root cause is narrower than "loop-aware panel context": the `inFlight`
+>   entry in `PanelContext` carries no `role`, so the renderer reinvents one from
+>   `kind` via the hardcoded `inFlightRole` map (`src/status-accent.ts:56-63`). Fix
+>   by threading the resolved skill `role` into `inFlight`, which also lets that
+>   second `kind→role` map be deleted.
+> - **#33 / #35** evidence anchors are **stale**: the cited `docs/dev/*` artifacts
+>   (`review-followup-vN-*.md`, `plan-followup-v11-*.md`, `impl-v1-claude.md`) were
+>   deleted by the recent "Clean roadmap and remove stale plan doc" commit (`docs/dev/`
+>   now holds only `.DS_Store`). The code-behavior claims still hold; the reproducers do not.
+> - **#36** "piped stdin" sub-issue is **already mitigated**: every spawn uses
+>   `stdio: ['ignore', 'pipe', 'pipe']` (`src/adapters/utils.ts:107`), so stdin is
+>   `/dev/null`. The watchdog-default and follow-up-validation gaps remain real.
+> - **#14** is **worse than stated**: the same cleanup commit left **live broken
+>   links** to the now-deleted `docs/dev/plan.md` in `README.md:72,103` and
+>   `AGENTS.md:15,115`. Consider doing this sooner than "last."
+> - **#34** minor line-ref drift: `status.ts:62`→77-88, `commands/status.ts:48-58`→50-76.
 
 ## Architecture assumptions and implementation goal
 
@@ -53,11 +73,12 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 **Batch 6 — Runtime Contract and CLI Hardening**
 
 - [ ] **36 — Agent CLI connection hanging and follow-up validation gaps.** Address cases where generic agent CLIs (`codex`, `agy`) hang indefinitely in certain execution environments (e.g. `codex` reading from a piped stdin, or `agy` waiting on blocked network/daemon connectivity) without completing. Under the default config where agent watchdog timeouts are disabled (`0`), these hangs block the loop indefinitely without output. Additionally, establish a validation check to ensure that the follow-up step actually writes the required report file before proceeding, preventing the loop from advancing silently without producing the follow-up artifact.
-- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error.** A real `claude` implementation wrote [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md) with both required tables and `State overall confidence: 0.96`, yet the harness still terminated with the generic "missing evidence table / requirement coverage table / confidence declaration" message. The real mismatch is stricter: `src/implement-ledger.ts` currently requires every `Result` / `Status` cell in the required tables to match the passing-status allow-list, and this ledger contains non-passing rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate`. Decide one explicit contract for pending release-gate items, improve the runtime error in `src/loop.ts` so it reports the true failure reason, and add regression coverage for this exact ledger shape.
+- [ ] **35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error.** A real `claude` implementation wrote `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline) with both required tables and `State overall confidence: 0.96`, yet the harness still terminated with the generic "missing evidence table / requirement coverage table / confidence declaration" message. The real mismatch is stricter: `src/implement-ledger.ts` currently requires every `Result` / `Status` cell in the required tables to match the passing-status allow-list, and this ledger contains non-passing rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate`. Decide one explicit contract for pending release-gate items, improve the runtime error in `src/loop.ts` so it reports the true failure reason, and add regression coverage for this exact ledger shape.
 
 **Batch 7 — Docs Canonicalization**
 
 - [ ] **14 — docs canonicalization + broken plan reference fix.** Make `docs/architecture/overview.md` the canonical architecture source, reduce duplicated architecture prose elsewhere, and fix or remove the broken `docs/dev/plan.md` references after the remaining runtime and rendering changes have landed so the docs only need one final alignment pass.
+- [ ] **37 — Escalation stage after repeated rejected audits/reviews.** After `N` consecutive rejected audits or reviews, the loop should enter a dedicated escalation stage that runs an analysis skill over the rejection history and writes an advice artifact answering whether the operator should patch the current source artifact (`plan.md`, implementation, etc.) or continue with another follow-up plus audit attempt. The advice result should appear in the normal timeline/status table with a clear outcome such as `continue` or `patch plan.md`. Open design question: decide whether this stage should be powered by one shared cross-loop escalation skill with loop-aware inputs, or separate skills for the plan loop and review loop.
 
 ---
 
@@ -71,10 +92,11 @@ Goal: make the active-step role labels in the panel reflect the actual review-lo
 
 > Current observation: during the `review` loop, the active-step area in the TUI can display `planner` and `auditor`, even though the configured review-loop roles are `implementer` and `reviewer`. The timeline naming is already correct; the mismatch is in the active-step panel labeling.
 
+> **Verification (2026-07-02): confirmed.** Root cause pinpointed to `inFlightRole(kind)` in `src/status-accent.ts:56-63`, which maps `audit→auditor` / `follow-up→planner` / `implement→implementer` for every loop. The `inFlight` entry in `PanelContext` (`src/status.ts:26-38`) carries no `role` field, so `renderTimelineSection` is forced to derive one from `kind` (`src/status-panel.ts:127`). Review steps have `kind: audit` / `kind: follow-up` (`skills.yaml`), so they render `auditor` / `planner` instead of `reviewer` / `implementer`.
+
 **Focus:**
 
-- Trace where the active panel context derives role/skill labels for the currently running step in the `review` loop.
-- Ensure the live active-step labels come from the resolved review skill/role mapping rather than a plan-loop assumption or reused label path.
+- Thread the resolved skill `role` into the `inFlight` panel-context entry and render it directly, removing the `inFlightRole` `kind→role` map entirely (a second hardcoded mapping — deleting it also serves the single-source-of-truth goal). Prefer this narrow fix over a broad "active-loop-aware panel context."
 - Preserve the current correct timeline rendering and avoid changing persisted artifact naming or loop semantics.
 
 **Effort:** S.
@@ -89,9 +111,9 @@ Goal: make the panel's "Next Step" line reflect the active loop's actual skill s
 
 **Findings so far:**
 
-- **The "Next Step" line is fed by loop-agnostic strings.** The panel renders `context.nextStepMessage` verbatim (`src/status-panel.ts:27`, `src/plain-render.ts:58`). In the read-only `orc status` view that message comes from `assembleNextStepMessage` (`src/status.ts:62`) — e.g. `Proposed next: follow-up then audit version N` — and during a live run it is a hardcoded per-stage string in `src/loop.ts` (`Running audit for version N…`, `Executing follow-up on version N-1 rejection…`, `Completed iteration N with verdict: …`). Neither path names the active loop's skills.
+- **The "Next Step" line is fed by loop-agnostic strings.** The panel renders `context.nextStepMessage` verbatim (`src/status-panel.ts:27`, `src/plain-render.ts:58`). In the read-only `orc status` view that message comes from `assembleNextStepMessage` (`src/status.ts:77-88`) — e.g. `Proposed next: follow-up then audit version N` — and during a live run it is a hardcoded per-stage string in `src/loop.ts` (`Running audit for version N…`, `Executing follow-up on version N-1 rejection…`, `Completed iteration N with verdict: …`). Neither path names the active loop's skills.
 - **The skill→role config is already correct.** `skills.yaml` maps `review`→`reviewer` and `review-follow-up`→`implementer`, distinct from `plan-audit`→`auditor` and `plan-follow-up`→`planner`. So this is a messaging / derivation gap, not a configuration mistake — the same conclusion #32 reached for the active-step role labels.
-- **The read-only view can also pick the wrong loop.** `statusAction` detects the loop with the most audit history (`src/commands/status.ts:48-58`), so when plan artifacts outnumber review artifacts, `orc status` reports plan-loop next steps even when the operator is working on the review loop.
+- **The read-only view can also pick the wrong loop.** `statusAction` detects the loop with the most audit history (`src/commands/status.ts:50-76`), so when plan artifacts outnumber review artifacts, `orc status` reports plan-loop next steps even when the operator is working on the review loop.
 - **The review loop has no live panel coverage.** `tests/loop-live.test.ts` exercises only the `plan` and `implement` loops (every `runLoop` call passes one of those); the `review` loop's panel and Next Step rendering are unguarded, which is why this drift went unnoticed.
 - **Sibling of #32.** #32 tracks the active-step role labels (`planner`/`auditor` vs `reviewer`/`implementer`); this item tracks the Next Step line content specifically. Both stem from panel context being built without enough active-loop awareness and should share a single active-loop-aware derivation.
 
@@ -172,13 +194,14 @@ Goal: Prevent loops from hanging indefinitely due to external CLI issues and pre
 **Findings:**
 - **External CLI Hanging:** 
   - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
+  - **Verification (2026-07-02): already mitigated on the harness path.** Every spawn goes through `runProcess` with `stdio: ['ignore', 'pipe', 'pipe']` (`src/adapters/utils.ts:107`), so stdin is `/dev/null` (closed) — codex reading stdin gets EOF, not a hang. Drop this sub-issue unless a spawn path that pipes stdin is introduced.
   - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
 - **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in [orc.config.yaml](/Users/lukasz/softDev-temp/orc-smash/orc.config.yaml), the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
 - **Follow-up Validation Gap:** In [loop.ts](/Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
 
 **Fix:**
 - Enable a default/fallback watchdog timeout for all config-only agents or ensure the harness warns when timeouts remain disabled.
-- Modify [utils.ts](/Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts#L262) to explicitly handle piped stdin situations by closing stdin or redirecting it to avoid hangs.
+- ~~Modify [utils.ts](/Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts) to explicitly handle piped stdin~~ — **already done** (`stdio: ['ignore', …]` at `utils.ts:107`). Remaining real work here is the watchdog default and the follow-up-file validator below.
 - Add a validator in the loop orchestration to assert that the follow-up report file was written before advancing the state machine, analogous to the implement ledger verification.
 
 **Effort:** M.
@@ -189,12 +212,12 @@ Goal: Prevent loops from hanging indefinitely due to external CLI issues and pre
 
 Goal: make implementation-ledger validation truthful and contract-aligned, so a provider-written ledger that structurally contains both required tables and a confidence line fails for the real reason and the skill/runtime contract stays in sync.
 
-> Current observation: a real `claude` implementation run wrote [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md) with both required tables and `State overall confidence: 0.96`, yet the harness terminated with `Ledger at docs/dev/impl-v1-claude.md is missing the required evidence table, requirement coverage table, and/or confidence declaration`. The actual mismatch is in row status semantics, not missing sections.
+> Current observation: a real `claude` implementation run wrote `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline) with both required tables and `State overall confidence: 0.96`, yet the harness terminated with `Ledger at docs/dev/impl-v1-claude.md is missing the required evidence table, requirement coverage table, and/or confidence declaration`. The actual mismatch is in row status semantics, not missing sections.
 
 **Findings so far:**
 
 - **The validator is stricter than the error text.** `src/implement-ledger.ts` requires both tables, a confidence line, and every `Result` / `Status` cell to match the passing-status allow-list. A ledger can therefore fail even when the tables and confidence declaration are present.
-- **The observed Claude ledger failed on non-passing row values, not on structure.** In [`docs/dev/impl-v1-claude.md`](./dev/impl-v1-claude.md), rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate` do not match the current `PASSING_STATUS` contract, so `isCompleteImplementLedger(...)` returns `false`.
+- **The observed Claude ledger failed on non-passing row values, not on structure.** In `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline), rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate` do not match the current `PASSING_STATUS` contract, so `isCompleteImplementLedger(...)` returns `false`.
 - **The runtime error hides the real cause.** `src/loop.ts` collapses every non-empty invalid ledger into the same catch-all message about missing tables / confidence, which sends debugging effort in the wrong direction.
 - **The skill and validator need one explicit contract for release-gate items.** If pending env-gated verification is allowed but not implementation-blocking, it should not be encoded as a failing row in the two required gate tables unless the validator is intentionally widened to model that state.
 
@@ -219,6 +242,8 @@ Goal: make the architecture documentation internally consistent, reduce duplicat
 
 > Current observation: architecture guidance is split across multiple documents, and some references still point at `docs/dev/plan.md` even though that file is no longer a stable canonical target.
 
+> **Verification (2026-07-02): worse than "stale."** `docs/dev/plan.md` was deleted by the "Clean roadmap and remove stale plan doc" commit, leaving **live broken links** in `README.md:72,103` and `AGENTS.md:15,115` (the canonical target `docs/architecture/overview.md` does exist). Recommend pulling this item forward rather than doing it last.
+
 **Focus:**
 
 - Make [docs/architecture/overview.md](/Users/lukasz/softDev-temp/orc-smash/docs/architecture/overview.md) the canonical architecture reference.
@@ -227,3 +252,22 @@ Goal: make the architecture documentation internally consistent, reduce duplicat
 - Do one final wording-alignment pass only after the remaining runtime and rendering items are finished, so this cleanup does not need to be repeated.
 
 **Effort:** S.
+
+---
+
+## 37 — Escalation stage after repeated rejected audits/reviews
+
+Goal: prevent blind retry loops after repeated rejected audits or reviews by adding an explicit loop stage that evaluates the rejection history and advises whether to patch the source artifact or continue iterating.
+
+> Current observation: when the same plan or review work is rejected repeatedly, the current workflow has no first-class mechanism to inspect the sequence of rejected artifacts and decide whether the process should continue with another follow-up/audit cycle or stop and patch the source artifact itself.
+
+**Focus:**
+
+- Define an `N`-rejection threshold that transitions the loop into an escalation stage for repeated rejected audits or reviews.
+- Introduce the stage-specific analysis skill that consumes the rejected artifact history and writes a structured advice artifact.
+- Ensure the advice artifact participates in the normal timeline/status display and renders a clear result such as `continue` or `patch plan.md`.
+- Define the state-machine behavior after escalation: whether the outcome is advisory-only, changes the default next step, or gates further follow-up/audit attempts.
+- Decide whether the stage should be powered by one shared cross-loop skill with loop-aware inputs, or split into separate plan-loop and review-loop variants.
+- Keep the feature compatible with manifest-as-data, including loop/stage declaration, artifact naming, and timeline rendering.
+
+**Effort:** M.
