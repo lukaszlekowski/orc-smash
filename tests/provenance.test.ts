@@ -111,4 +111,23 @@ Auditor: codex-gpt-5
     const parsed = parseArtifactMeta(body, { agent: 'fake', version: 1 });
     expect(parsed.durationMs).toBeUndefined();
   });
+
+  it('round-trips sessionMode and sessionId through front matter', () => {
+    const meta = makeArtifactMeta({
+      version: 2,
+      agent: 'codex',
+      sessionMode: 'resumed',
+      sessionId: 'sess_abc123'
+    });
+    const body = '# Title\nSome content.';
+
+    writeArtifactWithMeta(tempFile, body, meta);
+    const written = readFileSync(tempFile, 'utf-8');
+    expect(written).toContain('sessionMode: resumed');
+    expect(written).toContain('sessionId: sess_abc123');
+
+    const parsed = parseArtifactMeta(written, { agent: 'fake', version: 99 });
+    expect(parsed.sessionMode).toBe('resumed');
+    expect(parsed.sessionId).toBe('sess_abc123');
+  });
 });

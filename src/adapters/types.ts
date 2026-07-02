@@ -7,6 +7,10 @@ export interface RunInput {
   skillId?: string;
   version?: number;
   onLifecycle?: (e: LifecycleEvent) => void;
+  continuity?: {
+    mode: 'fresh' | 'resumed';
+    sessionId?: string;
+  };
 }
 
 export type RunErrorKind =
@@ -42,6 +46,7 @@ export interface RunResult {
   toolCalls?: ToolCall[];     // opencode: parsed tool calls (also feeds item 5 later)
   stopReason?: string | null; // opencode: raw last step_finish.part.reason (e.g. "stop"); diagnostics only
   completion?: 'complete' | 'truncated' | 'interrupted'; // normalized execution-completeness (Batch 1: opencode only)
+  sessionId?: string;
 }
 
 export interface AgentAdapter {

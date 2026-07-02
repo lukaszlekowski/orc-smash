@@ -1,5 +1,6 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess, resolveCodexTimeoutMs, type ProcessRunner } from './utils.js';
+import { parseCodexJsonOutput } from './codex-json.js';
 
 export interface CreateCodexAdapterOptions {
   /** Config-tier watchdog deadline in ms (0 / unset disables). */
@@ -18,24 +19,39 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
     name: 'codex',
 
     buildRun(input: RunInput): { command: string; args: string[] } {
+      const isContinuity = !!input.continuity;
+      const isResumed = input.continuity?.mode === 'resumed';
+      
+      const args: string[] = [];
+      if (isResumed && input.continuity?.sessionId) {
+        args.push('exec', 'resume', input.continuity.sessionId);
+      } else {
+        args.push('exec');
+      }
+
+      args.push(
+        '-m',
+        input.model,
+        '--skip-git-repo-check',
+        '--dangerously-bypass-approvals-and-sandbox'
+      );
+
+      if (isContinuity) {
+        args.push('--json');
+      }
+
+      args.push(input.prompt);
+
       return {
         command: 'codex',
-        args: [
-          'exec',
-          '-m',
-          input.model,
-          '--skip-git-repo-check',
-          // Headless autonomy: skip all approval prompts + sandbox so non-interactive runs can write artifacts.
-          '--dangerously-bypass-approvals-and-sandbox',
-          input.prompt
-        ]
+        args
       };
     },
 
     async run(input: RunInput): Promise<RunResult> {
       const { command, args } = this.buildRun(input);
       // codex is config-only: timeouts.codex > built-in 0; no env var.
-      return spawnAgentProcess(command, args, input.cwd, {
+      const result = await spawnAgentProcess(command, args, input.cwd, {
         agent: this.name,
         model: input.model,
         skillId: input.skillId,
@@ -43,6 +59,33 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
         onLifecycle: input.onLifecycle,
         timeoutMs: resolveCodexTimeoutMs({ defaultTimeoutMs })
       }, processRunner);
+
+      if (input.continuity && !result.error && result.exitCode === 0) {
+        try {
+          const parsed = parseCodexJsonOutput(result.stdout);
+          if (input.continuity.mode === 'resumed' && input.continuity.sessionId) {
+            if (parsed.sessionId !== input.continuity.sessionId) {
+              throw new Error(`Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${parsed.sessionId}`);
+            }
+          }
+          return {
+            ...result,
+            stdout: parsed.assistantText,
+            sessionId: parsed.sessionId
+          };
+        } catch (err: any) {
+          return {
+            ...result,
+            error: {
+              kind: 'server',
+              message: err.message,
+              raw: result.stdout
+            }
+          };
+        }
+      }
+
+      return result;
     }
   };
 }

@@ -33,6 +33,8 @@ export interface Step {
   artifactPath: string;               // absolute path to the artifact file
   mtime: number;
   durationMs?: number;                // agent wall-clock runtime (status display); undefined when unknown
+  sessionMode?: 'fresh' | 'resumed' | 'none';
+  sessionId?: string | 'none';
 }
 
 export interface ScanResult {
@@ -101,7 +103,9 @@ export function scan(
         verdict: parseVerdict(content),
         artifactPath: file,
         mtime: stat.mtimeMs,
-        durationMs: meta.durationMs
+        durationMs: meta.durationMs,
+        sessionMode: meta.sessionMode,
+        sessionId: meta.sessionId
       });
     } else {
       timeline.push({
@@ -114,7 +118,9 @@ export function scan(
         outcome: parseFollowUpOutcome(content),
         artifactPath: file,
         mtime: stat.mtimeMs,
-        durationMs: meta.durationMs
+        durationMs: meta.durationMs,
+        sessionMode: meta.sessionMode,
+        sessionId: meta.sessionId
       });
     }
   }
@@ -228,6 +234,24 @@ export function requireApprovedPlanAuditPath(
     throw new Error('No approved plan audit found; implementation requires an APPROVED plan.');
   }
   return approvedPath;
+}
+
+/**
+ * Find the latest prior Codex audit session ID in the same loop chain.
+ * Returns 'none' if there is no prior session.
+ */
+export function getLatestSessionId(
+  targetRoot: string,
+  patterns: { auditPattern: string; followUpPattern: string }
+): string | 'none' {
+  const s = scan(targetRoot, patterns);
+  for (let i = s.auditSteps.length - 1; i >= 0; i--) {
+    const step = s.auditSteps[i]!;
+    if (step.agent === 'codex' && step.sessionId && step.sessionId !== 'none') {
+      return step.sessionId;
+    }
+  }
+  return 'none';
 }
 
 // --- Display-only interrupted scan (§3) ---------------------------------------
