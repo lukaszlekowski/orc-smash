@@ -236,23 +236,7 @@ export function requireApprovedPlanAuditPath(
   return approvedPath;
 }
 
-/**
- * Find the latest prior Codex audit session ID in the same loop chain.
- * Returns 'none' if there is no prior session.
- */
-export function getLatestSessionId(
-  targetRoot: string,
-  patterns: { auditPattern: string; followUpPattern: string }
-): string | 'none' {
-  const s = scan(targetRoot, patterns);
-  for (let i = s.auditSteps.length - 1; i >= 0; i--) {
-    const step = s.auditSteps[i]!;
-    if (step.agent === 'codex' && step.sessionId && step.sessionId !== 'none') {
-      return step.sessionId;
-    }
-  }
-  return 'none';
-}
+
 
 // --- Display-only interrupted scan (§3) ---------------------------------------
 //

@@ -28,19 +28,23 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
     name: 'opencode',
 
     buildRun(input: RunInput): { command: string; args: string[] } {
+      const args = [
+        'run',
+        '-m',
+        input.model,
+        '--dir',
+        input.cwd,
+        '--dangerously-skip-permissions',
+        '--format',
+        'json'
+      ];
+      if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+        args.push('-c', input.continuity.sessionId);
+      }
+      args.push(input.prompt);
       return {
         command: 'opencode',
-        args: [
-          'run',
-          '-m',
-          input.model,
-          '--dir',
-          input.cwd,
-          '--dangerously-skip-permissions',
-          '--format',
-          'json',
-          input.prompt
-        ]
+        args
       };
     },
 

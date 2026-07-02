@@ -22,6 +22,7 @@ export interface ParseResult {
   streamError?: OpencodeStreamError;
   // Kept for tests/diagnostics: lines that failed to parse as JSON stream events.
   unparsed: string[];
+  sessionId?: string;
 }
 
 export function parseOpencodeStream(raw: string): ParseResult {
@@ -49,6 +50,10 @@ export function parseOpencodeStream(raw: string): ParseResult {
       if (!ev || typeof ev !== 'object') {
         result.unparsed.push(trimmed);
         continue;
+      }
+
+      if (ev.sessionID && !result.sessionId) {
+        result.sessionId = ev.sessionID;
       }
 
       switch (ev.type) {

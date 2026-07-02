@@ -451,6 +451,15 @@ function buildOpencodeRunResult(
     }
   }
 
+  if (!error && input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+    if (p.sessionId !== input.continuity.sessionId) {
+      error = {
+        kind: 'server',
+        message: `Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${p.sessionId}`
+      };
+    }
+  }
+
   if (input.onLifecycle && input.version !== undefined) {
     if (raw.spawnErrorMessage) {
       input.onLifecycle({
@@ -484,7 +493,8 @@ function buildOpencodeRunResult(
     exitCode: raw.exitCode,
     error,
     toolCalls: p.toolCalls,
-    stopReason: p.stopReason
+    stopReason: p.stopReason,
+    sessionId: p.sessionId
   };
   runResult.completion = classifyCompletion('opencode', runResult);
   return runResult;

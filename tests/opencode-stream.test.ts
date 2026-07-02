@@ -20,6 +20,12 @@ describe('opencode stream parser and classifier', () => {
     expect(result.unparsed).toEqual([]);
   });
 
+  it('captures sessionID from stream', () => {
+    const raw = '{"type":"step_start","timestamp":1783011546031,"sessionID":"ses_0dc3af79bffe2kxVqBs1l0PFmM"}\n';
+    const result = parseOpencodeStream(raw);
+    expect(result.sessionId).toBe('ses_0dc3af79bffe2kxVqBs1l0PFmM');
+  });
+
   it('parses error stream correctly', () => {
     const raw = readFileSync(join(process.cwd(), 'tests/fixtures/opencode-error.ndjson'), 'utf-8');
     const result = parseOpencodeStream(raw);

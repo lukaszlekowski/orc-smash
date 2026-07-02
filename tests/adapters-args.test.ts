@@ -27,6 +27,46 @@ describe('Adapter arguments builders', () => {
     ]);
   });
 
+  it('builds correct arguments for opencode in fresh continuity mode', () => {
+    const build = opencodeAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'fresh' }
+    });
+    expect(build.command).toBe('opencode');
+    expect(build.args).toEqual([
+      'run',
+      '-m',
+      'my-model-123',
+      '--dir',
+      '/path/to/cwd',
+      '--dangerously-skip-permissions',
+      '--format',
+      'json',
+      'My test prompt'
+    ]);
+  });
+
+  it('builds correct arguments for opencode in resumed continuity mode', () => {
+    const build = opencodeAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'resumed', sessionId: 'ses_abc123' }
+    });
+    expect(build.command).toBe('opencode');
+    expect(build.args).toEqual([
+      'run',
+      '-m',
+      'my-model-123',
+      '--dir',
+      '/path/to/cwd',
+      '--dangerously-skip-permissions',
+      '--format',
+      'json',
+      '-c',
+      'ses_abc123',
+      'My test prompt'
+    ]);
+  });
+
   it('builds correct arguments for codex (default, non-continuity)', () => {
     const build = codexAdapter.buildRun(input);
     expect(build.command).toBe('codex');
@@ -92,6 +132,44 @@ describe('Adapter arguments builders', () => {
       'json',
       '--permission-mode',
       'bypassPermissions'
+    ]);
+  });
+
+  it('builds correct arguments for claude in fresh continuity mode', () => {
+    const build = claudeAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'fresh' }
+    });
+    expect(build.command).toBe('claude');
+    expect(build.args).toEqual([
+      '-p',
+      'My test prompt',
+      '--model',
+      'my-model-123',
+      '--output-format',
+      'json',
+      '--permission-mode',
+      'bypassPermissions'
+    ]);
+  });
+
+  it('builds correct arguments for claude in resumed continuity mode', () => {
+    const build = claudeAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'resumed', sessionId: 'sess_claude123' }
+    });
+    expect(build.command).toBe('claude');
+    expect(build.args).toEqual([
+      '-p',
+      'My test prompt',
+      '--model',
+      'my-model-123',
+      '--output-format',
+      'json',
+      '--permission-mode',
+      'bypassPermissions',
+      '--resume',
+      'sess_claude123'
     ]);
   });
 

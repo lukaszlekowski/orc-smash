@@ -6,6 +6,7 @@ export interface RunInput {
   cwd: string;
   skillId?: string;
   version?: number;
+  kind?: 'audit' | 'follow-up' | 'implement';
   onLifecycle?: (e: LifecycleEvent) => void;
   continuity?: {
     mode: 'fresh' | 'resumed';

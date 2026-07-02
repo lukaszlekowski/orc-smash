@@ -29,7 +29,7 @@ export interface LoopOptions {
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
-  auditContinuity?: 'off' | 'codex-resume';
+  auditContinuity?: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume';
 }
 
 type Runner = { agent: string; model: string };
@@ -207,6 +207,7 @@ export async function runLoop(
         cwd: projectRoot,
         skillId,
         version,
+        kind,
         onLifecycle,
         continuity
       });
@@ -531,8 +532,14 @@ export async function runLoop(
   let isSecondOpinion = false;
 
   if (options.startPoint === 'resume') {
-    N = initialScan.latestVersion + 1;
-    pendingFollowUp = true;
+    const latestStep = initialScan.timeline[initialScan.timeline.length - 1];
+    if (latestStep && latestStep.kind === 'audit' && latestStep.verdict === 'REJECTED') {
+      N = latestStep.version + 1;
+      pendingFollowUp = true;
+    } else {
+      N = initialScan.latestVersion + 1;
+      pendingFollowUp = false;
+    }
   } else if (options.startPoint === 'new-round') {
     N = initialScan.latestVersion + 1;
     pendingFollowUp = false;
@@ -688,7 +695,13 @@ export async function runLoop(
 
     let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
 
-    if (options.auditContinuity === 'codex-resume' && runner.agent === 'codex' && !isSecondOpinion) {
+    const isContinuityEnabledForAgent = (
+      (options.auditContinuity === 'codex-resume' && runner.agent === 'codex') ||
+      (options.auditContinuity === 'opencode-resume' && runner.agent === 'opencode') ||
+      (options.auditContinuity === 'claude-resume' && runner.agent === 'claude')
+    );
+
+    if (isContinuityEnabledForAgent && !isSecondOpinion) {
       const priorAudit = latestAuditStep();
       const hasApprovedPriorAudit = priorAudit?.verdict === 'APPROVED';
       const isFirstAuditOfChain = (N === 1 && options.startPoint !== 'resume') || options.startPoint === 'new-round' || isSecondOpinion || hasApprovedPriorAudit;
@@ -699,13 +712,18 @@ export async function runLoop(
         let priorSessionId: string | 'none' = 'none';
         for (let i = steps.length - 1; i >= 0; i--) {
           const s = steps[i]!;
-          if (s.kind === 'audit' && s.agent === 'codex' && s.sessionId && s.sessionId !== 'none') {
-            priorSessionId = s.sessionId;
-            break;
+          if (s.kind === 'audit') {
+            if (s.verdict === 'APPROVED') {
+              break;
+            }
+            if (s.agent === runner.agent && s.sessionId && s.sessionId !== 'none') {
+              priorSessionId = s.sessionId;
+              break;
+            }
           }
         }
         if (priorSessionId === 'none') {
-          throw new Error('Error: --codex-audit-continuity is enabled but no prior Codex session ID was found in loop history.');
+          throw new Error(`Error: --${runner.agent === 'codex' ? 'codex-audit' : 'audit'}-continuity is enabled but no prior ${runner.agent === 'codex' ? 'Codex' : runner.agent} session ID was found in loop history.`);
         }
         continuity = { mode: 'resumed', sessionId: priorSessionId };
       }

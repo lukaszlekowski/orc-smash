@@ -415,6 +415,85 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     expect(lastPromptedDefault).toBe('implement');
   });
 
+  it('rejects if both --audit-continuity and --codex-audit-continuity are supplied', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      auditContinuity: true,
+      codexAuditContinuity: true,
+      agent: 'codex',
+      model: 'gpt-5.5',
+      output: mockOutput
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--audit-continuity and --codex-audit-continuity are mutually exclusive');
+  });
+
+  it('rejects --audit-continuity on the implement loop', async () => {
+    const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(auditMeta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'implement',
+      auditContinuity: true,
+      agent: 'codex',
+      model: 'gpt-5.5',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--audit-continuity is only valid for plan and review loops');
+  });
+
+  it('rejects --audit-continuity if the audit runner resolves to an unsupported runner', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      auditContinuity: true,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--audit-continuity requires the audit runner to be codex, opencode, or claude');
+  });
+
+  it('accepts --audit-continuity if the audit runner is Claude or Opencode', async () => {
+    writeFileSync(
+      join(tempDir, 'orc.config.yaml'),
+      'providers:\n  claude:\n    - glm-4.7\n  opencode:\n    - opencode-go/deepseek-v4-flash\ndefaults:\n  agent: claude\n  model: glm-4.7\n'
+    );
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      auditContinuity: true,
+      agent: 'claude',
+      model: 'glm-4.7',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(0);
+    expect(mockedRunLoop).toHaveBeenCalledWith(
+      expect.any(String),
+      'plan',
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        'plan-audit': { agent: 'claude', model: 'glm-4.7' }
+      }),
+      expect.objectContaining({
+        auditContinuity: 'claude-resume'
+      })
+    );
+  });
+
   it('rejects --codex-audit-continuity on the implement loop', async () => {
     // Approved plan audit to get past the implement loop check.
     const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
