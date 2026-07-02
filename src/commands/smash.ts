@@ -27,6 +27,7 @@ export interface SmashOptions {
   debugSpawnFile?: string;
   output: CliOutput;
   plain?: boolean;
+  codexAuditContinuity?: boolean;
   /**
    * Test seam (Step 5, v3-audit M1 fix): the factory used to build the
    * agent registry. Defaults to `(cfg) => createProductionAdapterRegistry(cfg.registry)`.
@@ -48,6 +49,7 @@ interface SmashRunSetup {
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
+  auditContinuity: 'off' | 'codex-resume';
 }
 
 async function resolveSmashRunSetup(
@@ -127,6 +129,14 @@ async function resolveSmashRunSetup(
   }
 
   const loopSpec = config.manifest.loops[loopName]!;
+
+  if (options.codexAuditContinuity) {
+    if (loopName !== 'plan' && loopName !== 'review') {
+      const msg = `Error: --codex-audit-continuity is only valid for plan and review loops.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+  }
 
   // 2. Scan state & 3. Start Point selection & validation
   let startPoint: 'fresh' | 'resume' | 'new-round' | undefined = undefined;
@@ -246,6 +256,18 @@ async function resolveSmashRunSetup(
     }
   }
 
+  if (options.codexAuditContinuity) {
+    const auditSkillId = loopSpec.audit;
+    const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
+    if (!auditRunner || auditRunner.agent !== 'codex') {
+      const msg = `Error: --codex-audit-continuity requires the audit runner to be codex.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+  }
+
+  const auditContinuity = options.codexAuditContinuity ? 'codex-resume' : 'off';
+
   return {
     setup: {
       projectRoot,
@@ -257,7 +279,8 @@ async function resolveSmashRunSetup(
       startPoint,
       globalOverrides,
       isInteractive,
-      registry
+      registry,
+      auditContinuity
     }
   };
 }
@@ -290,7 +313,8 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         globalOverrides: setup.globalOverrides,
         interactive: setup.isInteractive,
         registry: setup.registry,
-        output: options.output
+        output: options.output,
+        auditContinuity: setup.auditContinuity
       });
 
       if (result.success) {

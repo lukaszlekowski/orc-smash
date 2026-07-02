@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { scan, resolveApprovedPlanAuditPath, requireApprovedPlanAuditPath, scanForStatus } from '../src/state.js';
+import { scan, resolveApprovedPlanAuditPath, requireApprovedPlanAuditPath, scanForStatus, getLatestSessionId } from '../src/state.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 import { renderFollowUpOutcomeSection, parseFollowUpOutcome } from '../src/follow-up-outcome.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
@@ -375,5 +375,41 @@ describe('scanForStatus — display-only interrupted scan (§3)', () => {
     const m = manifest();
     const result = scanForStatus(tempDir, 'plan', m.loops['plan']!, m);
     expect(result.interruptedStep).toBeNull();
+  });
+
+  it('getLatestSessionId returns the latest session ID or none', () => {
+    const patterns = {
+      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md'
+    };
+    // 1. empty state
+    expect(getLatestSessionId(tempDir, patterns)).toBe('none');
+
+    // 2. non-codex audit
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+    const metaOpencode: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 1, agent: 'opencode', model: 'deepseek-v4-flash',
+      target: 'docs/dev/plan.md', priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-opencode.md'),
+      buildFrontMatter(metaOpencode) + `## Verdict\nREJECTED\n`
+    );
+    expect(getLatestSessionId(tempDir, patterns)).toBe('none');
+
+    // 3. codex audit with session Mode/id
+    const metaCodex: ArtifactMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit', role: 'auditor',
+      version: 2, agent: 'codex', model: 'gpt-5-codex',
+      target: 'docs/dev/plan.md', priorAudit: 'docs/dev/plan-audit-v1-opencode.md', timestamp: '2026-06-26T20:10:00.000Z',
+      sessionMode: 'fresh', sessionId: 'sess_codex123'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v2-codex.md'),
+      buildFrontMatter(metaCodex) + `## Verdict\nREJECTED\n`
+    );
+    expect(getLatestSessionId(tempDir, patterns)).toBe('sess_codex123');
   });
 });

@@ -16,6 +16,8 @@ export interface ArtifactMeta {
   priorAudit: string;   // relative path or 'none'
   timestamp: string;    // ISO 8601
   durationMs?: number;  // agent wall-clock runtime for this step (status display)
+  sessionMode?: 'fresh' | 'resumed' | 'none';
+  sessionId?: string | 'none';
 }
 
 /** Build the canonical front-matter block (with trailing blank line). */
@@ -63,7 +65,9 @@ export function parseArtifactMeta(
       target: obj.target ?? 'unknown',
       priorAudit: obj.priorAudit ?? 'none',
       timestamp: obj.timestamp ?? '',
-      durationMs: typeof obj.durationMs === 'number' ? obj.durationMs : undefined
+      durationMs: typeof obj.durationMs === 'number' ? obj.durationMs : undefined,
+      sessionMode: obj.sessionMode,
+      sessionId: obj.sessionId
     };
   }
 

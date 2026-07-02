@@ -115,6 +115,61 @@ describe('Real-provider contract tests', () => {
     expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
   }, 60000);
 
+  it.runIf(process.env['CODEX_CONTRACT'] === '1')('exercises real codex session continuity chain', async () => {
+    const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
+    const outputPath1 = 'docs/dev/plan-audit-v1-codex.md';
+    const outputPath2 = 'docs/dev/plan-audit-v2-codex.md';
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+
+    // Step 1: Fresh audit
+    const prompt1 = `Write exactly the following content to the file "${outputPath1}" and nothing else:\n## Verdict\nREJECTED\n\nAlso respond to me with "REJECTED".`;
+    const result1 = await codexAdapter.run({
+      prompt: prompt1,
+      model,
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 1,
+      continuity: { mode: 'fresh' }
+    });
+
+    expect(result1.exitCode).toBe(0);
+    expect(result1.sessionId).toBeDefined();
+    expect(typeof result1.sessionId).toBe('string');
+    expect(result1.sessionId?.length).toBeGreaterThan(0);
+    expect(result1.stdout).toBeDefined();
+    expect(typeof result1.stdout).toBe('string');
+
+    const file1Path = join(tempDir, outputPath1);
+    expect(existsSync(file1Path)).toBe(true);
+    expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
+    expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
+
+    // Step 2: Resumed audit
+    const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
+    const result2 = await codexAdapter.run({
+      prompt: prompt2,
+      model,
+      cwd: tempDir,
+      skillId: 'plan-audit',
+      version: 2,
+      continuity: { mode: 'resumed', sessionId: result1.sessionId }
+    });
+
+    expect(result2.exitCode).toBe(0);
+    expect(result2.sessionId).toBe(result1.sessionId);
+    expect(result2.stdout).toBeDefined();
+    expect(typeof result2.stdout).toBe('string');
+
+    const file2Path = join(tempDir, outputPath2);
+    expect(existsSync(file2Path)).toBe(true);
+    expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
+    expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+
+    // Step 3: unknown-fallback verdict on a missing/malformed artifact
+    expect(parseVerdict(null, '')).toBe('unknown');
+    expect(parseVerdict(null, 'GARBAGE')).toBe('unknown');
+  }, 120000);
+
   it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('exercises real claude spawn and asserts lifecycle (started→completed, no message)', async () => {
     const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
     const outputPath = 'docs/dev/plan-audit-v1-claude.md';

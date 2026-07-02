@@ -27,7 +27,7 @@ describe('Adapter arguments builders', () => {
     ]);
   });
 
-  it('builds correct arguments for codex', () => {
+  it('builds correct arguments for codex (default, non-continuity)', () => {
     const build = codexAdapter.buildRun(input);
     expect(build.command).toBe('codex');
     expect(build.args).toEqual([
@@ -38,6 +38,46 @@ describe('Adapter arguments builders', () => {
       '--dangerously-bypass-approvals-and-sandbox',
       'My test prompt'
     ]);
+    expect(build.args.includes('--json')).toBe(false);
+    expect(build.args.includes('--last')).toBe(false);
+  });
+
+  it('builds correct arguments for codex in fresh continuity mode', () => {
+    const build = codexAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'fresh' }
+    });
+    expect(build.command).toBe('codex');
+    expect(build.args).toEqual([
+      'exec',
+      '-m',
+      'my-model-123',
+      '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--json',
+      'My test prompt'
+    ]);
+    expect(build.args.includes('--last')).toBe(false);
+  });
+
+  it('builds correct arguments for codex in resumed continuity mode', () => {
+    const build = codexAdapter.buildRun({
+      ...input,
+      continuity: { mode: 'resumed', sessionId: 'sess_999' }
+    });
+    expect(build.command).toBe('codex');
+    expect(build.args).toEqual([
+      'exec',
+      'resume',
+      'sess_999',
+      '-m',
+      'my-model-123',
+      '--skip-git-repo-check',
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--json',
+      'My test prompt'
+    ]);
+    expect(build.args.includes('--last')).toBe(false);
   });
 
   it('builds correct arguments for claude', () => {

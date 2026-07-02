@@ -29,6 +29,7 @@ export interface LoopOptions {
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
+  auditContinuity?: 'off' | 'codex-resume';
 }
 
 type Runner = { agent: string; model: string };
@@ -92,7 +93,8 @@ export async function runLoop(
     kind: StepKind,
     skillId: string,
     version: number,
-    currentIteration: number
+    currentIteration: number,
+    continuity?: { mode: 'fresh' | 'resumed'; sessionId?: string }
   ) => {
     const startedAtMs = Date.now();
 
@@ -205,7 +207,8 @@ export async function runLoop(
         cwd: projectRoot,
         skillId,
         version,
-        onLifecycle
+        onLifecycle,
+        continuity
       });
 
       // Agent wall-clock runtime for this step, measured from the spawn start
@@ -525,6 +528,7 @@ export async function runLoop(
 
   let N = 1;
   let pendingFollowUp = false;
+  let isSecondOpinion = false;
 
   if (options.startPoint === 'resume') {
     N = initialScan.latestVersion + 1;
@@ -558,7 +562,16 @@ export async function runLoop(
     });
   };
 
-  const buildStepMeta = (skillId: string, skill: SkillSpec, kind: StepKind, version: number, runner: Runner, durationMs: number): ArtifactMeta => ({
+  const buildStepMeta = (
+    skillId: string,
+    skill: SkillSpec,
+    kind: StepKind,
+    version: number,
+    runner: Runner,
+    durationMs: number,
+    sessionMode?: 'fresh' | 'resumed' | 'none',
+    sessionId?: string | 'none'
+  ): ArtifactMeta => ({
     loop: loopName,
     skill: skillId,
     kind,
@@ -569,7 +582,9 @@ export async function runLoop(
     target: loopSpec.target,
     priorAudit: priorAuditRel(projectRoot, latestAuditStep()?.artifactPath),
     timestamp: new Date().toISOString(),
-    durationMs
+    durationMs,
+    sessionMode: sessionMode ?? 'none',
+    sessionId: sessionId ?? 'none'
   });
 
   while (iteration < options.maxIterations) {
@@ -641,7 +656,8 @@ export async function runLoop(
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
         version: followUpVersion, status: 'done', outcome: followUpOutcome,
-        artifactPath: absFollowUpPath, mtime: Date.now(), durationMs
+        artifactPath: absFollowUpPath, mtime: Date.now(), durationMs,
+        sessionMode: 'none', sessionId: 'none'
       });
 
       options.output.stepSucceeded({
@@ -670,6 +686,31 @@ export async function runLoop(
       `Running audit for version ${N}...`
     );
 
+    let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
+
+    if (options.auditContinuity === 'codex-resume' && runner.agent === 'codex' && !isSecondOpinion) {
+      const priorAudit = latestAuditStep();
+      const hasApprovedPriorAudit = priorAudit?.verdict === 'APPROVED';
+      const isFirstAuditOfChain = (N === 1 && options.startPoint !== 'resume') || options.startPoint === 'new-round' || isSecondOpinion || hasApprovedPriorAudit;
+
+      if (isFirstAuditOfChain) {
+        continuity = { mode: 'fresh' };
+      } else {
+        let priorSessionId: string | 'none' = 'none';
+        for (let i = steps.length - 1; i >= 0; i--) {
+          const s = steps[i]!;
+          if (s.kind === 'audit' && s.agent === 'codex' && s.sessionId && s.sessionId !== 'none') {
+            priorSessionId = s.sessionId;
+            break;
+          }
+        }
+        if (priorSessionId === 'none') {
+          throw new Error('Error: --codex-audit-continuity is enabled but no prior Codex session ID was found in loop history.');
+        }
+        continuity = { mode: 'resumed', sessionId: priorSessionId };
+      }
+    }
+
     const prompt = preparePrompt(auditSkillId, auditSkill, N, runner, 'audit');
     const { result, durationMs } = await runAdapter(
       runner,
@@ -678,7 +719,8 @@ export async function runLoop(
       'audit',
       auditSkillId,
       N,
-      iteration + 1
+      iteration + 1,
+      continuity
     );
 
     if (stepFailed(result, true)) {
@@ -733,14 +775,18 @@ export async function runLoop(
 
     // Write provenance stamp to audit file
     if (fileContent !== null) {
-      writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs));
+      const mode = continuity?.mode ?? 'none';
+      const sid = continuity ? (result.sessionId ?? 'none') : 'none';
+      writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs, mode, sid));
     }
 
     lastAuditPath = absOutputPath;
     steps.push({
       kind: 'audit', role: auditSkill.role, agent: runner.agent, model: runner.model,
       version: N, status: 'done', verdict,
-      artifactPath: absOutputPath, mtime: Date.now(), durationMs
+      artifactPath: absOutputPath, mtime: Date.now(), durationMs,
+      sessionMode: continuity?.mode ?? 'none',
+      sessionId: continuity ? (result.sessionId ?? 'none') : 'none'
     });
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
@@ -785,6 +831,7 @@ export async function runLoop(
           runners[auditSkillId] = newRunner;
           N = N + 1;
           pendingFollowUp = false;
+          isSecondOpinion = true;
           continue;
         }
       } else {

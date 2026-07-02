@@ -414,4 +414,79 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     expect(existsSync(join(tempDir, 'docs/dev/impl-v1-fake.md'))).toBe(false);
     expect(lastPromptedDefault).toBe('implement');
   });
+
+  it('rejects --codex-audit-continuity on the implement loop', async () => {
+    // Approved plan audit to get past the implement loop check.
+    const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(auditMeta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'implement',
+      codexAuditContinuity: true,
+      agent: 'codex',
+      model: 'gpt-5.5',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--codex-audit-continuity is only valid for plan and review loops');
+  });
+
+  it('rejects --codex-audit-continuity if the audit runner resolves to a non-Codex runner', async () => {
+    // Plan loop with codexAuditContinuity, but agent is fake/opencode (non-Codex)
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      codexAuditContinuity: true,
+      agent: 'opencode',
+      model: 'opencode-go/deepseek-v4-flash',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--codex-audit-continuity requires the audit runner to be codex');
+  });
+
+  it('accepts --codex-audit-continuity if the audit runner is Codex and follow-up is not Codex', async () => {
+    // We override program configurations for this test
+    const config = loadConfig(tempDir);
+    config.manifest.skills['plan-audit'].agent = 'codex';
+    config.manifest.skills['plan-audit'].model = 'gpt-5.5';
+    config.manifest.skills['plan-follow-up'].agent = 'opencode';
+    config.manifest.skills['plan-follow-up'].model = 'opencode-go/deepseek-v4-flash';
+
+    // Mock resolveSmashRunSetup/loadConfig or just write an environment that uses codex registry
+    writeFileSync(
+      join(tempDir, 'orc.config.yaml'),
+      'providers:\n  codex:\n    - gpt-5.5\n  opencode:\n    - opencode-go/deepseek-v4-flash\ndefaults:\n  agent: codex\n  model: gpt-5.5\n'
+    );
+
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      codexAuditContinuity: true,
+      agent: 'codex',
+      model: 'gpt-5.5',
+      output: mockOutput
+    });
+
+    expect(res.exitCode).toBe(0); // runs mockLoop successfully
+    expect(mockedRunLoop).toHaveBeenCalledWith(
+      expect.any(String),
+      'plan',
+      expect.any(Object),
+      expect.any(Object),
+      expect.objectContaining({
+        'plan-audit': { agent: 'codex', model: 'gpt-5.5' }
+      }),
+      expect.objectContaining({
+        auditContinuity: 'codex-resume'
+      })
+    );
+  });
 });
