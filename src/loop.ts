@@ -715,7 +715,12 @@ export async function runLoop(
       (options.auditContinuity === 'claude-resume' && runner.agent === 'claude')
     );
 
-    if (isContinuityEnabledForAgent && !isSecondOpinion) {
+    // A second opinion runs a (possibly) different agent, so it cannot resume the
+    // prior chain. Instead it seeds a NEW continuity chain as a fresh session (see
+    // the isSecondOpinion term in isFirstAuditOfChain below). The flag is reset once
+    // the audit is recorded so a later audit by this agent resumes the new chain
+    // rather than starting fresh again.
+    if (isContinuityEnabledForAgent) {
       const priorAudit = latestAuditStep();
       const hasApprovedPriorAudit = priorAudit?.verdict === 'APPROVED';
       const isFirstAuditOfChain = (N === 1 && options.startPoint !== 'resume') || options.startPoint === 'new-round' || isSecondOpinion || hasApprovedPriorAudit;
@@ -820,6 +825,10 @@ export async function runLoop(
       sessionMode: continuity?.mode ?? 'none',
       sessionId: continuity ? (result.sessionId ?? 'none') : 'none'
     });
+
+    // Consume the second-opinion marker: it has seeded its fresh chain above. Later
+    // audits by this agent must resume that chain normally instead of restarting fresh.
+    isSecondOpinion = false;
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
 
