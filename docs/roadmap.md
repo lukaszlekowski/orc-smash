@@ -67,52 +67,6 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 
 ---
 
-## Batch 4 notes
-
-This batch fixes the two panel-context bugs where the review loop surfaces plan-loop role labels and next-step wording. Both items share one root cause — panel context built without active-loop awareness — and should ship behind a single active-loop-aware panel-context derivation rather than two independent fixes.
-
-## 32 — Review-loop active role labels in TUI
-
-Goal: make the active-step role labels in the panel reflect the actual review-loop skills instead of reusing plan-loop role names.
-
-> Current observation: during the `review` loop, the active-step area in the TUI can display `planner` and `auditor`, even though the configured review-loop roles are `implementer` and `reviewer`. The timeline naming is already correct; the mismatch is in the active-step panel labeling.
-
-> **Verification (2026-07-02): confirmed.** Root cause pinpointed to `inFlightRole(kind)` in `src/status-accent.ts:56-63`, which maps `audit→auditor` / `follow-up→planner` / `implement→implementer` for every loop. The `inFlight` entry in `PanelContext` (`src/status.ts:26-38`) carries no `role` field, so `renderTimelineSection` is forced to derive one from `kind` (`src/status-panel.ts:127`). Review steps have `kind: audit` / `kind: follow-up` (`skills.yaml`), so they render `auditor` / `planner` instead of `reviewer` / `implementer`.
-
-**Focus:**
-
-- Thread the resolved skill `role` into the `inFlight` panel-context entry and render it directly, removing the `inFlightRole` `kind→role` map entirely (a second hardcoded mapping — deleting it also serves the single-source-of-truth goal). Prefer this narrow fix over a broad "active-loop-aware panel context."
-- Preserve the current correct timeline rendering and avoid changing persisted artifact naming or loop semantics.
-
-**Effort:** S.
-
----
-
-## 34 — TUI "Next Step" line is loop-agnostic (plan-loop steps shown during the review loop)
-
-Goal: make the panel's "Next Step" line reflect the active loop's actual skill sequence, so the review loop (and its implementer / follow-up stage) stops reading as if it were the plan loop.
-
-> Current observation: during the review loop the TUI "Next Step" line shows plan-loop-style next steps. The messages were written against the plan loop and never parameterized by the active loop, so the review loop's distinct steps (`review` → `review-follow-up`) are not represented in the Next Step text.
-
-**Findings so far:**
-
-- **The "Next Step" line is fed by loop-agnostic strings.** The panel renders `context.nextStepMessage` verbatim (`src/status-panel.ts:27`, `src/plain-render.ts:58`). In the read-only `orc status` view that message comes from `assembleNextStepMessage` (`src/status.ts:77-88`) — e.g. `Proposed next: follow-up then audit version N` — and during a live run it is a hardcoded per-stage string in `src/loop.ts` (`Running audit for version N…`, `Executing follow-up on version N-1 rejection…`, `Completed iteration N with verdict: …`). Neither path names the active loop's skills.
-- **The skill→role config is already correct.** `skills.yaml` maps `review`→`reviewer` and `review-follow-up`→`implementer`, distinct from `plan-audit`→`auditor` and `plan-follow-up`→`planner`. So this is a messaging / derivation gap, not a configuration mistake — the same conclusion #32 reached for the active-step role labels.
-- **The read-only view can also pick the wrong loop.** `statusAction` detects the loop with the most audit history (`src/commands/status.ts:50-76`), so when plan artifacts outnumber review artifacts, `orc status` reports plan-loop next steps even when the operator is working on the review loop.
-- **The review loop has no live panel coverage.** `tests/loop-live.test.ts` exercises only the `plan` and `implement` loops (every `runLoop` call passes one of those); the `review` loop's panel and Next Step rendering are unguarded, which is why this drift went unnoticed.
-- **Sibling of #32.** #32 tracks the active-step role labels (`planner`/`auditor` vs `reviewer`/`implementer`); this item tracks the Next Step line content specifically. Both stem from panel context being built without enough active-loop awareness and should share a single active-loop-aware derivation.
-
-**Fix:**
-
-- Parameterize the next-step messaging by the active loop so the review loop's Next Step references its own skills and semantics (`review`, `review-follow-up`) rather than the plan-loop wording.
-- Revisit `statusAction`'s loop detection so `orc status` reports the intended loop's next step (or surfaces both) instead of silently defaulting to whichever loop has the most history.
-- Add live panel coverage for the `review` loop in `tests/loop-live.test.ts`, asserting the Next Step line and active labels reflect review-loop skills.
-- Coordinate with #32 so the role-label and next-step fixes share one active-loop-aware panel-context derivation.
-
-**Effort:** S–M.
-
----
-
 ## Batch 5 notes
 
 This batch groups two small, operator-visible fixes: one artifact-integrity correction and one interactive control-flow improvement. Neither should materially reshape the runtime architecture.
