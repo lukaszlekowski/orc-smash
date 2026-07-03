@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
-import { scan, scanForStatus } from '../state.js';
+import { scan, scanForStatus, scanAllForStatus } from '../state.js';
 import { resolveNextStep } from '../next-step.js';
 import { assembleNextStepMessage, assembleInterruptedMessage, buildPanelContext } from '../status.js';
 import { readInterruptedMarker, setActiveProjectRoot } from '../interrupted-artifact.js';
@@ -11,6 +11,7 @@ import { resolveDefaultLoop } from '../loop-selector.js';
 export interface StatusOptions {
   project?: string;
   output: CliOutput;
+  all?: boolean;
 }
 
 export async function statusAction(options: StatusOptions): Promise<CommandResult> {
@@ -54,7 +55,9 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
   const marker = readInterruptedMarker(projectRoot);
 
   // Display-only timeline: merges the interrupted marker with artifact facts.
-  const statusScan = scanForStatus(projectRoot, detectedLoop, loopSpec, config.manifest);
+  const statusScan = options.all
+    ? scanAllForStatus(projectRoot, config.manifest)
+    : scanForStatus(projectRoot, detectedLoop, loopSpec, config.manifest);
 
   let nextStepMessage: string;
   if (statusScan.interruptedStep) {
@@ -86,7 +89,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
 
   const panelCtx = buildPanelContext(
     projectRoot,
-    detectedLoop,
+    options.all ? 'all' : detectedLoop,
     0,
     5,
     null,

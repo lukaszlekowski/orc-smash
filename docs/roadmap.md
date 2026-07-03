@@ -4,11 +4,6 @@
 
 Current pending work, grouped into recommended implementation batches.
 
-**Batch 4 — Panel & Active-Loop Correctness**
-
-- [ ] **32 — Review-loop active role labels in TUI**
-- [ ] **34 — TUI "Next Step" line is loop-agnostic (plan-loop steps shown during the review loop)**
-
 **Batch 5 — Artifact Integrity & Operator UX**
 
 - [ ] **33 — Follow-up artifacts carry duplicate front-matter blocks**
@@ -30,11 +25,7 @@ Open work is listed below.
 
 > **Verification status (2026-07-02).** Every item was re-checked against the current
 > source — **none have been fixed; all remain open.** Corrections from that pass:
-> - **#32** root cause is narrower than "loop-aware panel context": the `inFlight`
->   entry in `PanelContext` carries no `role`, so the renderer reinvents one from
->   `kind` via the hardcoded `inFlightRole` map (`src/status-accent.ts:56-63`). Fix
->   by threading the resolved skill `role` into `inFlight`, which also lets that
->   second `kind→role` map be deleted.
+
 > - **#33 / #35** evidence anchors are **stale**: the cited `docs/dev/*` artifacts
 >   (`review-followup-vN-*.md`, `plan-followup-v11-*.md`, `impl-v1-claude.md`) were
 >   deleted by the recent "Clean roadmap and remove stale plan doc" commit (`docs/dev/`
@@ -45,7 +36,6 @@ Open work is listed below.
 > - **#14** is **worse than stated**: the same cleanup commit left **live broken
 >   links** to the now-deleted `docs/dev/plan.md` in `README.md:72,103` and
 >   `AGENTS.md:15,115`. Consider doing this sooner than "last."
-> - **#34** minor line-ref drift: `status.ts:62`→77-88, `commands/status.ts:48-58`→50-76.
 
 ## Architecture assumptions and implementation goal
 
@@ -59,11 +49,6 @@ Every checklist item below should be implemented against the same architectural 
 - Preserve **behavioral stability** while refactoring. The goal is cleaner structure, not silent product changes, except where the checklist item explicitly adds user-facing behavior.
 
 The implementation goal for this roadmap is a **clean, scalable, high-quality harness architecture**: fewer duplicated rules, fewer hidden couplings, smaller orchestration files, explicit runtime contracts, and only purposeful modules added where they improve clarity and long-term maintenance.
-
-**Batch 4 — Panel & Active-Loop Correctness**
-
-- [ ] **32 — Review-loop active role labels in TUI.** Fix the active-step role naming shown in the panel during the `review` loop. The current TUI can show `planner` / `auditor` in the active-step area even though the review loop roles should be `reviewer` and `implementer`. Preserve the existing correct timeline naming and scope the fix to the active/panel context derivation so the review loop's live labels match the configured review skills without regressing plan-loop labels.
-- [ ] **34 — TUI "Next Step" line is loop-agnostic (plan-loop steps shown during the review loop).** The panel renders `nextStepMessage` verbatim, and that message is loop-agnostic: `assembleNextStepMessage` (`src/status.ts`) for the read-only view and the hardcoded per-stage strings in `src/loop.ts` (`Running audit for version N…`, `Executing follow-up…`) were written against the plan loop and never parameterized by the active loop, so during the review loop the Next Step line reads as plan-loop steps rather than the review loop's own `review` → `review-follow-up` sequence. Skill→role config is already correct (`skills.yaml`), and the review loop has no live panel coverage (`tests/loop-live.test.ts` runs only `plan`/`implement`). Parameterize the messaging by active loop, revisit `statusAction` loop detection, and add review-loop live panel tests; coordinate with #32.
 
 **Batch 5 — Artifact Integrity & Operator UX**
 
@@ -192,7 +177,8 @@ This batch is the highest-risk runtime work still open. It groups loop-liveness 
 Goal: Prevent loops from hanging indefinitely due to external CLI issues and prevent the loop from silently proceeding when a follow-up step produces no output file.
 
 **Findings:**
-- **External CLI Hanging:** 
+
+- **External CLI Hanging:**
   - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
   - **Verification (2026-07-02): already mitigated on the harness path.** Every spawn goes through `runProcess` with `stdio: ['ignore', 'pipe', 'pipe']` (`src/adapters/utils.ts:107`), so stdin is `/dev/null` (closed) — codex reading stdin gets EOF, not a hang. Drop this sub-issue unless a spawn path that pipes stdin is introduced.
   - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
@@ -200,6 +186,7 @@ Goal: Prevent loops from hanging indefinitely due to external CLI issues and pre
 - **Follow-up Validation Gap:** In [loop.ts](/Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
 
 **Fix:**
+
 - Enable a default/fallback watchdog timeout for all config-only agents or ensure the harness warns when timeouts remain disabled.
 - ~~Modify [utils.ts](/Users/lukasz/softDev-temp/orc-smash/src/adapters/utils.ts) to explicitly handle piped stdin~~ — **already done** (`stdio: ['ignore', …]` at `utils.ts:107`). Remaining real work here is the watchdog default and the follow-up-file validator below.
 - Add a validator in the loop orchestration to assert that the follow-up report file was written before advancing the state machine, analogous to the implement ledger verification.

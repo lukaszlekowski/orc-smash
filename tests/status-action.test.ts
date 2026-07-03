@@ -336,4 +336,42 @@ describe('statusAction — interrupted marker precedence + interrupted display (
     expect(renderPanelCalledWith.loopName).toBe('review');
     expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to run review version 1');
   });
+
+  it('all option: displays combined timeline chronologically across loops', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    
+    // Write plan audit v1 (APPROVED)
+    const planMeta = makeArtifactMeta({ version: 1, agent: 'fake', kind: 'audit' });
+    writeFileSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'), buildFrontMatter(planMeta) + '## Verdict\n\nAPPROVED');
+
+    // Write implement v1
+    const implMeta = {
+      loop: 'implement',
+      skill: '30-simple-implement',
+      kind: 'implement' as const,
+      role: 'implementer',
+      version: 1,
+      agent: 'fake',
+      model: 'fake-model',
+      target: '.',
+      priorAudit: 'docs/dev/plan-audit-v1-fake.md',
+      timestamp: new Date().toISOString()
+    };
+    writeFileSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), buildFrontMatter(implMeta) + '# Implemented');
+
+    // Set file times so plan comes before implementation
+    const now = Date.now();
+    const fs = await import('node:fs');
+    fs.utimesSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'), new Date(now - 5000), new Date(now - 5000));
+    fs.utimesSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), new Date(now), new Date(now));
+
+    const result = await statusAction({ project: tempDir, output: mockOutput, all: true });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith.loopName).toBe('all');
+    
+    // Check timeline shows both steps in chronological order
+    expect(renderPanelCalledWith.timeline.length).toBe(2);
+    expect(renderPanelCalledWith.timeline[0].kind).toBe('audit');
+    expect(renderPanelCalledWith.timeline[1].kind).toBe('implement');
+  });
 });
