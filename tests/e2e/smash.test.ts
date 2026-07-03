@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runLoop as baseRunLoop } from '../../src/loop.js';
 import { scan } from '../../src/state.js';
@@ -276,7 +276,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
   });
 
   it('runs loop where audit and follow-up use different fake runners', async () => {
-    const { root, devDir } = setupTargetProject('project-mixed-runners');
+    const { root } = setupTargetProject('project-mixed-runners');
     const config = loadConfig(root);
 
     fakeAdapterState.verdicts = ['REJECTED', 'APPROVED'];
@@ -307,7 +307,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
   });
 
   it('verifies verdict queue integrity and path-token-based kind detection', async () => {
-    const { root, devDir } = setupTargetProject('project-integrity');
+    const { root } = setupTargetProject('project-integrity');
     const config = loadConfig(root);
 
     // Initial REJECTED then APPROVED

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { RunInput, RunResult, RunError } from './types.js';
 import type { LifecycleEvent } from '../adapter-lifecycle.js';
-import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress, type OpencodeStreamError } from './opencode-stream.js';
+import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress } from './opencode-stream.js';
 import { classifyCompletion } from './completion.js';
 import { debugProcessLifecycle } from '../debug-spawn.js';
 

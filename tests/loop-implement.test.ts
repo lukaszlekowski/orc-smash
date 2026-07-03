@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { runLoop } from '../src/loop.js';
-import { scan, resolveImplementFacts } from '../src/state.js';
+import { resolveImplementFacts } from '../src/state.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapter, fakeAdapterState } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';

@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { renderStatusPanel } from '../src/status-panel.js';
 import { roleAccent, panelBorderColor } from '../src/status-accent.js';
 import type { PanelContext } from '../src/status.js';
-import type { StepKind, StepStatus } from '../src/state.js';
+import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
 
 // Force chalk to emit ANSI color codes so the role-accent assertion can compare
 // raw substrings. Without this, chalk auto-detects the test environment and
@@ -12,9 +12,10 @@ beforeAll(() => {
   chalk.level = 1;
 });
 
-function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
+function makeInFlight(kind: StepKind, status: StepStatus = 'running', role?: string) {
   return {
     kind,
+    role: role ?? roleForKind(kind),
     skillId: `${kind}-skill`,
     agent: 'opencode',
     model: 'opencode-go/deepseek-v4-flash',
@@ -210,31 +211,29 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
   });
 });
 
-describe('renderStatusPanel — in-flight role derived from kind (review v7 Minor closure)', () => {
-  it('live audit kind derives "auditor" role in the in-flight Role cell', () => {
-    // The in-flight role is derived from kind via inFlightRole(kind).
-    // kind: audit → role: 'auditor' (standard mapping, covers review audit too)
+describe('renderStatusPanel — in-flight role read from context.inFlight.role', () => {
+  it('live audit kind uses context.inFlight.role in the in-flight Role cell', () => {
+    // The in-flight role is read directly from context.inFlight.role.
     const out = renderStatusPanel(makeContext({
-      inFlight: makeInFlight('audit'),
+      inFlight: makeInFlight('audit', 'running', 'reviewer'),
       timeline: []
     }));
-    const expectedRole = roleAccent('auditor').chalk('auditor');
+    const expectedRole = roleAccent('reviewer').chalk('reviewer');
     expect(out).toContain(expectedRole);
   });
 
-  it('live follow-up kind derives "planner" role in the in-flight Role cell', () => {
-    // kind: follow-up → role: 'planner' (standard mapping, covers review follow-up too)
+  it('live follow-up kind uses context.inFlight.role in the in-flight Role cell', () => {
     const out = renderStatusPanel(makeContext({
-      inFlight: makeInFlight('follow-up'),
+      inFlight: makeInFlight('follow-up', 'running', 'implementer'),
       timeline: []
     }));
-    const expectedRole = roleAccent('planner').chalk('planner');
+    const expectedRole = roleAccent('implementer').chalk('implementer');
     expect(out).toContain(expectedRole);
   });
 
   it('plan audit still shows "auditor" (plan-loop regression)', () => {
     const out = renderStatusPanel(makeContext({
-      inFlight: makeInFlight('audit'),
+      inFlight: makeInFlight('audit'), // defaults to roleForKind('audit') => 'auditor'
       timeline: []
     }));
     const expectedRole = roleAccent('auditor').chalk('auditor');
@@ -243,7 +242,7 @@ describe('renderStatusPanel — in-flight role derived from kind (review v7 Mino
 
   it('plan follow-up still shows "planner" (plan-loop regression)', () => {
     const out = renderStatusPanel(makeContext({
-      inFlight: makeInFlight('follow-up'),
+      inFlight: makeInFlight('follow-up'), // defaults to roleForKind('follow-up') => 'planner'
       timeline: []
     }));
     const expectedRole = roleAccent('planner').chalk('planner');

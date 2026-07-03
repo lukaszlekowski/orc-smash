@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
-import { scan, resolveImplementFacts, requireApprovedPlanAuditPath } from '../state.js';
+import { scan, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
 import { validateAgentAndModel, normalizeModelForAgent } from '../runner.js';
 import { resolveNextStep, allowedStartPoint } from '../next-step.js';
@@ -16,6 +16,8 @@ import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import type { LoopSpec } from '../manifest.js';
 import { configureSpawnDebug } from '../debug-spawn.js';
+
+import { resolveDefaultLoop } from '../loop-selector.js';
 
 export interface SmashOptions {
   project?: string;
@@ -87,39 +89,7 @@ async function resolveSmashRunSetup(
   const isInteractive = !options.loop;
 
   if (isInteractive) {
-    let defaultLoop = 'plan';
-    const planSpec = config.manifest.loops['plan'];
-    const implementSpec = config.manifest.loops['implement'];
-    if (planSpec && implementSpec) {
-      const { approvedPlanAuditPath, currentPlanImplemented } = resolveImplementFacts(
-        projectRoot,
-        {
-          auditPattern: planSpec.auditPattern ?? '',
-          followUpPattern: planSpec.followUpPattern ?? ''
-        },
-        {
-          implementPattern: implementSpec.implementPattern ?? ''
-        }
-      );
-      if (currentPlanImplemented) {
-        defaultLoop = 'review';
-      } else if (approvedPlanAuditPath !== null) {
-        defaultLoop = 'implement';
-      } else {
-        defaultLoop = 'plan';
-      }
-    } else {
-      let defaultLoopCandidate = loopKeys[0] || 'plan';
-      for (const key of loopKeys) {
-        const spec = config.manifest.loops[key]!;
-        const stateScan = scan(projectRoot, { auditPattern: spec.auditPattern || '', followUpPattern: spec.followUpPattern || '' });
-        if (stateScan.auditSteps.length > 0) {
-          defaultLoopCandidate = key;
-          break;
-        }
-      }
-      defaultLoop = defaultLoopCandidate;
-    }
+    const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, config.manifest);
     loopName = await promptLoopSelect(loopKeys, defaultLoop);
   }
 

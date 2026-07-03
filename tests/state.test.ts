@@ -377,4 +377,25 @@ describe('scanForStatus — display-only interrupted scan (§3)', () => {
     expect(result.interruptedStep).toBeNull();
   });
 
+  it('scanForStatus resolves dynamically correct roles for interrupted review loop steps', () => {
+    const m = manifest();
+    
+    // Simulate interrupted review audit
+    writeInterruptedMarker(tempDir, {
+      loop: 'review', kind: 'audit', version: 2, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'review', interruptedAtMs: 123
+    });
+    const resultAudit = scanForStatus(tempDir, 'review', m.loops['review']!, m);
+    expect(resultAudit.interruptedStep).not.toBeNull();
+    expect(resultAudit.interruptedStep!.role).toBe('reviewer');
+
+    // Simulate interrupted review follow-up
+    writeInterruptedMarker(tempDir, {
+      loop: 'review', kind: 'follow-up', version: 2, agent: 'codex', model: 'gpt-5.4',
+      skillId: 'review-follow-up', interruptedAtMs: 123
+    });
+    const resultFollowUp = scanForStatus(tempDir, 'review', m.loops['review']!, m);
+    expect(resultFollowUp.interruptedStep).not.toBeNull();
+    expect(resultFollowUp.interruptedStep!.role).toBe('implementer');
+  });
 });

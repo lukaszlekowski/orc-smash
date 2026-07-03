@@ -50,6 +50,7 @@ function snapshot(ctx: PanelContext): PanelContextSnapshot {
     timelineKinds: ctx.timeline.map(s => s.kind),
     nextStepMessage: ctx.nextStepMessage,
     inFlightKind: ctx.inFlight?.kind ?? null,
+    inFlightRole: ctx.inFlight?.role ?? null,
     inFlightStatus: ctx.inFlight?.status ?? null,
     inFlightStartedAtMs: ctx.inFlight?.startedAtMs ?? null,
     latestVersion: ctx.latestVersion,
@@ -312,6 +313,44 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
     expect(implementRaw.length).toBeGreaterThan(0);
     for (const ctx of implementRaw) {
       expect(panelBorderColor(ctx)).toBe('green');
+    }
+  });
+
+  it('review loop live panel contains reviewer and implementer roles in inFlightRole and has loop-aware nextStepMessages', async () => {
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = makeCapturingPanelOutput(captured);
+
+    fakeAdapterState.verdicts = ['REJECTED'];
+    fakeAdapterState.delayMs = 20;
+
+    const reviewLoopSpec = config.manifest.loops['review']!;
+
+    await runLoop(tempWorkspace, 'review', reviewLoopSpec, config, {
+      'review': { agent: 'fake', model: 'fake-model' },
+      'review-follow-up': { agent: 'fake', model: 'fake-model' }
+    }, {
+      maxIterations: 2,
+      registry,
+      output,
+      interactive: false
+    });
+
+    // Check snapshots captured during the audit phase (kind: audit)
+    const auditSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'audit');
+    expect(auditSnapshots.length).toBeGreaterThan(0);
+    for (const snap of auditSnapshots) {
+      expect(snap.inFlightRole).toBe('reviewer');
+      expect(snap.nextStepMessage).toContain('review');
+    }
+
+    // Check snapshots captured during the follow-up phase (kind: follow-up)
+    const followUpSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'follow-up');
+    expect(followUpSnapshots.length).toBeGreaterThan(0);
+    for (const snap of followUpSnapshots) {
+      expect(snap.inFlightRole).toBe('implementer');
+      expect(snap.nextStepMessage).toContain('review-follow-up');
     }
   });
 });

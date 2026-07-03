@@ -2,10 +2,11 @@ import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scan, scanForStatus } from '../state.js';
 import { resolveNextStep } from '../next-step.js';
-import { assembleNextStepMessage, assembleInterruptedMessage, buildPanelContext, latestAuditVersion } from '../status.js';
+import { assembleNextStepMessage, assembleInterruptedMessage, buildPanelContext } from '../status.js';
 import { readInterruptedMarker, setActiveProjectRoot } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
+import { resolveDefaultLoop } from '../loop-selector.js';
 
 export interface StatusOptions {
   project?: string;
@@ -47,57 +48,40 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
     return { exitCode: 1, message: msg };
   }
 
-  // --- Loop selection: marker-first precedence, then the audit-history heuristic.
-  //
-  // The marker's `loop` field is authoritative. This is required because the
-  // heuristic skips `implement` loops and otherwise picks the non-implement loop
-  // with the most audits — so without marker precedence an interrupted
-  // `implement` run (with richer plan history on disk) would render as plan/review
-  // state instead of the interrupted implement state the marker records.
-  const marker = readInterruptedMarker(projectRoot);
-  let detectedLoop: string;
-  if (marker && config.manifest.loops[marker.loop]) {
-    detectedLoop = marker.loop;
-  } else {
-    detectedLoop = loopKeys[0]!;
-    let maxHistory = -1;
-    for (const key of loopKeys) {
-      const spec = config.manifest.loops[key]!;
-      if (spec.kind === 'implement') continue;
-      const stateScan = scan(projectRoot, {
-        auditPattern: spec.auditPattern ?? '',
-        followUpPattern: spec.followUpPattern ?? ''
-      });
-      if (stateScan.auditSteps.length > maxHistory) {
-        maxHistory = stateScan.auditSteps.length;
-        detectedLoop = key;
-      }
-    }
-  }
-
+  // --- Loop selection: marker-first precedence, then progression/heuristic.
+  const { loopName: detectedLoop, implementFacts } = resolveDefaultLoop(projectRoot, config.manifest);
   const loopSpec = config.manifest.loops[detectedLoop]!;
+  const marker = readInterruptedMarker(projectRoot);
 
   // Display-only timeline: merges the interrupted marker with artifact facts.
-  // Decision-path `scan()` stays unchanged; this is the only display merger.
   const statusScan = scanForStatus(projectRoot, detectedLoop, loopSpec, config.manifest);
 
   let nextStepMessage: string;
   if (statusScan.interruptedStep) {
-    // Interrupted-aware read-only message. An interrupted state MUST NOT render
-    // the audit-only fallback messages from assembleNextStepMessage().
-    nextStepMessage = assembleInterruptedMessage(detectedLoop, statusScan.interruptedStep.version);
+    const loopOfInterrupt = marker ? marker.loop : detectedLoop;
+    nextStepMessage = assembleInterruptedMessage(loopOfInterrupt, statusScan.interruptedStep.version);
   } else {
-    const stateScan = scan(projectRoot, {
-      auditPattern: loopSpec.auditPattern ?? '',
-      followUpPattern: loopSpec.followUpPattern ?? ''
-    });
-    const decision = resolveNextStep({
-      latestVerdict: stateScan.latestVerdict,
-      latestVersion: stateScan.latestVersion,
-      hasAudits: stateScan.auditSteps.length > 0,
-      latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
-    });
-    nextStepMessage = assembleNextStepMessage(decision, stateScan.latestVersion);
+    if (loopSpec.kind === 'implement') {
+      const nextVersion = implementFacts?.nextVersion ?? 1;
+      nextStepMessage = assembleNextStepMessage(
+        { state: 'implement', nextVersion },
+        0,
+        loopSpec,
+        config.manifest
+      );
+    } else {
+      const stateScan = scan(projectRoot, {
+        auditPattern: loopSpec.auditPattern ?? '',
+        followUpPattern: loopSpec.followUpPattern ?? ''
+      });
+      const decision = resolveNextStep({
+        latestVerdict: stateScan.latestVerdict,
+        latestVersion: stateScan.latestVersion,
+        hasAudits: stateScan.auditSteps.length > 0,
+        latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+      });
+      nextStepMessage = assembleNextStepMessage(decision, stateScan.latestVersion, loopSpec, config.manifest);
+    }
   }
 
   const panelCtx = buildPanelContext(
@@ -109,7 +93,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
     statusScan.timeline,
     nextStepMessage,
     null,
-    latestAuditVersion(statusScan.timeline),
+    statusScan.latestVersion,
     true
   );
 
