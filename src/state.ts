@@ -378,3 +378,60 @@ export function scanForStatus(
 
   return { timeline, latestVersion, interruptedStep };
 }
+
+export function scanAllForStatus(
+  projectRoot: string,
+  manifest: Manifest
+): StatusScanResult {
+  let timeline: Step[] = [];
+
+  for (const [, loopSpec] of Object.entries(manifest.loops)) {
+    if (loopSpec.auditPattern && loopSpec.followUpPattern) {
+      const loopSteps = scan(projectRoot, {
+        auditPattern: loopSpec.auditPattern,
+        followUpPattern: loopSpec.followUpPattern
+      }).timeline;
+      timeline.push(...loopSteps);
+    } else if (loopSpec.implement && loopSpec.implementPattern) {
+      const role = manifest.skills[loopSpec.implement]?.role ?? 'implementer';
+      const loopSteps = scanImplementAsSteps(projectRoot, loopSpec.implementPattern, role);
+      timeline.push(...loopSteps);
+    }
+  }
+
+  // Handle active interrupted step if one exists
+  const marker = readInterruptedMarker(projectRoot);
+  let interruptedStep: Step | null = null;
+  if (marker && manifest.loops[marker.loop]) {
+    const loopSpec = manifest.loops[marker.loop]!;
+    interruptedStep = synthesizeInterruptedStep(projectRoot, marker, loopSpec, manifest);
+    
+    // Suppress matching partial artifact
+    timeline = timeline.filter((s) => s.artifactPath !== interruptedStep!.artifactPath || s.status === 'interrupted');
+    timeline.push(interruptedStep);
+  }
+
+  // De-duplicate by artifactPath
+  const seenPaths = new Set<string>();
+  const uniqueTimeline: Step[] = [];
+  for (const step of timeline) {
+    if (!step.artifactPath || !seenPaths.has(step.artifactPath)) {
+      if (step.artifactPath) seenPaths.add(step.artifactPath);
+      uniqueTimeline.push(step);
+    }
+  }
+
+  // Sort strictly by mtime ascending for chronological cross-loop order
+  uniqueTimeline.sort((a, b) => a.mtime - b.mtime);
+
+  const latestVersion = uniqueTimeline.reduce(
+    (max, s) => (s.version > max ? s.version : max),
+    0
+  );
+
+  return {
+    timeline: uniqueTimeline,
+    latestVersion,
+    interruptedStep
+  };
+}

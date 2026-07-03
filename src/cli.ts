@@ -51,6 +51,7 @@ export function buildProgram(): Command {
     .command('status')
     .description('Read-only: detect project state and render status panel')
     .option('-p, --project <path>', 'Path to the target project')
+    .option('-a, --all', 'Show artifacts across all loops')
     .action(async (options) => {
       const output = createPanelCliOutput();
       const result = await statusAction({ ...options, output });
