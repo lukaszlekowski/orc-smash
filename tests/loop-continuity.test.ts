@@ -291,15 +291,20 @@ describe('Loop Continuity Orchestration', () => {
     })).rejects.toThrow('no prior Codex session ID was found');
   });
 
-  it('second-opinion Codex audits bypass continuity entirely and stamp sessionMode: none, sessionId: none', async () => {
+  it('second-opinion audit starts a fresh continuity chain with its own session id; a later audit resumes it', async () => {
     const root = setupProject();
     const config = loadConfig(root);
 
+    // Primary audit v1 (fresh) is APPROVED, triggering the second-opinion prompt.
+    // The second-opinion audit v2 seeds a NEW chain (fresh, own session id) and is REJECTED,
+    // so a follow-up + audit v3 follow — v3 must resume the second-opinion's session id.
     const codexResponses = [
       '{"type":"thread.started","thread_id":"sess_primary123"}\n' +
       '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"## Verdict\\nAPPROVED\\n"}}',
       '{"type":"thread.started","thread_id":"sess_second_opinion"}\n' +
-      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"## Verdict\\nAPPROVED\\n"}}'
+      '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"## Verdict\\nREJECTED\\n"}}',
+      '{"type":"thread.started","thread_id":"sess_second_opinion"}\n' +
+      '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"## Verdict\\nAPPROVED\\n"}}'
     ];
 
     let codexRunIndex = 0;
@@ -327,15 +332,16 @@ describe('Loop Continuity Orchestration', () => {
           durationMs: 50
         };
       } else {
+        // Follow-up step (non-JSON): write the follow-up report so the loop advances to audit v3.
         const prompt = options.args[options.args.length - 1] || '';
         const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
         if (outputPathMatch?.[1]) {
           const absOut = resolve(root, outputPathMatch[1]);
           mkdirSync(join(root, 'docs/dev'), { recursive: true });
-          writeFileSync(absOut, `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`);
+          writeFileSync(absOut, `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`);
         }
         return {
-          stdout: '## Verdict\nAPPROVED\n',
+          stdout: 'Follow-up patched.',
           stderr: '',
           exitCode: 0,
           timedOut: false,
@@ -348,6 +354,7 @@ describe('Loop Continuity Orchestration', () => {
     const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner });
 
     mockSecondOpinionChoice = 'run-second-opinion';
+    mockSecondOpinionRunner = { agent: 'codex', model: 'gpt-5.5' };
 
     const result = await runLoop(root, 'plan', config.manifest.loops['plan']!, config, {
       'plan-audit': { agent: 'codex', model: 'gpt-5.5' },
@@ -364,29 +371,48 @@ describe('Loop Continuity Orchestration', () => {
     expect(result.success).toBe(true);
     expect(result.verdict).toBe('APPROVED');
 
-    expect(capturedArgs).toHaveLength(2);
+    // Run order: audit v1 (fresh primary), second-opinion audit v2 (fresh new chain), follow-up, audit v3 (resumed).
+    expect(capturedArgs).toHaveLength(4);
+
     expect(capturedArgs[0]).toContain('exec');
     expect(capturedArgs[0]).toContain('--json');
     expect(capturedArgs[0]).not.toContain('resume');
 
+    // Second-opinion audit: fresh continuity chain — JSON (continuity on), but NO resume flag.
     expect(capturedArgs[1]).toContain('exec');
-    expect(capturedArgs[1]).not.toContain('--json');
+    expect(capturedArgs[1]).toContain('--json');
     expect(capturedArgs[1]).not.toContain('resume');
+
+    // Follow-up: non-JSON.
+    expect(capturedArgs[2]).toContain('exec');
+    expect(capturedArgs[2]).not.toContain('--json');
+
+    // Audit v3 resumes the second-opinion's session id (the new chain it seeded).
+    expect(capturedArgs[3]).toContain('exec');
+    expect(capturedArgs[3]).toContain('resume');
+    expect(capturedArgs[3]).toContain('sess_second_opinion');
+    expect(capturedArgs[3]).toContain('--json');
 
     const scanResult = scan(root, {
       auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
       followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md'
     });
 
-    expect(scanResult.timeline).toHaveLength(2);
-    
-    const step1 = scanResult.timeline[0]!;
-    expect(step1.sessionMode).toBe('fresh');
-    expect(step1.sessionId).toBe('sess_primary123');
+    const primary = scanResult.timeline.find(s => s.kind === 'audit' && s.sessionId === 'sess_primary123');
+    expect(primary).toBeDefined();
+    expect(primary!.sessionMode).toBe('fresh');
 
-    const step2 = scanResult.timeline[1]!;
-    expect(step2.sessionMode).toBe('none');
-    expect(step2.sessionId).toBe('none');
+    // The second opinion seeds its OWN chain: fresh mode, real session id (not 'none').
+    const secondOpinion = scanResult.timeline.find(
+      s => s.kind === 'audit' && s.sessionMode === 'fresh' && s.sessionId === 'sess_second_opinion'
+    );
+    expect(secondOpinion).toBeDefined();
+
+    // The audit after the rejected second opinion resumes that new chain (not the primary's).
+    const resumed = scanResult.timeline.find(
+      s => s.kind === 'audit' && s.sessionMode === 'resumed' && s.sessionId === 'sess_second_opinion'
+    );
+    expect(resumed).toBeDefined();
   });
 
   it('opencode continuity: fresh first audit, resumed later audit, stable session id', async () => {
@@ -822,11 +848,13 @@ describe('Loop Continuity Orchestration', () => {
     expect(scanResult.timeline[1]!.sessionId).toBe('sess_new_round');
   });
 
-  it('second-opinion opencode audits bypass continuity entirely and stamp sessionMode: none, sessionId: none', async () => {
+  it('second-opinion audit participates in continuity when its agent matches the continuity mode (fresh chain, own session id)', async () => {
     const root = setupProject();
     const config = loadConfig(root);
 
+    const opencodeArgs: string[][] = [];
     const opencodeSpawn = async (input: RunInput, args: string[]) => {
+      opencodeArgs.push(args);
       const prompt = args[args.length - 1] || '';
       const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
       if (outputPathMatch?.[1]) {
@@ -903,7 +931,12 @@ describe('Loop Continuity Orchestration', () => {
 
     const secondOpinionStep = scanResult.timeline.find(s => s.version === 3 && s.agent === 'opencode');
     expect(secondOpinionStep).toBeDefined();
-    expect(secondOpinionStep!.sessionMode).toBe('none');
-    expect(secondOpinionStep!.sessionId).toBe('none');
+    // Second opinion participates in continuity: fresh chain with its own session id (not 'none').
+    expect(secondOpinionStep!.sessionMode).toBe('fresh');
+    expect(secondOpinionStep!.sessionId).toBe('ses_second_opinion_opencode');
+
+    // Fresh chain: the opencode second opinion is NOT launched with a resume (-c) flag.
+    expect(opencodeArgs).toHaveLength(1);
+    expect(opencodeArgs[0]).not.toContain('-c');
   });
 });
