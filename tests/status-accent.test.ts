@@ -6,7 +6,7 @@ import {
   panelBorderColor
 } from '../src/status-accent.js';
 import type { PanelContext } from '../src/status.js';
-import type { StepKind, StepStatus } from '../src/state.js';
+import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
 
 function makeContext(overrides: Partial<PanelContext>): PanelContext {
   return {
@@ -27,6 +27,7 @@ function makeContext(overrides: Partial<PanelContext>): PanelContext {
 function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
   return {
     kind,
+    role: roleForKind(kind),
     skillId: `${kind}-skill`,
     agent: 'opencode',
     model: 'opencode-go/deepseek-v4-flash',

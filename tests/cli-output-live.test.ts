@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createPanelCliOutput, PANEL_RENDER_INTERVAL_MS } from '../src/cli-output.js';
 import type { PanelContext } from '../src/status.js';
-import type { StepKind, StepStatus } from '../src/state.js';
+import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -19,6 +19,7 @@ vi.mock('ora', () => ({
 function makeInFlight(kind: StepKind, startedAtMs: number, status: StepStatus = 'running') {
   return {
     kind,
+    role: roleForKind(kind),
     skillId: 'plan-audit',
     agent: 'opencode',
     model: 'opencode-go/deepseek-v4-flash',
@@ -176,6 +177,7 @@ describe('createPanelCliOutput — live region seam', () => {
 
     output.attachLiveRegion!(() => makeContext({
       kind: 'audit',
+      role: 'auditor',
       skillId: 'plan-audit',
       agent: 'opencode',
       model: 'opencode-go/deepseek-v4-flash',

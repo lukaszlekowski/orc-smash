@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { statusAction } from '../src/commands/status.js';
 import { buildFrontMatter } from '../src/provenance.js';
@@ -55,23 +55,34 @@ describe('statusAction command (consumes resolveNextStep)', () => {
     const result = await statusAction({ project: tempDir, output: mockOutput });
     expect(result.exitCode).toBe(0);
     expect(renderPanelCalledWith).not.toBeNull();
-    expect(renderPanelCalledWith.nextStepMessage).toContain('Proposed next: follow-up then audit version 2');
-    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/audit version 1\b/);
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Proposed next: plan-follow-up then plan-audit version 2');
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/plan-audit version 1\b/);
   });
 
-  it('approved: message reports the approved version', async () => {
-    writeAudit(2, 'APPROVED');
+  it('approved plan / pre-implementation: status selects implement loop and ready to run implementation version 1', async () => {
+    writeAudit(1, 'APPROVED');
     const result = await statusAction({ project: tempDir, output: mockOutput });
     expect(result.exitCode).toBe(0);
     expect(renderPanelCalledWith).not.toBeNull();
-    expect(renderPanelCalledWith.nextStepMessage).toContain('Completed: approved at version 2');
+    expect(renderPanelCalledWith.loopName).toBe('implement');
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to run 30-simple-implement version 1');
+
+    // Verify status panel output contains Timeline: header and does not crash
+    const output = createPanelCliOutput();
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    (process.stdout as any).isTTY = true;
+    const res = await statusAction({ project: tempDir, output });
+    expect(res.exitCode).toBe(0);
+    const written = writeSpy.mock.calls.map(c => c[0] as string).join('');
+    expect(written).toContain('Timeline:');
+    expect(written).toContain('Ready to run 30-simple-implement version 1');
   });
 
   it('fresh: message reports version 1 (nextAuditVersion)', async () => {
     const result = await statusAction({ project: tempDir, output: mockOutput });
     expect(result.exitCode).toBe(0);
     expect(renderPanelCalledWith).not.toBeNull();
-    expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to smash version 1 (fresh)');
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to run plan-audit version 1 (fresh)');
   });
 
   it('unknown latest audit: terminal message', async () => {
@@ -199,7 +210,7 @@ describe('statusAction — interrupted marker precedence + interrupted display (
     expect(renderPanelCalledWith.loopName).toBe('plan');
     // Interrupted-aware message (NOT the audit-only fallback).
     expect(renderPanelCalledWith.nextStepMessage).toMatch(/Planning v3 was interrupted/);
-    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to run|Completed: approved/);
     // The synthesized interrupted step is in the display timeline.
     expect(renderPanelCalledWith.timeline.some((s: any) => s.status === 'interrupted')).toBe(true);
   });
@@ -209,7 +220,7 @@ describe('statusAction — interrupted marker precedence + interrupted display (
     await statusAction({ project: tempDir, output: mockOutput });
     expect(renderPanelCalledWith.loopName).toBe('review');
     expect(renderPanelCalledWith.nextStepMessage).toMatch(/Review v2 was interrupted/);
-    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to run|Completed: approved/);
   });
 
   it('regression: an interrupted implement marker beats richer plan history (marker-first precedence)', async () => {
@@ -231,14 +242,98 @@ describe('statusAction — interrupted marker precedence + interrupted display (
     expect(renderPanelCalledWith.loopName).toBe('implement');
     expect(renderPanelCalledWith.nextStepMessage).toMatch(/Implementation v1 was interrupted/);
     expect(renderPanelCalledWith.nextStepMessage).toMatch(/resumes implementation rather than advancing to review/);
-    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to smash|Completed: approved/);
+    expect(renderPanelCalledWith.nextStepMessage).not.toMatch(/Ready to run|Completed: approved/);
   });
 
-  it('falls back to the audit-history heuristic when no marker is present', async () => {
+  it('Rule 2 plan loop progression is selected when no marker is present', async () => {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
     writeAudit(1, 'REJECTED');
     await statusAction({ project: tempDir, output: mockOutput });
     expect(renderPanelCalledWith.loopName).toBe('plan');
     expect(renderPanelCalledWith.timeline.every((s: any) => s.status !== 'interrupted')).toBe(true);
+  });
+
+  it('mixed-history: Rule 3 activity heuristic selects the loop with newest activity when Rule 2 is not active', async () => {
+    const customManifest = {
+      roles: {
+        auditor: 'roles/auditor.md'
+      },
+      skills: {
+        'skill-a': { file: 'skills/a.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake-model' },
+        'skill-a-follow': { file: 'skills/af.md', role: 'auditor', kind: 'follow-up', agent: 'fake', model: 'fake-model' },
+        'skill-b': { file: 'skills/b.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake-model' },
+        'skill-b-follow': { file: 'skills/bf.md', role: 'auditor', kind: 'follow-up', agent: 'fake', model: 'fake-model' }
+      },
+      loops: {
+        loopA: {
+          kind: 'doc-audit',
+          target: 'a.md',
+          targetKind: 'file',
+          audit: 'skill-a',
+          'follow-up': 'skill-a-follow',
+          auditPattern: 'docs/dev/a-audit-v{n}-{agent}.md',
+          followUpPattern: 'docs/dev/a-followup-v{n}-{agent}.md',
+          inputs: []
+        },
+        loopB: {
+          kind: 'doc-audit',
+          target: 'b.md',
+          targetKind: 'file',
+          audit: 'skill-b',
+          'follow-up': 'skill-b-follow',
+          auditPattern: 'docs/dev/b-audit-v{n}-{agent}.md',
+          followUpPattern: 'docs/dev/b-followup-v{n}-{agent}.md',
+          inputs: []
+        }
+      }
+    };
+
+    vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      registry: { providers: { fake: ['fake-model'] }, defaults: { agent: 'fake', model: 'fake-model' } },
+      manifest: customManifest as any
+    });
+
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    // Write loopA audit with older time
+    const body = '\n# Audit\n\n## Verdict\n\nREJECTED\n';
+    writeFileSync(join(tempDir, 'docs/dev/a-audit-v1-fake.md'), buildFrontMatter(makeArtifactMeta({ version: 1, agent: 'fake', kind: 'audit' })) + body);
+    // Write loopB audit with newer time
+    writeFileSync(join(tempDir, 'docs/dev/b-audit-v1-fake.md'), buildFrontMatter(makeArtifactMeta({ version: 1, agent: 'fake', kind: 'audit' })) + body);
+
+    // Set file times
+    const now = Date.now();
+    const fs = await import('node:fs');
+    fs.utimesSync(join(tempDir, 'docs/dev/a-audit-v1-fake.md'), new Date(now - 10000), new Date(now - 10000));
+    fs.utimesSync(join(tempDir, 'docs/dev/b-audit-v1-fake.md'), new Date(now), new Date(now));
+
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith.loopName).toBe('loopB');
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Proposed next: skill-b-follow then skill-b version 2');
+  });
+
+  it('post-implementation: Rule 2 selects review after implementation is complete', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeAudit(1, 'APPROVED'); // Approved plan audit v1
+
+    // Write implementation ledger matching this approved plan audit
+    const implMeta = {
+      loop: 'implement',
+      skill: '30-simple-implement',
+      kind: 'implement' as const,
+      role: 'implementer',
+      version: 1,
+      agent: 'fake',
+      model: 'fake-model',
+      target: '.',
+      priorAudit: 'docs/dev/plan-audit-v1-fake.md',
+      timestamp: new Date().toISOString()
+    };
+    writeFileSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), buildFrontMatter(implMeta) + '# Implemented');
+
+    const result = await statusAction({ project: tempDir, output: mockOutput });
+    expect(result.exitCode).toBe(0);
+    expect(renderPanelCalledWith.loopName).toBe('review');
+    expect(renderPanelCalledWith.nextStepMessage).toContain('Ready to run review version 1');
   });
 });

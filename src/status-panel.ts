@@ -2,7 +2,7 @@ import boxen from 'boxen';
 import Table from 'cli-table3';
 import chalk from 'chalk';
 import { formatDurationMs, type PanelContext } from './status.js';
-import { roleAccent, statusAccent, panelBorderColor, inFlightRole } from './status-accent.js';
+import { roleAccent, statusAccent, panelBorderColor } from './status-accent.js';
 
 export function renderStatusPanel(context: PanelContext): string {
   const pName = chalk.cyan(context.projectRoot);
@@ -124,7 +124,7 @@ function renderTimelineSection(context: PanelContext): string {
   });
 
   if (context.inFlight) {
-    const roleAcc = roleAccent(inFlightRole(context.inFlight.kind));
+    const roleAcc = roleAccent(context.inFlight.role);
     const statusAcc = statusAccent(context.inFlight.status);
     rows.push([
       String(context.inFlight.version),

@@ -232,6 +232,7 @@ export function buildManifestSchema(registry: ModelRegistry) {
         }
       }
     }
+
   });
 }
 

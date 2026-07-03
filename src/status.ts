@@ -1,5 +1,6 @@
 import type { Step, StepKind, StepStatus } from './state.js';
 import type { NextStepDecision } from './next-step.js';
+import type { LoopSpec, Manifest } from './manifest.js';
 
 /**
  * Format a millisecond duration as the compact `Xm Ys` / `Xs` form used in the
@@ -25,6 +26,7 @@ export interface PanelContext {
   nextStepMessage: string;
   inFlight: {
     kind: StepKind;
+    role: string;
     skillId: string;
     agent: string;
     model: string;
@@ -74,16 +76,54 @@ export function latestAuditVersion(steps: Step[]): number {
   return max;
 }
 
-export function assembleNextStepMessage(decision: NextStepDecision, latestVersion: number): string {
+export interface LoopLabels {
+  audit?: {
+    skillId: string;
+  };
+  followUp?: {
+    skillId: string;
+  };
+  implement?: {
+    skillId: string;
+  };
+}
+
+export function resolveLoopLabels(loopSpec: LoopSpec, manifest: Manifest): LoopLabels {
+  const labels: LoopLabels = {};
+  if (loopSpec.audit && manifest.skills[loopSpec.audit]) {
+    labels.audit = { skillId: loopSpec.audit };
+  }
+  if (loopSpec['follow-up'] && manifest.skills[loopSpec['follow-up']]) {
+    labels.followUp = { skillId: loopSpec['follow-up'] };
+  }
+  if (loopSpec.implement && manifest.skills[loopSpec.implement]) {
+    labels.implement = { skillId: loopSpec.implement };
+  }
+  return labels;
+}
+
+export type NextStepMessageDecision =
+  | NextStepDecision
+  | { state: 'implement'; nextVersion: number };
+
+export function assembleNextStepMessage(
+  decision: NextStepMessageDecision,
+  latestVersion: number,
+  loopSpec: LoopSpec,
+  manifest: Manifest
+): string {
+  const labels = resolveLoopLabels(loopSpec, manifest);
   switch (decision.state) {
     case 'fresh':
-      return `Ready to smash version ${decision.nextAuditVersion} (fresh)`;
+      return `Ready to run ${labels.audit?.skillId ?? 'audit'} version ${decision.nextAuditVersion} (fresh)`;
     case 'rejected':
-      return `Proposed next: follow-up then audit version ${decision.nextAuditVersion}`;
+      return `Proposed next: ${labels.followUp?.skillId ?? 'follow-up'} then ${labels.audit?.skillId ?? 'audit'} version ${decision.nextAuditVersion}`;
     case 'approved':
       return `Completed: approved at version ${latestVersion}`;
     case 'unknown-latest-audit':
       return `Terminal error: latest audit is unparseable`;
+    case 'implement':
+      return `Ready to run ${labels.implement?.skillId ?? 'implement'} version ${decision.nextVersion}`;
   }
 }
 

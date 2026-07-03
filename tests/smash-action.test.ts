@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 vi.mock('../src/loop.js', () => ({
@@ -12,7 +12,7 @@ vi.mock('../src/interactive.js', () => ({
     lastPromptedDefault = defaultLoop;
     return defaultLoop;
   },
-  promptStartPoint: async () => 'fresh',
+  promptStartPoint: async (_allowed: string[], defaultSP: string) => defaultSP,
   promptRunners: async (skills: string[]) => {
     const res: any = {};
     for (const s of skills) res[s] = { agent: 'fake', model: 'fake-model' };
@@ -28,6 +28,7 @@ import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { resolveImplementFacts } from '../src/state.js';
+import * as configModule from '../src/config.js';
 import { loadConfig } from '../src/config.js';
 
 const mockedRunLoop = vi.mocked(runLoop);
@@ -566,6 +567,156 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
       expect.objectContaining({
         auditContinuity: 'codex-resume'
       })
+    );
+  });
+
+  it('Rule 2 pre-implementation: interactive smash defaults to implement loop when plan approved but not implemented', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    // Write approved plan
+    const meta = makeArtifactMeta({ version: 1 });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+
+    mockedRunLoop.mockClear();
+    lastPromptedDefault = undefined;
+
+    await smashAction({
+      project: tempDir,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    expect(lastPromptedDefault).toBe('implement');
+    expect(mockedRunLoop).toHaveBeenCalledWith(
+      expect.any(String),
+      'implement',
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object)
+    );
+  });
+
+  it('Rule 3 mixed-history: interactive smash defaults to the loop with the newest activity when Rule 2 is not active', async () => {
+    const customManifest = {
+      roles: {
+        auditor: 'roles/auditor.md'
+      },
+      skills: {
+        'skill-a': { file: 'skills/a.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake-model' },
+        'skill-a-follow': { file: 'skills/af.md', role: 'auditor', kind: 'follow-up', agent: 'fake', model: 'fake-model' },
+        'skill-b': { file: 'skills/b.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake-model' },
+        'skill-b-follow': { file: 'skills/bf.md', role: 'auditor', kind: 'follow-up', agent: 'fake', model: 'fake-model' }
+      },
+      loops: {
+        loopA: {
+          kind: 'doc-audit',
+          target: 'a.md',
+          targetKind: 'file',
+          audit: 'skill-a',
+          'follow-up': 'skill-a-follow',
+          auditPattern: 'docs/dev/a-audit-v{n}-{agent}.md',
+          followUpPattern: 'docs/dev/a-followup-v{n}-{agent}.md',
+          inputs: []
+        },
+        loopB: {
+          kind: 'doc-audit',
+          target: 'b.md',
+          targetKind: 'file',
+          audit: 'skill-b',
+          'follow-up': 'skill-b-follow',
+          auditPattern: 'docs/dev/b-audit-v{n}-{agent}.md',
+          followUpPattern: 'docs/dev/b-followup-v{n}-{agent}.md',
+          inputs: []
+        }
+      }
+    };
+
+    vi.spyOn(configModule, 'loadConfig').mockReturnValue({
+      registry: { providers: { fake: ['fake-model'] }, defaults: { agent: 'fake', model: 'fake-model' } },
+      manifest: customManifest as any
+    });
+
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    
+    // Write loopA and loopB rejected audits
+    const body = '\n# Audit\n\n## Verdict\n\nREJECTED\n';
+    writeFileSync(join(tempDir, 'docs/dev/a-audit-v1-fake.md'), buildFrontMatter(makeArtifactMeta({ version: 1, agent: 'fake', kind: 'audit' })) + body);
+    writeFileSync(join(tempDir, 'docs/dev/b-audit-v1-fake.md'), buildFrontMatter(makeArtifactMeta({ version: 1, agent: 'fake', kind: 'audit' })) + body);
+
+    // Set file times
+    const now = Date.now();
+    const fs = await import('node:fs');
+    fs.utimesSync(join(tempDir, 'docs/dev/a-audit-v1-fake.md'), new Date(now - 10000), new Date(now - 10000));
+    fs.utimesSync(join(tempDir, 'docs/dev/b-audit-v1-fake.md'), new Date(now), new Date(now));
+
+    mockedRunLoop.mockClear();
+    lastPromptedDefault = undefined;
+
+    await smashAction({
+      project: tempDir,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    expect(lastPromptedDefault).toBe('loopB');
+    expect(mockedRunLoop).toHaveBeenCalledWith(
+      expect.any(String),
+      'loopB',
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object)
+    );
+  });
+
+  it('Rule 2 post-implementation: interactive smash defaults to review loop after implementation is complete', async () => {
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    
+    // Write approved plan
+    const meta = makeArtifactMeta({ version: 1 });
+    writeFileSync(
+      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+
+    // Write implementation ledger matching this approved plan
+    const implMeta = {
+      loop: 'implement',
+      skill: '30-simple-implement',
+      kind: 'implement' as const,
+      role: 'implementer',
+      version: 1,
+      agent: 'fake',
+      model: 'fake-model',
+      target: '.',
+      priorAudit: 'docs/dev/plan-audit-v1-fake.md',
+      timestamp: new Date().toISOString()
+    };
+    writeFileSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), buildFrontMatter(implMeta) + '# Implemented');
+
+    mockedRunLoop.mockClear();
+    lastPromptedDefault = undefined;
+
+    await smashAction({
+      project: tempDir,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+
+    expect(lastPromptedDefault).toBe('review');
+    expect(mockedRunLoop).toHaveBeenCalledWith(
+      expect.any(String),
+      'review',
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object)
     );
   });
 });

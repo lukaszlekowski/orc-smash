@@ -10,12 +10,12 @@ import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.
 import type { StepKind } from './provenance.js';
 export type { StepKind };
 import type { LoopSpec, Manifest } from './manifest.js';
-import { readInterruptedMarker, resolveInterruptedArtifactPath } from './interrupted-artifact.js';
+import { readInterruptedMarker, resolveInterruptedArtifactPath, type InterruptedMarker } from './interrupted-artifact.js';
 
 export type StepStatus = 'running' | 'done' | 'failed' | 'interrupted';
 
 /** Derive the canonical role label for a step kind (used for synthesized steps). */
-function roleForKind(kind: StepKind): string {
+export function roleForKind(kind: StepKind): string {
   if (kind === 'audit') return 'auditor';
   if (kind === 'follow-up') return 'planner';
   return 'implementer';
@@ -201,6 +201,44 @@ export function scanImplementArtifacts(
   return results;
 }
 
+export function scanImplementAsSteps(
+  targetRoot: string,
+  implementPattern: string,
+  role: string
+): Step[] {
+  const allFiles = getAllFiles(targetRoot);
+  const regex = patternToRegex(implementPattern);
+  const steps: Step[] = [];
+
+  for (const file of allFiles) {
+    const relPath = relative(targetRoot, file);
+    const match = relPath.match(regex);
+    if (!match) continue;
+
+    const version = parseInt(match[1]!, 10);
+    const agent = match[2]!;
+
+    const content = readFileSync(file, 'utf-8');
+    const meta = parseArtifactMeta(content, { agent, version, kind: 'implement' });
+    const stat = statSync(file);
+
+    steps.push({
+      kind: 'implement',
+      role: meta.role !== 'unknown' ? meta.role : role,
+      agent: meta.agent,
+      model: meta.model,
+      version,
+      status: 'done',
+      artifactPath: file,
+      mtime: stat.mtimeMs,
+      durationMs: meta.durationMs,
+      sessionMode: meta.sessionMode,
+      sessionId: meta.sessionId
+    });
+  }
+  return steps;
+}
+
 export function resolveImplementFacts(
   targetRoot: string,
   planSpec: { auditPattern: string; followUpPattern: string },
@@ -266,6 +304,49 @@ export interface StatusScanResult {
  * display. When a matching marker exists, its synthesized `interrupted` step
  * replaces any same-path partial artifact row in the returned timeline.
  */
+/**
+ * Resolves the dynamic role of an interrupted step based on the loop spec and manifest.
+ */
+export function resolveInterruptedStepRole(
+  marker: InterruptedMarker,
+  loopSpec: LoopSpec,
+  manifest: Manifest
+): string {
+  if (marker.kind === 'audit' && loopSpec.audit && manifest.skills[loopSpec.audit]) {
+    return manifest.skills[loopSpec.audit].role;
+  }
+  if (marker.kind === 'follow-up' && loopSpec['follow-up'] && manifest.skills[loopSpec['follow-up']]) {
+    return manifest.skills[loopSpec['follow-up']].role;
+  }
+  if (marker.kind === 'implement' && loopSpec.implement && manifest.skills[loopSpec.implement]) {
+    return manifest.skills[loopSpec.implement].role;
+  }
+  return roleForKind(marker.kind);
+}
+
+/**
+ * Synthesizes a Step object for an interrupted marker.
+ */
+export function synthesizeInterruptedStep(
+  projectRoot: string,
+  marker: InterruptedMarker,
+  loopSpec: LoopSpec,
+  manifest: Manifest
+): Step {
+  const artifactPath = resolveInterruptedArtifactPath(projectRoot, marker, manifest.loops) ?? '';
+  const role = resolveInterruptedStepRole(marker, loopSpec, manifest);
+  return {
+    kind: marker.kind,
+    role,
+    agent: marker.agent,
+    model: marker.model,
+    version: marker.version,
+    status: 'interrupted',
+    artifactPath,
+    mtime: marker.interruptedAtMs
+  };
+}
+
 export function scanForStatus(
   projectRoot: string,
   loopName: string,
@@ -283,20 +364,10 @@ export function scanForStatus(
   const marker = readInterruptedMarker(projectRoot);
   let interruptedStep: Step | null = null;
   if (marker && marker.loop === loopName) {
-    const artifactPath = resolveInterruptedArtifactPath(projectRoot, marker, manifest.loops) ?? '';
-    interruptedStep = {
-      kind: marker.kind,
-      role: roleForKind(marker.kind),
-      agent: marker.agent,
-      model: marker.model,
-      version: marker.version,
-      status: 'interrupted',
-      artifactPath,
-      mtime: marker.interruptedAtMs
-    };
+    interruptedStep = synthesizeInterruptedStep(projectRoot, marker, loopSpec, manifest);
     // Suppress a matching partial artifact row, then append the synthesized
     // interrupted step so the display shows exactly one interrupted step.
-    timeline = timeline.filter((s) => s.artifactPath !== artifactPath || s.status === 'interrupted');
+    timeline = timeline.filter((s) => s.artifactPath !== interruptedStep!.artifactPath || s.status === 'interrupted');
     timeline.push(interruptedStep);
   }
 

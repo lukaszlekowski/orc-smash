@@ -18,6 +18,7 @@ export interface PanelContextSnapshot {
   timelineKinds: StepKind[];
   nextStepMessage: string;
   inFlightKind: StepKind | null;
+  inFlightRole: string | null;
   inFlightStatus: StepStatus | null;
   inFlightStartedAtMs: number | null;
   latestVersion: number;

@@ -53,6 +53,7 @@ describe('buildPanelContext (data model extension)', () => {
   it('builds a context with the documented field shape (inFlight/latestVersion/readOnly)', () => {
     const inFlight = {
       kind: 'audit' as const,
+      role: 'auditor',
       skillId: 'plan-audit',
       agent: 'opencode',
       model: 'opencode-go/deepseek-v4-flash',

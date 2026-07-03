@@ -253,7 +253,7 @@ describe('renderPlainPanel — plain mode is non-live (v10 audit Critical closur
   it('does NOT render "── IN-FLIGHT" or "Active Step:" under any circumstance, even with inFlight set', () => {
     const out = renderPlainPanel(makeContext({
       inFlight: {
-        kind: 'follow-up', skillId: 'plan-follow-up', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash',
+        kind: 'follow-up', role: 'planner', skillId: 'plan-follow-up', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash',
         version: 1,
         iteration: 1,
         startedAtMs: 0,

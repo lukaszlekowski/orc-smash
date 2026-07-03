@@ -53,15 +53,6 @@ export function statusAccent(status: StepStatus): StatusAccent {
   return statusMap[status];
 }
 
-export function inFlightRole(kind: StepKind): string {
-  const map: Record<StepKind, string> = {
-    audit: 'auditor',
-    'follow-up': 'planner',
-    implement: 'implementer'
-  };
-  return map[kind];
-}
-
 export function panelBorderColor(ctx: PanelContext): PanelBorderColor {
   if (ctx.inFlight?.status === 'failed') {
     return 'red';

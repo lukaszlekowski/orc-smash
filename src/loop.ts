@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import chalk from 'chalk';
-import { scan, type Step, resolveImplementFacts, requireApprovedPlanAuditPath } from './state.js';
+import { scan, type Step, resolveImplementFacts, requireApprovedPlanAuditPath, roleForKind } from './state.js';
 import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.js';
 import { getAdapter, type AgentRegistry } from './adapters/registry.js';
 import type { RunResult } from './adapters/types.js';
@@ -9,7 +9,7 @@ import { renderPattern } from './patterns.js';
 import { composePrompt } from './prompt-composer.js';
 import { writeArtifactWithMeta, type ArtifactMeta, type StepKind } from './provenance.js';
 import { parseVerdict } from './verdict.js';
-import { buildPanelContext, latestAuditVersion, type PanelContext } from './status.js';
+import { buildPanelContext, latestAuditVersion, type PanelContext, resolveLoopLabels } from './status.js';
 import type { LifecycleEvent } from './adapter-lifecycle.js';
 import { promptSecondOpinionDecision, promptSecondOpinionRunner, promptContinueToReview, promptRunners } from './interactive.js';
 import { structuredMessage } from './adapters/errors.js';
@@ -43,6 +43,8 @@ export async function runLoop(
   runners: Record<string, Runner>,
   options: LoopOptions
 ): Promise<LoopReturn> {
+  const labels = resolveLoopLabels(loopSpec, config.manifest);
+
   // §3: defensive quarantine at loop start. Quarantine any in-flight/late
   // artifact left by a prior interrupted run (marker-based) before state
   // resolution. No-op when no marker exists. Composite helper also covers the
@@ -122,6 +124,7 @@ export async function runLoop(
 
     let liveInFlight: NonNullable<PanelContext['inFlight']> | null = {
       kind,
+      role: config.manifest.skills[skillId]?.role ?? roleForKind(kind),
       skillId,
       agent: runner.agent,
       model: runner.model,
@@ -139,6 +142,7 @@ export async function runLoop(
         const inFlight: PanelContext['inFlight'] = liveInFlight
           ? {
               kind: liveInFlight.kind,
+              role: liveInFlight.role,
               skillId: liveInFlight.skillId,
               agent: liveInFlight.agent,
               model: liveInFlight.model,
@@ -151,6 +155,16 @@ export async function runLoop(
               progressMessage: liveInFlight.progressMessage
             }
           : null;
+
+        let activeLabel = skillId;
+        if (kind === 'audit') {
+          activeLabel = labels.audit?.skillId ?? skillId;
+        } else if (kind === 'follow-up') {
+          activeLabel = labels.followUp?.skillId ?? skillId;
+        } else if (kind === 'implement') {
+          activeLabel = labels.implement?.skillId ?? skillId;
+        }
+
         return buildPanelContext(
           projectRoot,
           loopName,
@@ -158,7 +172,7 @@ export async function runLoop(
           options.maxIterations,
           { skillId, agent: runner.agent, model: runner.model },
           steps,
-          `Running ${kind} v${version}...`,
+          `Running ${activeLabel} v${version}...`,
           inFlight,
           latestAuditVersion(steps),
           false
@@ -300,7 +314,7 @@ export async function runLoop(
     renderPanel(
       { skillId: implementSkillId, agent: runner.agent, model: runner.model },
       1,
-      `Running implementation v${nextVersion}...`
+      `Running ${labels.implement?.skillId ?? implementSkillId} v${nextVersion}...`
     );
 
     const roleFile = config.manifest.roles[skill.role];
@@ -613,7 +627,7 @@ export async function runLoop(
       renderPanel(
         { skillId: followUpSkillId, agent: runner.agent, model: runner.model },
         iteration + 1,
-        `Executing follow-up on version ${N - 1} rejection...`
+        `Executing ${labels.followUp?.skillId ?? followUpSkillId} on version ${N - 1} rejection...`
       );
 
       const prompt = preparePrompt(followUpSkillId, followUpSkill, followUpVersion, runner, 'follow-up');
@@ -690,7 +704,7 @@ export async function runLoop(
     renderPanel(
       { skillId: auditSkillId, agent: runner.agent, model: runner.model },
       iteration + 1,
-      `Running audit for version ${N}...`
+      `Running ${labels.audit?.skillId ?? auditSkillId} for version ${N}...`
     );
 
     let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;

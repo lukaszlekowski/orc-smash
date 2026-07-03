@@ -1,11 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import os from 'node:os';
 import {
   loadModelRegistry,
   DEFAULT_REGISTRY,
-  loadConfig,
   registryTimeoutFor
 } from '../src/config.js';
 import { loadManifest } from '../src/manifest.js';
