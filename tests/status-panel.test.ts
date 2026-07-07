@@ -327,4 +327,15 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
     expect(out).toContain('Time');
     expect(out).toContain('1m 5s');
   });
+
+  it('renders a Session ID column with the corresponding sessionId', () => {
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        { kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
+          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, sessionId: 'sess_timeline_123' }
+      ]
+    }));
+    expect(out).toContain('Session ID');
+    expect(out).toContain('sess_timeline_123');
+  });
 });

@@ -103,7 +103,7 @@ export function renderPlainPanel(context: PanelContext): string {
       }
 
       const statusAcc = statusAccent(s.status);
-      const detailLine = `   ${timestamp}  result: ${resultText}   time: ${formatDurationMs(s.durationMs)}   status: ${statusAcc.label}`;
+      const detailLine = `   ${timestamp}  result: ${resultText}   time: ${formatDurationMs(s.durationMs)}   session: ${s.sessionId ?? '—'}   status: ${statusAcc.label}`;
       lines.push(detailLine);
 
       if (i < context.timeline.length - 1) {

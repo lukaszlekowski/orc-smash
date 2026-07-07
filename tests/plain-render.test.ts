@@ -322,3 +322,19 @@ describe('renderPlainPanel — per-step duration', () => {
     expect(out).toContain('time: —');
   });
 });
+
+describe('renderPlainPanel — session ID', () => {
+  it('renders "session: sess_abc" in the timeline detail line', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [makeStep({ version: 1, sessionId: 'sess_abc' })]
+    }));
+    expect(out).toContain('session: sess_abc');
+  });
+
+  it('renders "session: —" when sessionId is missing', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [makeStep({ version: 1 })]
+    }));
+    expect(out).toContain('session: —');
+  });
+});
