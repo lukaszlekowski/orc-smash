@@ -336,6 +336,6 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
       ]
     }));
     expect(out).toContain('Session ID');
-    expect(out).toContain('sess_timeline_123');
+    expect(out).toContain('(...)e_123');
   });
 });
