@@ -331,11 +331,11 @@ describe('renderPlainPanel — session ID', () => {
     expect(out).toContain('session: abc12');
   });
 
-  it('renders "session: (...)12345" truncated if more than 5 chars', () => {
+  it('renders "session: *12345" truncated if more than 5 chars', () => {
     const out = renderPlainPanel(makeContext({
       timeline: [makeStep({ version: 1, sessionId: 'sess_12345' })]
     }));
-    expect(out).toContain('session: (...)12345');
+    expect(out).toContain('session: *12345');
   });
 
   it('renders "session: —" when sessionId is missing', () => {
