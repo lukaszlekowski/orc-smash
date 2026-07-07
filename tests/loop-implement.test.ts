@@ -27,13 +27,23 @@ let mockedSecondOpinionDecision: 'stop' | 'run-second-opinion' | 'implement' = '
 let mockedContinueToReview: 'stop' | 'review' = 'stop';
 let promptRunnersCalls = 0;
 
+let mockedStageActionChoice: string = 'stop';
+
 vi.mock('../src/interactive.js', () => {
   return {
-    promptSecondOpinionDecision: async () => mockedSecondOpinionDecision,
-    promptSecondOpinionRunner: async () => ({ agent: 'fake', model: 'fake-second-model' }),
-    promptContinueToReview: async () => mockedContinueToReview,
+    promptStageAction: async (actions: any[], recommendedId: string) => {
+      const actionIds = actions.map(a => a.id);
+      if (mockedSecondOpinionDecision === 'implement' && actionIds.includes('implement')) {
+        mockedSecondOpinionDecision = 'stop';
+        return 'implement';
+      }
+      if (mockedContinueToReview === 'review' && actionIds.includes('start-new-new-session') && actionIds.includes('run-one-step-followup')) {
+        mockedContinueToReview = 'stop';
+        return 'start-new-new-session';
+      }
+      return actionIds.includes(mockedStageActionChoice) ? mockedStageActionChoice : recommendedId;
+    },
     promptLoopSelect: async () => '',
-    promptStartPoint: async () => '',
     promptRunners: async (skills: string[]) => {
       promptRunnersCalls++;
       const res: any = {};
@@ -160,7 +170,6 @@ describe('Three-stage pipeline loop/implement integration', () => {
       registry: testRegistry,
       output: mockOutput,
       interactive: true,
-      startPoint: 'fresh',
       globalOverrides: { agent: 'fake', model: 'fake-model' }
     });
 
@@ -192,6 +201,7 @@ describe('Three-stage pipeline loop/implement integration', () => {
       globalOverrides: { agent: 'fake', model: 'fake-model' }
     });
 
+    console.log("IMPLEMENT TO REVIEW RESULT:", result);
     expect(result.success).toBe(true);
 
     // Verify review loop produced review-v1 artifact
