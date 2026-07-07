@@ -1,4 +1,3 @@
-import type { Verdict } from './verdict.js';
 import type { Step, StepKind } from './state.js';
 
 export type SessionPolicy = 'new' | 'resumed';
@@ -24,9 +23,7 @@ export type MenuPhase = 'fresh' | 'rejected-no-followup' | 'rejected-followup-do
 export interface LoopMenuState {
   phase: MenuPhase;
   latestAuditVersion: number;
-  latestVerdict: Verdict | null;
   pendingFollowUpVersion: number | null;
-  hasApprovedBoundary: boolean;
   decisionPoint: 'startup' | 'in-loop';
   loopName: string; // display-only
 }
@@ -38,6 +35,8 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
 
   const nextVer = latestAuditVersion + 1;
   const isPlanLoop = loopName === 'plan';
+  const auditTerm = isPlanLoop ? 'audit' : 'review';
+  const followUpTerm = isPlanLoop ? 'follow-up' : 'review-follow-up';
 
   if (phase === 'fresh') {
     recommendedId = 'start-new-new-session';
@@ -47,7 +46,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: 1,
       sessionPolicy: 'new',
-      label: 'START NEW CHAIN — NEW SESSION_ID each following run — next: audit v1 → follow-up v1',
+      label: `START NEW CHAIN — NEW SESSION_ID each following run — next: ${auditTerm} v1 → ${followUpTerm} v1`,
       recommended: true,
     });
     actions.push({
@@ -56,7 +55,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: 1,
       sessionPolicy: 'resumed',
-      label: 'START NEW CHAIN — SAME SESSION_ID each following run — next: audit v1 → follow-up v1',
+      label: `START NEW CHAIN — SAME SESSION_ID each following run — next: ${auditTerm} v1 → ${followUpTerm} v1`,
       recommended: false,
     });
     actions.push({
@@ -66,14 +65,10 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       version: 1,
       sessionPolicy: 'new',
       oneOff: true,
-      label: 'Run audit v1 only — then re-prompt',
+      label: `Run ${auditTerm} v1 only — then re-prompt`,
       recommended: false,
     });
   } else if (phase === 'rejected-no-followup' || phase === 'rejected-followup-done') {
-    // In startup, both share recommended CONTINUE.
-    // In-loop:
-    //   rejected-no-followup -> recommended CONTINUE (follow-up -> audit)
-    //   rejected-followup-done -> recommended CONTINUE (audit -> follow-up)
     recommendedId = 'continue';
 
     actions.push({
@@ -82,7 +77,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: nextVer,
       sessionPolicy: 'new',
-      label: `START NEW CHAIN — NEW SESSION_ID each run — next: audit v${nextVer} → follow-up v${nextVer}`,
+      label: `START NEW CHAIN — NEW SESSION_ID each run — next: ${auditTerm} v${nextVer} → ${followUpTerm} v${nextVer}`,
       recommended: false,
     });
     actions.push({
@@ -91,7 +86,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: nextVer,
       sessionPolicy: 'resumed',
-      label: `START NEW CHAIN — SAME SESSION_ID each run — next: audit v${nextVer} → follow-up v${nextVer}`,
+      label: `START NEW CHAIN — SAME SESSION_ID each run — next: ${auditTerm} v${nextVer} → ${followUpTerm} v${nextVer}`,
       recommended: false,
     });
 
@@ -103,7 +98,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         stage: 'follow-up',
         version: repairVer,
         sessionPolicy: { followUp: 'resumed', audit: 'resumed' },
-        label: `CONTINUE CHAIN — SAME SESSION_ID each run — next: follow-up v${repairVer} → audit v${repairVer + 1}`,
+        label: `CONTINUE CHAIN — SAME SESSION_ID each run — next: ${followUpTerm} v${repairVer} → ${auditTerm} v${repairVer + 1}`,
         recommended: true,
       });
       actions.push({
@@ -113,7 +108,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         version: nextVer,
         sessionPolicy: 'new',
         oneOff: true,
-        label: `Run audit v${nextVer} only — then re-prompt`,
+        label: `Run ${auditTerm} v${nextVer} only — then re-prompt`,
         recommended: false,
       });
       actions.push({
@@ -123,7 +118,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         version: repairVer,
         sessionPolicy: 'new',
         oneOff: true,
-        label: `Run follow-up v${repairVer} only — then re-prompt`,
+        label: `Run ${followUpTerm} v${repairVer} only — then re-prompt`,
         recommended: false,
       });
     } else {
@@ -133,7 +128,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         stage: 'audit',
         version: nextVer,
         sessionPolicy: { followUp: 'resumed', audit: 'resumed' },
-        label: `CONTINUE CHAIN — SAME SESSION_ID each run — next: audit v${nextVer} → follow-up v${nextVer}`,
+        label: `CONTINUE CHAIN — SAME SESSION_ID each run — next: ${auditTerm} v${nextVer} → ${followUpTerm} v${nextVer}`,
         recommended: true,
       });
       actions.push({
@@ -143,7 +138,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         version: nextVer,
         sessionPolicy: 'new',
         oneOff: true,
-        label: `Run audit v${nextVer} only — then re-prompt`,
+        label: `Run ${auditTerm} v${nextVer} only — then re-prompt`,
         recommended: false,
       });
       actions.push({
@@ -153,7 +148,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         version: nextVer,
         sessionPolicy: 'new',
         oneOff: true,
-        label: `Run follow-up v${nextVer} only — then re-prompt`,
+        label: `Run ${followUpTerm} v${nextVer} only — then re-prompt`,
         recommended: false,
       });
     }
@@ -189,7 +184,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: nextVer,
       sessionPolicy: 'new',
-      label: `START NEW CHAIN — NEW SESSION_ID each run — next: audit v${nextVer} (fresh) → follow-up v${nextVer} (fresh)`,
+      label: `START NEW CHAIN — NEW SESSION_ID each run — next: ${auditTerm} v${nextVer} (fresh) → ${followUpTerm} v${nextVer} (fresh)`,
       recommended: recommendedAtStartup,
     });
     actions.push({
@@ -198,18 +193,20 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       stage: 'audit',
       version: nextVer,
       sessionPolicy: 'resumed',
-      label: `START NEW CHAIN — SAME SESSION_ID each run — next: audit v${nextVer} (fresh, locks provider+model) → resume on reject`,
+      label: `START NEW CHAIN — SAME SESSION_ID each run — next: ${auditTerm} v${nextVer} (fresh, locks provider+model) → resume on reject`,
       recommended: false,
     });
-    actions.push({
-      id: 'continue',
-      group: 'continue',
-      stage: 'audit',
-      version: nextVer,
-      sessionPolicy: 'resumed',
-      label: `CONTINUE CHAIN — resume the APPROVAL session — next: audit v${nextVer} in approval session`,
-      recommended: false,
-    });
+    if (isPlanLoop) {
+      actions.push({
+        id: 'continue',
+        group: 'continue',
+        stage: 'audit',
+        version: nextVer,
+        sessionPolicy: 'resumed',
+        label: `CONTINUE CHAIN — resume the APPROVAL session — next: ${auditTerm} v${nextVer} in approval session`,
+        recommended: false,
+      });
+    }
     actions.push({
       id: 'run-one-step-audit',
       group: 'run-one-step',
@@ -217,7 +214,7 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
       version: nextVer,
       sessionPolicy: 'new',
       oneOff: true,
-      label: `Run audit v${nextVer} only — then re-prompt`,
+      label: `Run ${auditTerm} v${nextVer} only — then re-prompt`,
       recommended: false,
     });
   } else if (phase === 'implement-done') {
