@@ -597,6 +597,7 @@ describe('Three-stage pipeline loop/implement integration', () => {
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
     expect(result.message).toMatch(/plan file not found|closeout/i);
+    expect(result.message).toMatch(/harness closeout owns plan status\/change-log updates/i);
 
     const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
     expect(existsSync(implFile)).toBe(true);
