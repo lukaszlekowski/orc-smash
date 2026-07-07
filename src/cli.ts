@@ -39,8 +39,6 @@ export function buildProgram(): Command {
     .option('--debug-spawn', 'Write spawn/process debug logs to docs/dev/spawn-debug.log')
     .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
     .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
-    .option('--audit-continuity', 'Enable audit continuity mode')
-    .option('--codex-audit-continuity', 'Enable Codex audit continuity mode')
     .action(async (options) => {
       const output = options.plain ? createPlainCliOutput() : createPanelCliOutput();
       const result = await smashAction({ ...options, output });

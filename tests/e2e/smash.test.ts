@@ -35,26 +35,24 @@ const runLoop = (
   });
 };
 
-let secondOpinionSelectCalls = 0;
+let promptRunnersCalls = 0;
+let mockStageActionChoices: string[] = [];
 
 vi.mock('../../src/interactive.js', () => {
   return {
-    promptSecondOpinionDecision: async () => {
-      secondOpinionSelectCalls++;
-      if (secondOpinionSelectCalls === 1) {
-        return 'run-second-opinion';
-      }
-      return 'stop';
-    },
-    promptSecondOpinionRunner: async () => {
-      return {
-        agent: 'fake',
-        model: 'fake-second-model'
-      };
+    promptStageAction: async () => {
+      return mockStageActionChoices.shift() ?? 'stop';
     },
     promptLoopSelect: async () => '',
-    promptStartPoint: async () => '',
-    promptRunners: async () => ({}),
+    promptRunners: async (skills: string[]) => {
+      promptRunnersCalls++;
+      const model = promptRunnersCalls === 1 ? 'fake-model' : 'fake-second-model';
+      const res: any = {};
+      for (const s of skills) {
+        res[s] = { agent: 'fake', model };
+      }
+      return res;
+    },
     promptMaxIterations: async () => 5
   };
 });
@@ -63,7 +61,8 @@ describe('Harness Loop E2E (fake adapter)', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-e2e-workspace');
 
   beforeEach(() => {
-    secondOpinionSelectCalls = 0;
+    promptRunnersCalls = 0;
+    mockStageActionChoices = [];
     vi.restoreAllMocks();
     createTempDir('temp-e2e-workspace');
   });
@@ -94,7 +93,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -127,7 +126,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 5,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -171,7 +170,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -197,7 +196,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 2,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -222,7 +221,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     const resultA = await runLoop(projA.root, 'plan', configA.manifest.loops['plan']!, configA, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -230,7 +229,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     fakeAdapterState.verdicts = ['REJECTED', 'APPROVED'];
     const resultB = await runLoop(projB.root, 'plan', configB.manifest.loops['plan']!, configB, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -248,6 +247,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const { root, devDir } = setupTargetProject('project-second-opinion');
     const config = loadConfig(root);
 
+    mockStageActionChoices = ['start-new-new-session', 'run-one-step-audit', 'stop'];
     fakeAdapterState.verdicts = ['APPROVED', 'APPROVED'];
 
     const runners = {
@@ -258,7 +258,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 5,
-      startPoint: 'fresh',
+      
       interactive: true
     });
     expect(result.success).toBe(true);
@@ -291,7 +291,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 5,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -322,7 +322,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
 
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 5,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -364,7 +364,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -393,7 +393,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -420,7 +420,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -450,7 +450,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 
@@ -480,7 +480,7 @@ describe('Harness Loop E2E (fake adapter)', () => {
     const loopSpec = config.manifest.loops['plan']!;
     const result = await runLoop(root, 'plan', loopSpec, config, runners, {
       maxIterations: 3,
-      startPoint: 'fresh',
+      
       interactive: false
     });
 

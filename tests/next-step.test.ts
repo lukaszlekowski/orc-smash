@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveNextStep, allowedStartPoint } from '../src/next-step.js';
+import { resolveNextStep } from '../src/next-step.js';
 
 describe('resolveNextStep (canonical next-step / restart rule)', () => {
   it('fresh: no audits => audit version 1, no follow-up', () => {
@@ -57,27 +57,5 @@ describe('resolveNextStep (canonical next-step / restart rule)', () => {
     expect(d.followUpVersion).toBeNull();
     expect(d.nextAuditVersion).toBe(6);
     expect(d.priorAuditPath).toBe('/proj/docs/dev/plan-audit-v5-opencode.md');
-  });
-});
-
-describe('allowedStartPoint (verdict -> start-point mapping)', () => {
-  it('maps fresh -> fresh', () => {
-    const d = resolveNextStep({ latestVerdict: null, latestVersion: 0, hasAudits: false, latestAuditPath: null });
-    expect(allowedStartPoint(d)).toBe('fresh');
-  });
-
-  it('maps rejected -> resume', () => {
-    const d = resolveNextStep({ latestVerdict: 'REJECTED', latestVersion: 1, hasAudits: true, latestAuditPath: '/a.md' });
-    expect(allowedStartPoint(d)).toBe('resume');
-  });
-
-  it('maps approved -> new-round', () => {
-    const d = resolveNextStep({ latestVerdict: 'APPROVED', latestVersion: 1, hasAudits: true, latestAuditPath: '/a.md' });
-    expect(allowedStartPoint(d)).toBe('new-round');
-  });
-
-  it('maps unknown-latest-audit -> null (terminal, no start point)', () => {
-    const d = resolveNextStep({ latestVerdict: 'unknown', latestVersion: 1, hasAudits: true, latestAuditPath: '/a.md' });
-    expect(allowedStartPoint(d)).toBeNull();
   });
 });
