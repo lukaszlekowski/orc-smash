@@ -16,6 +16,17 @@ export function formatDurationMs(ms: number | undefined | null): string {
   return `${totalSecs}s`;
 }
 
+/**
+ * Format a session ID to keep it compact: showing only the last 5 characters
+ * prefixed by `(...)`. Returns `—` if missing or `'none'`.
+ */
+export function formatSessionId(sessionId?: string | null): string {
+  if (!sessionId || sessionId === 'none') {
+    return '—';
+  }
+  return sessionId.length > 5 ? `(...)${sessionId.slice(-5)}` : sessionId;
+}
+
 export interface PanelContext {
   projectRoot: string;
   loopName: string;

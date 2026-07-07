@@ -324,11 +324,18 @@ describe('renderPlainPanel — per-step duration', () => {
 });
 
 describe('renderPlainPanel — session ID', () => {
-  it('renders "session: sess_abc" in the timeline detail line', () => {
+  it('renders "session: abc12" unmodified if 5 chars or less', () => {
     const out = renderPlainPanel(makeContext({
-      timeline: [makeStep({ version: 1, sessionId: 'sess_abc' })]
+      timeline: [makeStep({ version: 1, sessionId: 'abc12' })]
     }));
-    expect(out).toContain('session: sess_abc');
+    expect(out).toContain('session: abc12');
+  });
+
+  it('renders "session: (...)12345" truncated if more than 5 chars', () => {
+    const out = renderPlainPanel(makeContext({
+      timeline: [makeStep({ version: 1, sessionId: 'sess_12345' })]
+    }));
+    expect(out).toContain('session: (...)12345');
   });
 
   it('renders "session: —" when sessionId is missing', () => {
