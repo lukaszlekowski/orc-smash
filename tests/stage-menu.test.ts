@@ -65,9 +65,7 @@ describe('stage-menu: buildStageActions recommended-parity', () => {
       const fullState: LoopMenuState = {
         phase: 'fresh',
         latestAuditVersion: 0,
-        latestVerdict: null,
         pendingFollowUpVersion: null,
-        hasApprovedBoundary: false,
         decisionPoint: 'startup',
         loopName: 'plan',
         ...tc.state
@@ -182,6 +180,30 @@ describe('stage-menu: findResumableSession backward walk logic', () => {
 
     const resFollowUp = findResumableSession(steps, ['follow-up'], 'codex', 'gpt-5');
     expect(resFollowUp?.sessionId).toBe('sess_f1');
+  });
+
+  it('review loop approved state is terminal and has review-specific labels', () => {
+    const freshState: LoopMenuState = {
+      phase: 'fresh',
+      latestAuditVersion: 0,
+      pendingFollowUpVersion: null,
+      decisionPoint: 'startup',
+      loopName: 'review'
+    };
+    const freshRes = buildStageActions(freshState);
+    const hasReviewTerms = freshRes.actions.every(a => a.label.toLowerCase().includes('review') && !a.label.toLowerCase().includes('audit'));
+    expect(hasReviewTerms).toBe(true);
+
+    const approvedState: LoopMenuState = {
+      phase: 'approved',
+      latestAuditVersion: 1,
+      pendingFollowUpVersion: null,
+      decisionPoint: 'in-loop',
+      loopName: 'review'
+    };
+    const approvedRes = buildStageActions(approvedState);
+    const hasContinue = approvedRes.actions.some(a => a.id === 'continue');
+    expect(hasContinue).toBe(false);
   });
 });
 

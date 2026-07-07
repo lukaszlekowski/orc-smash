@@ -16,14 +16,13 @@ import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
-import { resolveRunner } from './runner.js';
+import { resolveRunner, isValidModelForAgent } from './runner.js';
 import { isCompleteImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { debugLoopSpawn } from './debug-spawn.js';
 import { quarantineArtifact, quarantineInterruptedResume, setStepCtx } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
 import { buildStageActions, findResumableSession, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
-import type { Verdict } from './verdict.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -262,7 +261,6 @@ export async function runLoop(
     let phase: MenuPhase = 'fresh';
     let latestAuditVersionVal = 0;
     let pendingFollowUpVersionVal: number | null = null;
-    let latestVerdictVal: Verdict | null = null;
 
     if (overridePhase) {
       phase = overridePhase;
@@ -298,7 +296,6 @@ export async function runLoop(
       });
 
       latestAuditVersionVal = stateScan.latestVersion;
-      latestVerdictVal = stateScan.latestVerdict;
 
       if (decision.state === 'fresh') {
         phase = 'fresh';
@@ -323,9 +320,7 @@ export async function runLoop(
     const menuState: LoopMenuState = {
       phase,
       latestAuditVersion: latestAuditVersionVal,
-      latestVerdict: latestVerdictVal,
       pendingFollowUpVersion: pendingFollowUpVersionVal,
-      hasApprovedBoundary: false,
       decisionPoint,
       loopName
     };
@@ -341,15 +336,53 @@ export async function runLoop(
           (act.sessionPolicy.audit === 'resumed' || act.sessionPolicy.followUp === 'resumed'))
       ) {
         const skillId = act.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
-        const runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+
+        const kindsToFind: StepKind[] = act.stage === 'follow-up' ? ['follow-up'] : ['audit'];
+        const stopAtApproved = act.id !== 'continue' || phase !== 'approved';
+
+        const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
+
+        if (allowAnyAgent) {
+          let lastSessionStep: Step | null = null;
+          for (let i = steps.length - 1; i >= 0; i--) {
+            const s = steps[i]!;
+            if (s.kind === 'audit' && s.verdict === 'APPROVED' && stopAtApproved) {
+              break;
+            }
+            if (kindsToFind.includes(s.kind) && s.sessionId && s.sessionId !== 'none') {
+              lastSessionStep = s;
+              break;
+            }
+          }
+
+          if (lastSessionStep) {
+            const provider = lastSessionStep.agent;
+            const model = lastSessionStep.model;
+            if (!config.registry.providers[provider]) {
+              act.disabledReason = `inherited provider ${provider} is not configured`;
+              continue;
+            }
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (!resolvedModel) {
+              act.disabledReason = `inherited model ${model} is not configured`;
+              continue;
+            }
+            runner = { agent: provider, model: resolvedModel };
+          }
+        }
 
         if (!deriveContinuity(runner.agent)) {
           act.disabledReason = `agent ${runner.agent} does not support session resume`;
           continue;
         }
 
-        const kindsToFind: StepKind[] = act.stage === 'follow-up' ? ['follow-up'] : ['audit'];
-        const stopAtApproved = act.id !== 'continue' || phase !== 'approved';
         const walkSession = findResumableSession(steps, kindsToFind, runner.agent, runner.model, { stopAtApproved });
 
         if (walkSession) {
@@ -486,7 +519,7 @@ export async function runLoop(
       1
     );
 
-    const { result, durationMs } = runResult!;
+    const { result, durationMs } = runResult;
 
     if (stepFailed(result, false)) {
       if (result.error?.kind === 'auth') {
@@ -709,6 +742,36 @@ export async function runLoop(
       if (!followUpSkill) {
         throw new Error(`Follow-up skill '${followUpSkillId}' not found in manifest`);
       }
+      let followUpPolicy: SessionPolicy = 'new';
+      if (pendingAction) {
+        if (typeof pendingAction.sessionPolicy === 'object') {
+          followUpPolicy = pendingAction.sessionPolicy.followUp;
+        } else {
+          followUpPolicy = pendingAction.sessionPolicy;
+        }
+      }
+
+      if (followUpPolicy === 'resumed') {
+        const provider = pendingAction?.provider;
+        const model = pendingAction?.model;
+        if (provider && model) {
+          if (!config.registry.providers[provider]) {
+            throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
+          }
+          const allowedModels = config.registry.providers[provider] || [];
+          let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+          if (!resolvedModel) {
+            if (isValidModelForAgent(provider, model, config.registry)) {
+              resolvedModel = model;
+            }
+          }
+          if (!resolvedModel) {
+            throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+          }
+          runners[followUpSkillId] = { agent: provider, model: resolvedModel };
+        }
+      }
+
       const runner = runners[followUpSkillId];
       if (!runner) {
         throw new Error(`No runner resolved for follow-up skill '${followUpSkillId}'`);
@@ -724,15 +787,6 @@ export async function runLoop(
       const prompt = preparePrompt(followUpSkillId, followUpSkill, followUpVersion, runner, 'follow-up');
 
       let followUpContinuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
-      let followUpPolicy: SessionPolicy = 'new';
-      if (pendingAction) {
-        if (typeof pendingAction.sessionPolicy === 'object') {
-          followUpPolicy = pendingAction.sessionPolicy.followUp;
-        } else {
-          followUpPolicy = pendingAction.sessionPolicy;
-        }
-      }
-
       if (deriveContinuity(runner.agent)) {
         if (followUpPolicy === 'resumed') {
           const walkSession = findResumableSession(steps, ['follow-up'], runner.agent, runner.model, { stopAtApproved: true });
@@ -769,7 +823,7 @@ export async function runLoop(
         return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
       }
 
-      const { result, durationMs } = runResult!;
+      const { result, durationMs } = runResult;
 
       // Thread ID mismatch check
       if (followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity.sessionId) {
@@ -832,6 +886,51 @@ export async function runLoop(
         message: `Follow-up completed successfully`
       });
       pendingFollowUp = false;
+
+      if (pendingAction?.oneOff && pendingAction.stage === 'follow-up') {
+        pendingAction = null;
+        const nextAction = await chooseAction('in-loop');
+        if (options.interactive && (nextAction.id.startsWith('start-new') || nextAction.id.startsWith('run-one-step'))) {
+          const skillId = nextAction.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
+          const prompted = await promptRunners([skillId], config, options.registry, options.globalOverrides);
+          if (prompted[skillId]) {
+            runners[skillId] = prompted[skillId];
+          }
+        }
+        if (nextAction.id === 'stop') {
+          const latestAudit = latestAuditStep();
+          const relPath = latestAudit?.artifactPath ? relative(projectRoot, latestAudit.artifactPath) : 'none';
+          return emitFinalSummary(latestAudit?.verdict === 'APPROVED', latestAudit?.verdict || null, `awaiting your review: ${relPath}`, latestAudit?.artifactPath ?? null);
+        } else if (nextAction.id === 'implement') {
+          const implementLoopSpec = config.manifest.loops['implement'];
+          if (!implementLoopSpec) {
+            throw new Error("Loop 'implement' not found in manifest");
+          }
+          const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
+          const implementRunners: Record<string, Runner> = {};
+          if (options.interactive) {
+            const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides);
+            Object.assign(implementRunners, prompted);
+          } else {
+            const skill = config.manifest.skills[implementLoopSpec.implement!];
+            implementRunners[implementLoopSpec.implement!] = {
+              agent: skill.agent,
+              model: skill.model
+            };
+          }
+          return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+        } else {
+          pendingAction = nextAction;
+          if (nextAction.stage === 'follow-up') {
+            N = nextAction.version + 1;
+            pendingFollowUp = true;
+          } else {
+            N = nextAction.version;
+            pendingFollowUp = false;
+          }
+          continue;
+        }
+      }
     }
 
     // --- Step B: Audit ---
@@ -840,6 +939,36 @@ export async function runLoop(
     if (!auditSkill) {
       throw new Error(`Audit skill '${auditSkillId}' not found in manifest`);
     }
+    let auditPolicy: SessionPolicy = 'new';
+    if (pendingAction) {
+      if (typeof pendingAction.sessionPolicy === 'object') {
+        auditPolicy = pendingAction.sessionPolicy.audit;
+      } else {
+        auditPolicy = pendingAction.sessionPolicy;
+      }
+    }
+
+    if (auditPolicy === 'resumed') {
+      const provider = pendingAction?.provider;
+      const model = pendingAction?.model;
+      if (provider && model) {
+        if (!config.registry.providers[provider]) {
+          throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
+        }
+        const allowedModels = config.registry.providers[provider] || [];
+        let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+        if (!resolvedModel) {
+          if (isValidModelForAgent(provider, model, config.registry)) {
+            resolvedModel = model;
+          }
+        }
+        if (!resolvedModel) {
+          throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+        }
+        runners[auditSkillId] = { agent: provider, model: resolvedModel };
+      }
+    }
+
     const runner = runners[auditSkillId];
     if (!runner) {
       throw new Error(`No runner resolved for audit skill '${auditSkillId}'`);
@@ -852,15 +981,6 @@ export async function runLoop(
     );
 
     let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
-
-    let auditPolicy: SessionPolicy = 'new';
-    if (pendingAction) {
-      if (typeof pendingAction.sessionPolicy === 'object') {
-        auditPolicy = pendingAction.sessionPolicy.audit;
-      } else {
-        auditPolicy = pendingAction.sessionPolicy;
-      }
-    }
 
     if (deriveContinuity(runner.agent)) {
       if (auditPolicy === 'resumed') {
@@ -902,7 +1022,7 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
     }
 
-    const { result, durationMs } = runResult!;
+    const { result, durationMs } = runResult;
 
     // Thread ID mismatch check
     if (continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity.sessionId) {

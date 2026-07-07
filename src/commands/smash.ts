@@ -5,7 +5,6 @@ import { runLoop } from '../loop.js';
 import { validateAgentAndModel, normalizeModelForAgent } from '../runner.js';
 import {
   promptLoopSelect,
-  promptRunners,
   promptMaxIterations
 } from '../interactive.js';
 import { deriveContinuity } from '../stage-menu.js';
@@ -98,6 +97,7 @@ async function resolveSmashRunSetup(
 
   const loopSpec = config.manifest.loops[loopName]!;
 
+  // Defensive check for obsolete options passed programmatically (e.g. in tests)
   if (options.auditContinuity || options.codexAuditContinuity) {
     const msg = `Error: unknown option ${options.auditContinuity ? '--audit-continuity' : '--codex-audit-continuity'}`;
     options.output.error(msg);
@@ -152,35 +152,30 @@ async function resolveSmashRunSetup(
     }
   }
 
-  if (isInteractive) {
-    const promptedRunners = await promptRunners(loopSkills, config, registry, globalOverrides);
-    Object.assign(runners, promptedRunners);
-  } else {
-    for (const skillId of loopSkills) {
-      const skill = config.manifest.skills[skillId];
-      if (!skill) continue;
+  for (const skillId of loopSkills) {
+    const skill = config.manifest.skills[skillId];
+    if (!skill) continue;
 
-      let resolvedAgent = skill.agent;
-      let resolvedModel = skill.model;
+    let resolvedAgent = skill.agent;
+    let resolvedModel = skill.model;
 
-      if (globalOverrides.agent) {
-        resolvedAgent = globalOverrides.agent;
-        resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
-      }
-
-      try {
-        validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
-      } catch (err: any) {
-        const msg = `Error: ${err.message}`;
-        options.output.error(msg);
-        return { errorResult: { exitCode: 1, message: msg } };
-      }
-
-      runners[skillId] = {
-        agent: resolvedAgent,
-        model: normalizeModelForAgent(resolvedAgent, resolvedModel)
-      };
+    if (globalOverrides.agent) {
+      resolvedAgent = globalOverrides.agent;
+      resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
     }
+
+    try {
+      validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
+    } catch (err: any) {
+      const msg = `Error: ${err.message}`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+
+    runners[skillId] = {
+      agent: resolvedAgent,
+      model: normalizeModelForAgent(resolvedAgent, resolvedModel)
+    };
   }
 
   // 5. Max iterations
