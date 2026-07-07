@@ -583,14 +583,17 @@ export async function runLoop(
       signal: closeoutSignal
     });
     if (!closeoutOutcome.ok) {
+      const closeoutError = closeoutOutcome.error.includes('plan file not found')
+        ? `${closeoutOutcome.error}. The implement agent may have removed docs/dev/plan.md during the run; harness closeout owns plan status/change-log updates and expects that file to remain in place.`
+        : closeoutOutcome.error;
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,
         version: nextVersion,
-        message: `Implementation failed: plan closeout error: ${closeoutOutcome.error}`,
+        message: `Implementation failed: plan closeout error: ${closeoutError}`,
         errorKind: 'closeout_failed'
       });
-      return emitFinalSummary(false, 'unknown', `Plan closeout failed: ${closeoutOutcome.error}`, null);
+      return emitFinalSummary(false, 'unknown', `Plan closeout failed: ${closeoutError}`, null);
     }
 
     if (closeoutOutcome.status === 'blocked') {
@@ -769,6 +772,18 @@ export async function runLoop(
             throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
           }
           runners[followUpSkillId] = { agent: provider, model: resolvedModel };
+        }
+      }
+
+      if (
+        options.interactive &&
+        pendingAction?.id === 'continue' &&
+        runners[followUpSkillId] &&
+        findResumableSession(steps, ['follow-up'], runners[followUpSkillId].agent, runners[followUpSkillId].model, { stopAtApproved: true }) === null
+      ) {
+        const prompted = await promptRunners([followUpSkillId], config, options.registry, options.globalOverrides);
+        if (prompted[followUpSkillId]) {
+          runners[followUpSkillId] = prompted[followUpSkillId];
         }
       }
 

@@ -29,7 +29,9 @@ itself.
 ## 2. Runners are per-skill; four real adapters behind one seam
 
 - Each skill declares its own default `agent`/`model`; the operator can override any skill's
-  runner per run. Different skills in one loop may run on different CLIs/models.
+  runner per run. Different skills in one loop may run on different CLIs/models. On a `CONTINUE`
+  action, in interactive mode, if no prior follow-up session exists to inherit, the follow-up
+  runner is prompted lazily at execution time.
 - **All four providers — `opencode`, `codex`, `claude`, `agy` (Antigravity) — are real runnable
   adapters** (no stubs); `fake` is a deterministic no-spawn adapter for tests.
 - Agent and model are a **coupled pair** (each CLI has its own model-id namespace). Runner

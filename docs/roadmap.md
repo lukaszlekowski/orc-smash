@@ -19,6 +19,10 @@ Current pending work, grouped into recommended implementation batches.
 - [ ] **14 — docs canonicalization + broken plan reference fix**
 - [ ] **37 — Escalation stage after repeated rejected audits/reviews**
 
+**Batch 8 — Unified Action Menu follow-up**
+
+- [ ] **Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind**
+
 ## Detailed checklist
 
 Open work is listed below.
@@ -36,6 +40,13 @@ Open work is listed below.
 > - **#14** is **worse than stated**: the same cleanup commit left **live broken
 >   links** to the now-deleted `docs/dev/plan.md` in `README.md:72,103` and
 >   `AGENTS.md:15,115`. Consider doing this sooner than "last."
+> - **Post-verification update (2026-07-07):** the unified-action-menu feature
+>   shipped after the 2026-07-02 pass. It **removed `promptSecondOpinionDecision`**
+>   (so #8's "stop vs second-opinion" note is obsolete — the menu's
+>   `promptStageAction` is the current prompt to mirror) and `docs/dev/plan.md`
+>   was **re-created** (so #14's "deleted / live broken links" framing no longer
+>   applies — the links resolve, but the link *text* is now stale). #33/#35/#36
+>   are unaffected and remain open; #37 is unaffected.
 
 ## Architecture assumptions and implementation goal
 
@@ -107,7 +118,7 @@ guess was too low.
 **Findings so far:**
 
 - **It is a hard stop today.** `src/loop.ts` falls out of the `while (iteration < options.maxIterations)` loop and returns `hit max-iterations, awaiting human` in both interactive and non-interactive modes.
-- **A similar prompt already exists** at the other decision point: on `APPROVED`, interactive mode already asks stop vs second-opinion. `promptMaxIterations` also already asks for the count up-front, so this change mirrors existing interaction patterns.
+- **A similar prompt already exists** at the other decision point: since the unified action menu shipped, interactive mode at `APPROVED` (and every decision point) uses `promptStageAction` (`src/interactive.ts`). `promptMaxIterations` also already asks for the count up-front, so this change mirrors existing interaction patterns. _(The earlier stop-vs-second-opinion prompt, `promptSecondOpinionDecision`, was removed by the menu work — mirror `promptStageAction`, not it.)_
 - **Extending is mechanically cheap.** `maxIterations` lives on `LoopOptions`, so extending is a local control-flow change rather than a state-model rewrite.
 - **Must be interactive-only.** CI and `--loop` runs should keep the current exit behavior.
 
@@ -183,7 +194,7 @@ Goal: make the architecture documentation internally consistent, reduce duplicat
 
 > Current observation: architecture guidance is split across multiple documents, and some references still point at `docs/dev/plan.md` even though that file is no longer a stable canonical target.
 
-> **Verification (2026-07-02): worse than "stale."** `docs/dev/plan.md` was deleted by the "Clean roadmap and remove stale plan doc" commit, leaving **live broken links** in `README.md:72,103` and `AGENTS.md:15,115` (the canonical target `docs/architecture/overview.md` does exist). Recommend pulling this item forward rather than doing it last.
+> **Verification (2026-07-02; updated 2026-07-07):** `docs/dev/plan.md` was later **re-created** (it now holds the Batches 5–7 follow-up plan), so the `README.md` (:74,:105) and `AGENTS.md` (:15,:116) links **resolve again** — they are no longer broken. The remaining issue is that the link *text* is stale (calls plan.md the "current implementation plan" / "design source of truth") while the file's own header says "deferred." The canonicalization goal stands; the "broken links" framing no longer applies, and the line numbers have drifted.
 
 **Focus:**
 
@@ -212,3 +223,31 @@ Goal: prevent blind retry loops after repeated rejected audits or reviews by add
 - Keep the feature compatible with manifest-as-data, including loop/stage declaration, artifact naming, and timeline rendering.
 
 **Effort:** M.
+
+---
+
+## Batch 8 notes
+
+Follow-ups to the **shipped** unified-action-menu feature (commits `b2a0f01` + `334b9ff`). These are gaps in already-shipped behavior, not new roadmap capability, so they are tracked separately from Batches 5–7 to keep those batches scoped to their themes.
+
+## Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind
+
+Goal: when a user picks CONTINUE, the runner for each step should be inherited from a prior session of that step kind — and when no such session exists (e.g. the first follow-up of a chain), the harness should not silently substitute the skill's manifest-default model.
+
+> Current observation: auditing with one model (e.g. `codex/gpt-5.5`) and then selecting CONTINUE on the rejected audit spawns the follow-up on `opencode/opencode-go/deepseek-v4-flash` — the `plan-follow-up` skill's manifest default (`skills.yaml:18-19`, also the global registry default) — with no prompt. The user did not select it and has no chance to.
+
+**Findings so far:**
+
+- **CONTINUE does not prompt** — by design it inherits provider+model and offers no picker (`src/loop.ts` `chooseAction` + the START NEW / RUN ONE STEP branches are the only ones that call `promptRunners`).
+- **Inheritance is per-step-kind** (unified-action-menu plan invariant 2): the follow-up runner is resolved from prior *follow-up* steps, the audit runner from prior *audit* steps. The audit's model is intentionally not inherited by the follow-up.
+- **On the first follow-up there is no prior follow-up session**, so the inheritance walk (`findResumableSession`) returns nothing. Resolution then falls back to the runner `smash.ts` resolved non-interactively — the skill's manifest default.
+- **The plan's Fallbacks cover the *session*, not the *runner*.** "resumed requested but no prior session → warn + fall back to fresh" governs the session (a fresh run, with a warning). It says nothing about the runner/model, which is silently defaulted. This is the gap.
+- **Related:** unified-action-menu review v1 Major-3 (single ownership of runner resolution) and review v2 Minor-B (duplicated backward-walk for CONTINUE runner resolution). This is a distinct edge case in the same area.
+
+**Fix:**
+
+- When CONTINUE is chosen and `findResumableSession` returns null for that step kind, **prompt for the runner** (`promptRunners`) instead of silently substituting the manifest default. Keep the warn-and-fresh behavior for the session.
+- Alternatively, inherit the audit's model for the first follow-up when no follow-up session exists — but that breaks the per-step-kind invariant, so prompting is preferred.
+- Add a loop test: CONTINUE on the first follow-up (no prior follow-up session) prompts for the follow-up runner rather than silently using the manifest default.
+
+**Effort:** S.

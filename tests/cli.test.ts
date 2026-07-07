@@ -4,6 +4,10 @@ import { buildProgram } from '../src/cli.js';
 describe('CLI Commander Option Parsing', () => {
   it('rejects --audit-continuity as an unknown option', () => {
     const program = buildProgram();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {}
+    });
     program.exitOverride();
 
     expect(() => {
@@ -20,6 +24,10 @@ describe('CLI Commander Option Parsing', () => {
 
   it('rejects --codex-audit-continuity as an unknown option', () => {
     const program = buildProgram();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {}
+    });
     program.exitOverride();
 
     expect(() => {
