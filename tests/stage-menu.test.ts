@@ -205,6 +205,22 @@ describe('stage-menu: findResumableSession backward walk logic', () => {
     const hasContinue = approvedRes.actions.some(a => a.id === 'continue');
     expect(hasContinue).toBe(false);
   });
+
+  it('approved phase continue action has correct label and sessionPolicy', () => {
+    const fullState: LoopMenuState = {
+      phase: 'approved',
+      latestAuditVersion: 4,
+      pendingFollowUpVersion: null,
+      decisionPoint: 'in-loop',
+      loopName: 'plan'
+    };
+    const { actions } = buildStageActions(fullState);
+    const continueAction = actions.find(a => a.id === 'continue');
+    expect(continueAction).toBeDefined();
+    expect(continueAction?.sessionPolicy).toEqual({ followUp: 'resumed', audit: 'resumed' });
+    expect(continueAction?.label).toContain('CONTINUE CHAIN — resume the APPROVAL session');
+    expect(continueAction?.label).toContain('audit v5 → follow-up v5');
+  });
 });
 
 describe('stage-menu: deriveContinuity', () => {

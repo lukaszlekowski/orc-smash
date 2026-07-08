@@ -30,6 +30,7 @@ export interface LoopOptions {
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
+  seedResolved?: Set<string>;
 }
 
 type Runner = { agent: string; model: string };
@@ -52,6 +53,16 @@ export async function runLoop(
   quarantineInterruptedResume(projectRoot, config.manifest.loops);
 
   const steps: Step[] = [];
+  const upfrontResolved = new Set<string>();
+  const upfrontPolicies = new Map<string, SessionPolicy>();
+  let isFirstAction = true;
+  let lastActionGroup: string | null = null;
+
+  if (options.seedResolved) {
+    for (const s of options.seedResolved) {
+      upfrontResolved.add(s);
+    }
+  }
 
   const priorAuditRel = (root: string, p: string | null | undefined): string =>
     p ? (p.startsWith(root) ? relative(root, p) : p) : 'none';
@@ -255,7 +266,7 @@ export async function runLoop(
   const completionMessage = (result: RunResult): string =>
     `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
 
-  const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase): Promise<StageAction> => {
+  const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase): Promise<{ action: StageAction; phase: MenuPhase }> => {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
 
     let phase: MenuPhase = 'fresh';
@@ -278,13 +289,16 @@ export async function runLoop(
         phase = 'implement-done';
       } else {
         return {
-          id: 'implement',
-          group: 'continue',
-          stage: 'implement',
-          version: implFacts.nextVersion,
-          sessionPolicy: 'new',
-          label: 'Implement the approved plan',
-          recommended: true
+          action: {
+            id: 'implement',
+            group: 'continue',
+            stage: 'implement',
+            version: implFacts.nextVersion,
+            sessionPolicy: 'new',
+            label: 'Implement the approved plan',
+            recommended: true
+          },
+          phase: 'fresh'
         };
       }
     } else {
@@ -327,6 +341,14 @@ export async function runLoop(
 
     const { actions, recommendedId } = buildStageActions(menuState);
 
+    let targetLoopSpec = loopSpec;
+    if (phase === 'implement-done') {
+      const reviewSpec = config.manifest.loops['review'];
+      if (reviewSpec) {
+        targetLoopSpec = reviewSpec;
+      }
+    }
+
     // Resolve sessions and check agent support for continuity
     for (const act of actions) {
       if (
@@ -335,7 +357,7 @@ export async function runLoop(
         (typeof act.sessionPolicy === 'object' &&
           (act.sessionPolicy.audit === 'resumed' || act.sessionPolicy.followUp === 'resumed'))
       ) {
-        const skillId = act.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
+        const skillId = act.stage === 'follow-up' ? targetLoopSpec['follow-up']! : targetLoopSpec.audit!;
         let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
 
         const kindsToFind: StepKind[] = act.stage === 'follow-up' ? ['follow-up'] : ['audit'];
@@ -399,12 +421,156 @@ export async function runLoop(
       if (!chosen) {
         throw new Error(`Chosen action ID ${chosenId} not found`);
       }
-      return chosen;
+      return { action: chosen, phase };
     } else {
       const recommended = actions.find(a => a.id === recommendedId);
       if (!recommended) throw new Error(`Recommended action ID ${recommendedId} not found`);
-      return recommended;
+      return { action: recommended, phase };
     }
+  };
+
+  const resolveUpfrontRunners = async (
+    chosenAction: StageAction,
+    phase: MenuPhase,
+    loopSpec: LoopSpec
+  ): Promise<void> => {
+    const isNewSegment = lastActionGroup === null || lastActionGroup === 'run-one-step';
+
+    if (chosenAction.group === 'start-new' || chosenAction.group === 'run-one-step') {
+      upfrontResolved.clear();
+      upfrontPolicies.clear();
+      if (isFirstAction && options.seedResolved) {
+        for (const s of options.seedResolved) {
+          upfrontResolved.add(s);
+        }
+      }
+    }
+
+    let targetLoopSpec = loopSpec;
+    if (phase === 'implement-done') {
+      const reviewSpec = config.manifest.loops['review'];
+      if (!reviewSpec) {
+        throw new Error("Loop 'review' not found in manifest");
+      }
+      targetLoopSpec = reviewSpec;
+    }
+
+    const auditSkillId = targetLoopSpec.audit;
+    const followUpSkillId = targetLoopSpec['follow-up'];
+
+    let skillsToResolve: string[] = [];
+
+    if (chosenAction.id === 'stop' || chosenAction.id === 'implement') {
+      skillsToResolve = [];
+    } else if (chosenAction.group === 'run-one-step') {
+      const skillId = chosenAction.stage === 'follow-up' ? followUpSkillId : auditSkillId;
+      if (skillId) {
+        skillsToResolve = [skillId];
+      }
+    } else if (chosenAction.group === 'start-new') {
+      skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+    } else if (chosenAction.group === 'continue') {
+      if (phase === 'rejected-no-followup') {
+        skillsToResolve = [followUpSkillId, auditSkillId].filter((s): s is string => !!s);
+      } else if (phase === 'rejected-followup-done') {
+        skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+      } else if (phase === 'approved') {
+        skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+      } else {
+        const firstSkill = chosenAction.stage === 'follow-up' ? followUpSkillId : auditSkillId;
+        const secondSkill = chosenAction.stage === 'follow-up' ? auditSkillId : followUpSkillId;
+        skillsToResolve = [firstSkill, secondSkill].filter((s): s is string => !!s);
+      }
+    }
+
+    const getPolicyForSkill = (skillId: string): SessionPolicy => {
+      const isFollowUp = skillId === followUpSkillId;
+      const policy = chosenAction.sessionPolicy;
+      if (typeof policy === 'object') {
+        return isFollowUp ? policy.followUp : policy.audit;
+      }
+      return policy;
+    };
+
+    const targetLabels = targetLoopSpec === loopSpec ? labels : resolveLoopLabels(targetLoopSpec, config.manifest);
+    const skillsToPrompt: string[] = [];
+
+    for (const skillId of skillsToResolve) {
+      const policy = getPolicyForSkill(skillId);
+      if (isNewSegment || !upfrontPolicies.has(skillId)) {
+        upfrontPolicies.set(skillId, policy);
+      }
+
+      if (upfrontResolved.has(skillId)) {
+        continue;
+      }
+      const kind: StepKind = skillId === followUpSkillId ? 'follow-up' : 'audit';
+      let inherited = false;
+
+      if (policy === 'resumed') {
+        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+        const stopAtApproved = chosenAction.id !== 'continue' || phase !== 'approved';
+
+        const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
+        if (allowAnyAgent) {
+          let lastSessionStep: Step | null = null;
+          for (let i = steps.length - 1; i >= 0; i--) {
+            const s = steps[i]!;
+            if (s.kind === 'audit' && s.verdict === 'APPROVED' && stopAtApproved) {
+              break;
+            }
+            if (s.kind === kind && s.sessionId && s.sessionId !== 'none') {
+              lastSessionStep = s;
+              break;
+            }
+          }
+
+          if (lastSessionStep) {
+            const provider = lastSessionStep.agent;
+            const model = lastSessionStep.model;
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (resolvedModel) {
+              runner = { agent: provider, model: resolvedModel };
+            }
+          }
+        }
+
+        if (deriveContinuity(runner.agent)) {
+          const walkSession = findResumableSession(steps, [kind], runner.agent, runner.model, { stopAtApproved });
+          if (walkSession) {
+            runners[skillId] = { agent: walkSession.provider, model: walkSession.model };
+            const labelKey = kind === 'follow-up' ? 'followUp' : 'audit';
+            options.output.note(`Inherited runner for ${targetLabels[labelKey]?.skillId ?? skillId}: ${walkSession.provider} (${walkSession.model}) session ${walkSession.sessionId}`);
+            upfrontResolved.add(skillId);
+            inherited = true;
+          }
+        }
+      }
+
+      if (!inherited) {
+        skillsToPrompt.push(skillId);
+        if (policy === 'resumed') {
+          upfrontPolicies.set(skillId, 'new');
+        }
+      }
+    }
+
+    if (skillsToPrompt.length > 0) {
+      const prompted = await promptRunners(skillsToPrompt, config, options.registry, options.globalOverrides);
+      for (const skillId of skillsToPrompt) {
+        if (prompted[skillId]) {
+          runners[skillId] = prompted[skillId];
+          upfrontResolved.add(skillId);
+        }
+      }
+    }
+    lastActionGroup = chosenAction.group;
   };
 
   const preparePrompt = (skillId: string, skill: SkillSpec, version: number, runner: Runner, kind: StepKind): string => {
@@ -644,7 +810,7 @@ export async function runLoop(
     const summary = emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
 
     if (options.interactive) {
-      const chosenAction = await chooseAction('in-loop', 'implement-done');
+      const { action: chosenAction, phase: chosenPhase } = await chooseAction('in-loop', 'implement-done');
       if (chosenAction.id === 'stop') {
         return summary;
       } else {
@@ -652,11 +818,29 @@ export async function runLoop(
         if (!reviewLoopSpec) {
           throw new Error("Loop 'review' not found in manifest");
         }
-        const reviewSkills = [reviewLoopSpec.audit, reviewLoopSpec['follow-up']].filter((s): s is string => !!s);
+        
+        await resolveUpfrontRunners(chosenAction, chosenPhase, loopSpec);
+
         const reviewRunners: Record<string, Runner> = {};
-        const prompted = await promptRunners(reviewSkills, config, options.registry, options.globalOverrides);
-        Object.assign(reviewRunners, prompted);
-        return runLoop(projectRoot, 'review', reviewLoopSpec, config, reviewRunners, options);
+        if (reviewLoopSpec.audit && runners[reviewLoopSpec.audit]) {
+          reviewRunners[reviewLoopSpec.audit] = runners[reviewLoopSpec.audit];
+        }
+        if (reviewLoopSpec['follow-up'] && runners[reviewLoopSpec['follow-up']]) {
+          reviewRunners[reviewLoopSpec['follow-up']] = runners[reviewLoopSpec['follow-up']];
+        }
+
+        const seedResolved = new Set<string>();
+        if (reviewLoopSpec.audit && runners[reviewLoopSpec.audit]) {
+          seedResolved.add(reviewLoopSpec.audit);
+        }
+        if (reviewLoopSpec['follow-up'] && runners[reviewLoopSpec['follow-up']]) {
+          seedResolved.add(reviewLoopSpec['follow-up']);
+        }
+
+        return runLoop(projectRoot, 'review', reviewLoopSpec, config, reviewRunners, {
+          ...options,
+          seedResolved
+        });
       }
     }
     return summary;
@@ -695,13 +879,10 @@ export async function runLoop(
 
   const latestAuditStep = () => steps.filter(s => s.kind === 'audit').pop() ?? null;
 
-  const currentAction = await chooseAction('startup');
-  if (options.interactive && (currentAction.id.startsWith('start-new') || currentAction.id.startsWith('run-one-step'))) {
-    const skillId = currentAction.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
-    const prompted = await promptRunners([skillId], config, options.registry, options.globalOverrides);
-    if (prompted[skillId]) {
-      runners[skillId] = prompted[skillId];
-    }
+  const { action: currentAction, phase: startupPhase } = await chooseAction('startup');
+  if (options.interactive) {
+    await resolveUpfrontRunners(currentAction, startupPhase, loopSpec);
+    isFirstAction = false;
   }
   if (currentAction.id === 'stop') {
     const latestAudit = latestAuditStep();
@@ -746,7 +927,9 @@ export async function runLoop(
         throw new Error(`Follow-up skill '${followUpSkillId}' not found in manifest`);
       }
       let followUpPolicy: SessionPolicy = 'new';
-      if (pendingAction) {
+      if (upfrontPolicies.has(followUpSkillId)) {
+        followUpPolicy = upfrontPolicies.get(followUpSkillId)!;
+      } else if (pendingAction) {
         if (typeof pendingAction.sessionPolicy === 'object') {
           followUpPolicy = pendingAction.sessionPolicy.followUp;
         } else {
@@ -754,36 +937,26 @@ export async function runLoop(
         }
       }
 
-      if (followUpPolicy === 'resumed') {
-        const provider = pendingAction?.provider;
-        const model = pendingAction?.model;
-        if (provider && model) {
-          if (!config.registry.providers[provider]) {
-            throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
-          }
-          const allowedModels = config.registry.providers[provider] || [];
-          let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-          if (!resolvedModel) {
-            if (isValidModelForAgent(provider, model, config.registry)) {
-              resolvedModel = model;
+      if (!upfrontResolved.has(followUpSkillId)) {
+        if (followUpPolicy === 'resumed') {
+          const provider = pendingAction?.provider;
+          const model = pendingAction?.model;
+          if (provider && model) {
+            if (!config.registry.providers[provider]) {
+              throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
             }
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (!resolvedModel) {
+              throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+            }
+            runners[followUpSkillId] = { agent: provider, model: resolvedModel };
           }
-          if (!resolvedModel) {
-            throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
-          }
-          runners[followUpSkillId] = { agent: provider, model: resolvedModel };
-        }
-      }
-
-      if (
-        options.interactive &&
-        pendingAction?.id === 'continue' &&
-        runners[followUpSkillId] &&
-        findResumableSession(steps, ['follow-up'], runners[followUpSkillId].agent, runners[followUpSkillId].model, { stopAtApproved: true }) === null
-      ) {
-        const prompted = await promptRunners([followUpSkillId], config, options.registry, options.globalOverrides);
-        if (prompted[followUpSkillId]) {
-          runners[followUpSkillId] = prompted[followUpSkillId];
         }
       }
 
@@ -904,13 +1077,9 @@ export async function runLoop(
 
       if (pendingAction?.oneOff && pendingAction.stage === 'follow-up') {
         pendingAction = null;
-        const nextAction = await chooseAction('in-loop');
-        if (options.interactive && (nextAction.id.startsWith('start-new') || nextAction.id.startsWith('run-one-step'))) {
-          const skillId = nextAction.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
-          const prompted = await promptRunners([skillId], config, options.registry, options.globalOverrides);
-          if (prompted[skillId]) {
-            runners[skillId] = prompted[skillId];
-          }
+        const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop');
+        if (options.interactive) {
+          await resolveUpfrontRunners(nextAction, nextPhase, loopSpec);
         }
         if (nextAction.id === 'stop') {
           const latestAudit = latestAuditStep();
@@ -955,7 +1124,9 @@ export async function runLoop(
       throw new Error(`Audit skill '${auditSkillId}' not found in manifest`);
     }
     let auditPolicy: SessionPolicy = 'new';
-    if (pendingAction) {
+    if (upfrontPolicies.has(auditSkillId)) {
+      auditPolicy = upfrontPolicies.get(auditSkillId)!;
+    } else if (pendingAction) {
       if (typeof pendingAction.sessionPolicy === 'object') {
         auditPolicy = pendingAction.sessionPolicy.audit;
       } else {
@@ -963,24 +1134,26 @@ export async function runLoop(
       }
     }
 
-    if (auditPolicy === 'resumed') {
-      const provider = pendingAction?.provider;
-      const model = pendingAction?.model;
-      if (provider && model) {
-        if (!config.registry.providers[provider]) {
-          throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
-        }
-        const allowedModels = config.registry.providers[provider] || [];
-        let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-        if (!resolvedModel) {
-          if (isValidModelForAgent(provider, model, config.registry)) {
-            resolvedModel = model;
+    if (!upfrontResolved.has(auditSkillId)) {
+      if (auditPolicy === 'resumed') {
+        const provider = pendingAction?.provider;
+        const model = pendingAction?.model;
+        if (provider && model) {
+          if (!config.registry.providers[provider]) {
+            throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
           }
+          const allowedModels = config.registry.providers[provider] || [];
+          let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+          if (!resolvedModel) {
+            if (isValidModelForAgent(provider, model, config.registry)) {
+              resolvedModel = model;
+            }
+          }
+          if (!resolvedModel) {
+            throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+          }
+          runners[auditSkillId] = { agent: provider, model: resolvedModel };
         }
-        if (!resolvedModel) {
-          throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
-        }
-        runners[auditSkillId] = { agent: provider, model: resolvedModel };
       }
     }
 
@@ -1120,13 +1293,9 @@ export async function runLoop(
 
     pendingAction = null; // Clear pending action since it's fully consumed
 
-    const nextAction = await chooseAction('in-loop');
-    if (options.interactive && (nextAction.id.startsWith('start-new') || nextAction.id.startsWith('run-one-step'))) {
-      const skillId = nextAction.stage === 'follow-up' ? loopSpec['follow-up']! : loopSpec.audit!;
-      const prompted = await promptRunners([skillId], config, options.registry, options.globalOverrides);
-      if (prompted[skillId]) {
-        runners[skillId] = prompted[skillId];
-      }
+    const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop');
+    if (options.interactive) {
+      await resolveUpfrontRunners(nextAction, nextPhase, loopSpec);
     }
     if (nextAction.id === 'stop') {
       return emitFinalSummary(verdict === 'APPROVED', verdict, `awaiting your review: ${relOutputPath}`, lastAuditPath);
