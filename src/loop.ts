@@ -650,7 +650,7 @@ export async function runLoop(
 
     let runner = runners[implementSkillId];
     if (!runner && options.interactive) {
-      const prompted = await promptRunners([implementSkillId], config, options.registry, options.globalOverrides);
+      const prompted = await promptRunners([implementSkillId], config, options.registry, options.globalOverrides, { forceSelect: true });
       runner = prompted[implementSkillId];
     }
     if (!runner) {
@@ -895,7 +895,7 @@ export async function runLoop(
     const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
     const implementRunners: Record<string, Runner> = {};
     if (options.interactive) {
-      const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides);
+      const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
       Object.assign(implementRunners, prompted);
     } else {
       const skill = config.manifest.skills[implementLoopSpec.implement!];
@@ -1098,7 +1098,7 @@ export async function runLoop(
           const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
           const implementRunners: Record<string, Runner> = {};
           if (options.interactive) {
-            const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides);
+            const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
             Object.assign(implementRunners, prompted);
           } else {
             const skill = config.manifest.skills[implementLoopSpec.implement!];
@@ -1317,7 +1317,7 @@ export async function runLoop(
       const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
       const implementRunners: Record<string, Runner> = {};
       if (options.interactive) {
-        const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides);
+        const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
         Object.assign(implementRunners, prompted);
       } else {
         const skill = config.manifest.skills[implementLoopSpec.implement!];

@@ -175,4 +175,23 @@ describe('Interactive registry selection', () => {
     expect(validate('claude-sonnet-4-6')).not.toBe(true);
     expect(validate('Gemini 3.5 Flash (Medium)')).toBe(true);
   });
+
+  it('promptRunners with forceSelect bypasses the customize confirm and shows the model list', async () => {
+    const config = dummyConfig({
+      opencode: ['opencode-model'],
+      codex: ['codex-model']
+    }, { agent: 'opencode', model: 'opencode-model' });
+    const prodRegistry = createProductionAdapterRegistry();
+
+    // No confirm mock is set up: forceSelect must short-circuit the gate so the
+    // run never blocks on the "customize skill runners?" yes/no.
+    vi.mocked(select).mockResolvedValueOnce('codex'); // choose agent
+    vi.mocked(select).mockResolvedValueOnce('codex-model'); // choose model
+
+    const runners = await promptRunners(['plan-audit'], config, prodRegistry, {}, { forceSelect: true });
+
+    expect(vi.mocked(confirm)).not.toHaveBeenCalled();
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(2);
+    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
+  });
 });

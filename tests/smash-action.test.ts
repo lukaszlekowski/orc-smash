@@ -7,10 +7,11 @@ vi.mock('../src/loop.js', () => ({
 }));
 
 let lastPromptedDefault: string | undefined;
+let mockedLoopSelectChoice: string | undefined;
 vi.mock('../src/interactive.js', () => ({
   promptLoopSelect: async (_loops: string[], defaultLoop: string) => {
     lastPromptedDefault = defaultLoop;
-    return defaultLoop;
+    return mockedLoopSelectChoice ?? defaultLoop;
   },
   promptStartPoint: async (_allowed: string[], defaultSP: string) => defaultSP,
   promptRunners: async (skills: string[]) => {
@@ -58,6 +59,7 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    mockedLoopSelectChoice = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -169,6 +171,20 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     });
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
     expect(res.exitCode).toBe(0);
+    // Explicit override seeds the runner (no interactive prompt).
+    const overrideRunners = mockedRunLoop.mock.calls[0]![4] as Record<string, unknown>;
+    expect(overrideRunners['30-simple-implement']).toEqual({ agent: 'fake', model: 'fake-model' });
+  });
+
+  it('interactive implement (no override) defers runner selection to runLoop — does not silently seed the default', async () => {
+    writeAudit(1, 'APPROVED');
+    mockedLoopSelectChoice = 'implement';
+    const res = await smashAction({ project: tempDir, output: mockOutput });
+    expect(mockedRunLoop).toHaveBeenCalledTimes(1);
+    expect(res.exitCode).toBe(0);
+    const passedRunners = mockedRunLoop.mock.calls[0]![4] as Record<string, unknown>;
+    // Not pre-seeded: runLoop's implement branch must prompt for the model.
+    expect(passedRunners['30-simple-implement']).toBeUndefined();
   });
 
   it('v5-audit C1: interactive startup does NOT default to review after a closeout_failed run', async () => {
@@ -314,6 +330,7 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    mockedLoopSelectChoice = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });

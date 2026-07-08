@@ -214,4 +214,49 @@ describe('createPanelCliOutput — live region seam', () => {
     expect(ora).toHaveBeenCalledWith(expect.stringContaining('legacy step started'));
     expect(mockSpinner.start).toHaveBeenCalled();
   });
+
+  it('stepFailed during the live region buffers, and finalSummary flushes it to the main screen with a timestamp', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const output = createPanelCliOutput();
+    output.attachLiveRegion!(() => makeContext(makeInFlight('audit', Date.now())));
+
+    // A failure during the live step must NOT be written to the (soon-discarded)
+    // alt screen — it is buffered.
+    output.stepFailed({
+      kind: 'audit',
+      skillId: 'plan-audit',
+      version: 1,
+      message: 'Audit auth',
+      errorKind: 'auth'
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // finalSummary restores the main screen and flushes the buffered failure there,
+    // with a timestamp prefix so it survives in scrollback.
+    output.finalSummary({
+      success: false,
+      verdict: 'unknown',
+      message: 'Audit failed (auth)',
+      lastAuditPath: null
+    });
+
+    const errors = errorSpy.mock.calls.map((c: any) => c.join(' ')).join('\n');
+    expect(errors).toContain('Audit auth');
+    expect(errors).toMatch(/\[\d{2}:\d{2}:\d{2}\]/);
+
+    const logs = logSpy.mock.calls.map((c: any) => c.join(' ')).join('\n');
+    expect(logs).toContain('Loop terminated: Audit failed (auth)');
+    expect(logs).toMatch(/\[\d{2}:\d{2}:\d{2}\]/);
+
+    // The buffer is cleared after the flush — a subsequent summary emits nothing extra.
+    output.finalSummary({
+      success: true,
+      verdict: 'APPROVED',
+      message: 'done',
+      lastAuditPath: null
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
 });
