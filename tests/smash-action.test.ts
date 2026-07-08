@@ -7,10 +7,11 @@ vi.mock('../src/loop.js', () => ({
 }));
 
 let lastPromptedDefault: string | undefined;
+let mockedLoopSelectChoice: string | undefined;
 vi.mock('../src/interactive.js', () => ({
   promptLoopSelect: async (_loops: string[], defaultLoop: string) => {
     lastPromptedDefault = defaultLoop;
-    return defaultLoop;
+    return mockedLoopSelectChoice ?? defaultLoop;
   },
   promptStartPoint: async (_allowed: string[], defaultSP: string) => defaultSP,
   promptRunners: async (skills: string[]) => {
@@ -33,10 +34,11 @@ import { loadConfig } from '../src/config.js';
 
 const mockedRunLoop = vi.mocked(runLoop);
 
+let lastWarningMessage = '';
 let lastErrorMessage = '';
 const mockOutput = {
   note: () => {},
-  warn: () => {},
+  warn: (msg: string) => { lastWarningMessage = msg; },
   error: (msg: string) => { lastErrorMessage = msg; },
   iterationStarted: () => {},
   stepStarted: () => {},
@@ -57,6 +59,7 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    mockedLoopSelectChoice = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -85,27 +88,24 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     });
   }
 
-  it('REJECTED state => start-point resume (matches allowedStartPoint)', async () => {
+  it('REJECTED state => runs loop successfully', async () => {
     writeAudit(1, 'REJECTED');
     const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
-    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'resume' });
     expect(res.exitCode).toBe(0);
   });
 
-  it('APPROVED state => start-point new-round', async () => {
+  it('APPROVED state => runs loop successfully', async () => {
     writeAudit(1, 'APPROVED');
     const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
-    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'new-round' });
     expect(lastErrorMessage).toBe('');
     expect(res.exitCode).toBe(0);
   });
 
-  it('fresh state (no audits) => start-point fresh', async () => {
+  it('fresh state (no audits) => runs loop successfully', async () => {
     const res = await runSmash();
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
-    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: 'fresh' });
     expect(lastErrorMessage).toBe('');
     expect(res.exitCode).toBe(0);
   });
@@ -170,8 +170,21 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
       output: mockOutput
     });
     expect(mockedRunLoop).toHaveBeenCalledTimes(1);
-    expect(mockedRunLoop.mock.calls[0]![5]).toMatchObject({ startPoint: undefined });
     expect(res.exitCode).toBe(0);
+    // Explicit override seeds the runner (no interactive prompt).
+    const overrideRunners = mockedRunLoop.mock.calls[0]![4] as Record<string, unknown>;
+    expect(overrideRunners['30-simple-implement']).toEqual({ agent: 'fake', model: 'fake-model' });
+  });
+
+  it('interactive implement (no override) defers runner selection to runLoop — does not silently seed the default', async () => {
+    writeAudit(1, 'APPROVED');
+    mockedLoopSelectChoice = 'implement';
+    const res = await smashAction({ project: tempDir, output: mockOutput });
+    expect(mockedRunLoop).toHaveBeenCalledTimes(1);
+    expect(res.exitCode).toBe(0);
+    const passedRunners = mockedRunLoop.mock.calls[0]![4] as Record<string, unknown>;
+    // Not pre-seeded: runLoop's implement branch must prompt for the model.
+    expect(passedRunners['30-simple-implement']).toBeUndefined();
   });
 
   it('v5-audit C1: interactive startup does NOT default to review after a closeout_failed run', async () => {
@@ -317,6 +330,7 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    mockedLoopSelectChoice = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -416,42 +430,7 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     expect(lastPromptedDefault).toBe('implement');
   });
 
-  it('rejects if both --audit-continuity and --codex-audit-continuity are supplied', async () => {
-    const res = await smashAction({
-      project: tempDir,
-      loop: 'plan',
-      auditContinuity: true,
-      codexAuditContinuity: true,
-      agent: 'codex',
-      model: 'gpt-5.5',
-      output: mockOutput
-    });
-    expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('--audit-continuity and --codex-audit-continuity are mutually exclusive');
-  });
-
-  it('rejects --audit-continuity on the implement loop', async () => {
-    const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    writeFileSync(
-      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
-      buildFrontMatter(auditMeta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
-    );
-
-    const res = await smashAction({
-      project: tempDir,
-      loop: 'implement',
-      auditContinuity: true,
-      agent: 'codex',
-      model: 'gpt-5.5',
-      output: mockOutput
-    });
-
-    expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('--audit-continuity is only valid for plan and review loops');
-  });
-
-  it('rejects --audit-continuity if the audit runner resolves to an unsupported runner', async () => {
+  it('rejects --audit-continuity option programmatically', async () => {
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
@@ -460,115 +439,36 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
       model: 'fake-model',
       output: mockOutput
     });
-
     expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('--audit-continuity requires the audit runner to be codex, opencode, or claude');
+    expect(res.message).toContain('unknown option --audit-continuity');
   });
 
-  it('accepts --audit-continuity if the audit runner is Claude or Opencode', async () => {
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  claude:\n    - glm-4.7\n  opencode:\n    - opencode-go/deepseek-v4-flash\ndefaults:\n  agent: claude\n  model: glm-4.7\n'
-    );
-
+  it('rejects --codex-audit-continuity option programmatically', async () => {
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
-      auditContinuity: true,
-      agent: 'claude',
-      model: 'glm-4.7',
+      codexAuditContinuity: true,
+      agent: 'fake',
+      model: 'fake-model',
       output: mockOutput
     });
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('unknown option --codex-audit-continuity');
+  });
 
+  it('warns if the audit runner resolves to an unsupported runner', async () => {
+    lastWarningMessage = '';
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
     expect(res.exitCode).toBe(0);
-    expect(mockedRunLoop).toHaveBeenCalledWith(
-      expect.any(String),
-      'plan',
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({
-        'plan-audit': { agent: 'claude', model: 'glm-4.7' }
-      }),
-      expect.objectContaining({
-        auditContinuity: 'claude-resume'
-      })
-    );
+    expect(lastWarningMessage).toContain('agent fake does not support session resume');
   });
 
-  it('rejects --codex-audit-continuity on the implement loop', async () => {
-    // Approved plan audit to get past the implement loop check.
-    const auditMeta = makeArtifactMeta({ version: 1, agent: 'fake', loop: 'plan', skill: 'plan-audit', kind: 'audit' });
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    writeFileSync(
-      join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
-      buildFrontMatter(auditMeta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
-    );
-
-    const res = await smashAction({
-      project: tempDir,
-      loop: 'implement',
-      codexAuditContinuity: true,
-      agent: 'codex',
-      model: 'gpt-5.5',
-      output: mockOutput
-    });
-
-    expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('--codex-audit-continuity is only valid for plan and review loops');
-  });
-
-  it('rejects --codex-audit-continuity if the audit runner resolves to a non-Codex runner', async () => {
-    // Plan loop with codexAuditContinuity, but agent is fake/opencode (non-Codex)
-    const res = await smashAction({
-      project: tempDir,
-      loop: 'plan',
-      codexAuditContinuity: true,
-      agent: 'opencode',
-      model: 'opencode-go/deepseek-v4-flash',
-      output: mockOutput
-    });
-
-    expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('--codex-audit-continuity requires the audit runner to be codex');
-  });
-
-  it('accepts --codex-audit-continuity if the audit runner is Codex and follow-up is not Codex', async () => {
-    // We override program configurations for this test
-    const config = loadConfig(tempDir);
-    config.manifest.skills['plan-audit'].agent = 'codex';
-    config.manifest.skills['plan-audit'].model = 'gpt-5.5';
-    config.manifest.skills['plan-follow-up'].agent = 'opencode';
-    config.manifest.skills['plan-follow-up'].model = 'opencode-go/deepseek-v4-flash';
-
-    // Mock resolveSmashRunSetup/loadConfig or just write an environment that uses codex registry
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  codex:\n    - gpt-5.5\n  opencode:\n    - opencode-go/deepseek-v4-flash\ndefaults:\n  agent: codex\n  model: gpt-5.5\n'
-    );
-
-    const res = await smashAction({
-      project: tempDir,
-      loop: 'plan',
-      codexAuditContinuity: true,
-      agent: 'codex',
-      model: 'gpt-5.5',
-      output: mockOutput
-    });
-
-    expect(res.exitCode).toBe(0); // runs mockLoop successfully
-    expect(mockedRunLoop).toHaveBeenCalledWith(
-      expect.any(String),
-      'plan',
-      expect.any(Object),
-      expect.any(Object),
-      expect.objectContaining({
-        'plan-audit': { agent: 'codex', model: 'gpt-5.5' }
-      }),
-      expect.objectContaining({
-        auditContinuity: 'codex-resume'
-      })
-    );
-  });
 
   it('Rule 2 pre-implementation: interactive smash defaults to implement loop when plan approved but not implemented', async () => {
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });

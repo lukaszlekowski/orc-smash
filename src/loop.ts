@@ -11,25 +11,26 @@ import { writeArtifactWithMeta, type ArtifactMeta, type StepKind } from './prove
 import { parseVerdict } from './verdict.js';
 import { buildPanelContext, latestAuditVersion, type PanelContext, resolveLoopLabels } from './status.js';
 import type { LifecycleEvent } from './adapter-lifecycle.js';
-import { promptSecondOpinionDecision, promptSecondOpinionRunner, promptContinueToReview, promptRunners } from './interactive.js';
+import { promptRunners, promptStageAction } from './interactive.js';
 import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
-import { resolveRunner } from './runner.js';
+import { resolveRunner, isValidModelForAgent } from './runner.js';
 import { isCompleteImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { debugLoopSpawn } from './debug-spawn.js';
 import { quarantineArtifact, quarantineInterruptedResume, setStepCtx } from './interrupted-artifact.js';
+import { resolveNextStep } from './next-step.js';
+import { buildStageActions, findResumableSession, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
 
 export interface LoopOptions {
   maxIterations: number;
-  startPoint?: 'fresh' | 'resume' | 'new-round';
   globalOverrides?: { agent?: string; model?: string };
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
-  auditContinuity?: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume';
+  seedResolved?: Set<string>;
 }
 
 type Runner = { agent: string; model: string };
@@ -52,6 +53,16 @@ export async function runLoop(
   quarantineInterruptedResume(projectRoot, config.manifest.loops);
 
   const steps: Step[] = [];
+  const upfrontResolved = new Set<string>();
+  const upfrontPolicies = new Map<string, SessionPolicy>();
+  let isFirstAction = true;
+  let lastActionGroup: string | null = null;
+
+  if (options.seedResolved) {
+    for (const s of options.seedResolved) {
+      upfrontResolved.add(s);
+    }
+  }
 
   const priorAuditRel = (root: string, p: string | null | undefined): string =>
     p ? (p.startsWith(root) ? relative(root, p) : p) : 'none';
@@ -243,13 +254,6 @@ export async function runLoop(
   const stepFailed = (result: RunResult, acceptNonzeroExitWithVerdict: boolean): boolean =>
     Boolean(result.error) || (!acceptNonzeroExitWithVerdict && result.exitCode !== 0);
 
-  /**
-   * §2 auth-failure cleanup: when an adapter returns `error.kind === 'auth'`
-   * (today only `agy`, when unauthenticated), quarantine the step's resolved
-   * artifact so no resumable `docs/dev/*-vN-<agent>.md` file remains. The loop
-   * is the only owner that knows the resolved output path (the adapter cannot).
-   * Safe no-op when the adapter wrote no file. Applies to audit/follow-up/implement.
-   */
   const quarantineAuthArtifact = (pattern: string | undefined, version: number, agent: string): void => {
     if (!pattern) return;
     const rel = renderPattern(pattern, { n: version, agent });
@@ -262,312 +266,312 @@ export async function runLoop(
   const completionMessage = (result: RunResult): string =>
     `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
 
-  if (loopSpec.kind === 'implement') {
-    const planSpec = config.manifest.loops['plan'];
-    if (!planSpec) {
-      throw new Error("Loop 'plan' not found in manifest");
-    }
-    const approvedPlanAuditPath = requireApprovedPlanAuditPath(projectRoot, {
-      auditPattern: planSpec.auditPattern ?? '',
-      followUpPattern: planSpec.followUpPattern ?? ''
-    });
+  const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase, opts?: { autoRecommend?: boolean }): Promise<{ action: StageAction; phase: MenuPhase }> => {
+    const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
 
-    const implementSkillId = loopSpec.implement;
-    if (!implementSkillId) {
-      throw new Error(`Loop '${loopName}' of kind 'implement' is missing implement skill`);
-    }
-    const skill = config.manifest.skills[implementSkillId];
-    if (!skill || skill.kind !== 'implement') {
-      throw new Error(`Implement skill '${implementSkillId}' not found or has invalid kind`);
-    }
+    let phase: MenuPhase = 'fresh';
+    let latestAuditVersionVal = 0;
+    let pendingFollowUpVersionVal: number | null = null;
 
-    const { nextVersion } = resolveImplementFacts(
-      projectRoot,
-      {
-        auditPattern: planSpec.auditPattern ?? '',
-        followUpPattern: planSpec.followUpPattern ?? ''
-      },
-      {
+    if (overridePhase) {
+      phase = overridePhase;
+      latestAuditVersionVal = latestAuditVersion(steps) || 1;
+    } else if (loopSpec.kind === 'implement') {
+      const planSpecForImpl = config.manifest.loops['plan']!;
+      const implFacts = resolveImplementFacts(projectRoot, {
+        auditPattern: planSpecForImpl.auditPattern ?? '',
+        followUpPattern: planSpecForImpl.followUpPattern ?? ''
+      }, {
         implementPattern: loopSpec.implementPattern ?? ''
+      });
+
+      if (implFacts.currentPlanImplemented) {
+        phase = 'implement-done';
+      } else {
+        return {
+          action: {
+            id: 'implement',
+            group: 'continue',
+            stage: 'implement',
+            version: implFacts.nextVersion,
+            sessionPolicy: 'new',
+            label: 'Implement the approved plan',
+            recommended: true
+          },
+          phase: 'fresh'
+        };
       }
-    );
-
-    // Seed steps from existing plan audit history so the panel's
-    // `Latest version:` label reflects the approved audit on disk,
-    // not a fabricated `v0` (review v7 Major finding #2).
-    const planHistory = scan(projectRoot, {
-      auditPattern: planSpec.auditPattern ?? '',
-      followUpPattern: planSpec.followUpPattern ?? ''
-    });
-    steps.push(...planHistory.timeline);
-
-    // Resolve runner
-    let runner = runners[implementSkillId];
-    if (!runner && options.interactive) {
-      const prompted = await promptRunners([implementSkillId], config, options.registry, options.globalOverrides);
-      runner = prompted[implementSkillId];
-    }
-    if (!runner) {
-      runner = resolveRunner(implementSkillId, config, options.globalOverrides);
-    }
-
-    renderPanel(
-      { skillId: implementSkillId, agent: runner.agent, model: runner.model },
-      1,
-      `Running ${labels.implement?.skillId ?? implementSkillId} v${nextVersion}...`
-    );
-
-    const roleFile = config.manifest.roles[skill.role];
-    if (!roleFile) {
-      throw new Error(`Role file '${skill.role}' not found in roles list`);
-    }
-    const prompt = composePrompt(implementSkillId, roleFile, skill.file, loopSpec, {
-      targetRoot: projectRoot,
-      version: nextVersion,
-      priorAuditPath: approvedPlanAuditPath,
-      agentName: runner.agent,
-      kind: 'implement'
-    });
-
-    const { result, durationMs } = await runAdapter(
-      runner,
-      prompt,
-      `Spawning ${runner.agent} for implementation...`,
-      'implement',
-      implementSkillId,
-      nextVersion,
-      1
-    );
-
-    if (stepFailed(result, false)) {
-      if (result.error?.kind === 'auth') {
-        quarantineAuthArtifact(loopSpec.implementPattern, nextVersion, runner.agent);
-      }
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation ${result.error?.kind ?? 'failed'}`,
-        errorKind: result.error?.kind
-      });
-      const errMessage = structuredMessage(result, { label: 'Implement', model: runner.model, agent: runner.agent });
-      return emitFinalSummary(false, 'unknown', errMessage, null);
-    }
-    if (isNonCleanCompletion(result)) {
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation truncated or interrupted`,
-        errorKind: result.completion
-      });
-      return emitFinalSummary(false, 'unknown', completionMessage(result), null);
-    }
-
-    // --- Verify the implementation ledger BEFORE declaring success ---
-    // A clean process exit is not "implementation completed"; the required
-    // ledger artifact must exist, be non-empty, and match the ledger contract.
-    const relOutputPath = renderPattern(loopSpec.implementPattern!, { n: nextVersion, agent: runner.agent });
-    const absOutputPath = resolve(projectRoot, relOutputPath);
-
-    if (!existsSync(absOutputPath)) {
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation failed: ${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`,
-        errorKind: 'missing_output'
-      });
-      return emitFinalSummary(false, 'unknown', `${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`, null);
-    }
-    const ledgerContent = readFileSync(absOutputPath, 'utf-8');
-    if (!isCompleteImplementLedger(ledgerContent)) {
-      const reason = !ledgerContent.trim()
-        ? 'empty'
-        : 'missing the required evidence table, requirement coverage table, and/or confidence declaration (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")';
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation failed: ledger at ${relOutputPath} is ${reason}`,
-        errorKind: ledgerContent.trim() ? 'invalid_output' : 'empty_output'
-      });
-      return emitFinalSummary(false, 'unknown', `Ledger at ${relOutputPath} is ${reason}`, null);
-    }
-
-    // --- Plan closeout (Step 7b): update plan front matter + Change Log ---
-    // The skill's §"Closeout Checklist" requires (1) updating the plan's
-    // front-matter `status:` to `done` or `blocked` and (2) recording the run
-    // in the plan's `## Change Log`. This MUST happen here (after the artifact
-    // gate passes, BEFORE `writeArtifactWithMeta`) — the v5-audit C1 fix.
-    // The harness's front-matter stamp is the durable state-detection
-    // signal that `state.ts:scanImplementArtifacts()` reads via
-    // `provenance.ts:parseArtifactMeta()`'s `priorAudit:` field. If we
-    // stamped the file before closeout and closeout later failed, the
-    // scanner would see `priorAudit: docs/dev/plan-audit-v{N}-<agent>.md`
-    // and `resolveImplementFacts()` would return `currentPlanImplemented:
-    // true` — letting a half-done run drive `smash.ts`'s interactive
-    // default to `review` and bypass the `unknown` rule (AGENTS.md §3).
-    // The fix is: stamp the harness front matter ONLY after closeout
-    // succeeds, so a `closeout_failed` run leaves the ledger file on disk
-    // without the harness's `priorAudit:` link and the state scanner
-    // counts it as `currentPlanImplemented: false`. The wiring uses the
-    // dedicated helper from Step 7b — `src/plan-closeout.ts` — not inline
-    // parsing inside the loop, so the closeout logic is a single source
-    // of truth reusable by any future closeout entry point (e.g.
-    // `31-simple-implement-closeout`).
-    const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
-    const closeoutSignal = deriveCloseoutSignal(ledgerContent);
-    const closeoutOutcome = writePlanCloseout({
-      planPath: projectPlanPath,
-      version: nextVersion,
-      agent: runner.agent,
-      signal: closeoutSignal
-    });
-    if (!closeoutOutcome.ok) {
-      // CRITICAL (v5-audit C1): do NOT call writeArtifactWithMeta on
-      // this branch. The agent's ledger file remains on disk without
-      // the harness's front matter. `state.ts:scanImplementArtifacts()`
-      // will read `priorAudit: 'none'` (no front matter → fallback
-      // `priorAudit: 'none'` from `provenance.ts:parseArtifactMeta`),
-      // `resolveImplementFacts()` will return `currentPlanImplemented:
-      // false`, and `smash.ts` will default the next interactive start
-      // to `implement` (not `review`). The regression test in Step 12
-      // ("closeout_failed run does not advance the state scanner")
-      // pins this contract end-to-end.
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation failed: plan closeout error: ${closeoutOutcome.error}`,
-        errorKind: 'closeout_failed'
-      });
-      return emitFinalSummary(false, 'unknown', `Plan closeout failed: ${closeoutOutcome.error}`, null);
-    }
-
-    // --- Branch on closeout status (v9-audit Critical fix) ---
-    // A `blocked` closeout (confidence < 0.95) is terminal for
-    // implementation advancement: the harness emits stepFailed, does
-    // NOT stamp the harness's front matter, and returns `unknown` so
-    // the next interactive startup defaults to `implement` (not
-    // `review`). The agent's ledger file remains on disk without the
-    // harness's `priorAudit:` link, so `state.ts:scanImplementArtifacts()`
-    // reads `priorAudit: 'none'` and `resolveImplementFacts()` returns
-    // `currentPlanImplemented: false`. Only a `done` closeout stamps
-    // the front matter and advances state.
-    if (closeoutOutcome.status === 'blocked') {
-      options.output.stepFailed({
-        kind: 'implement',
-        skillId: implementSkillId,
-        version: nextVersion,
-        message: `Implementation blocked: ${closeoutSignal.reason ?? 'confidence below 0.95 threshold'}`,
-        errorKind: 'implementation_blocked'
-      });
-      // CRITICAL: do NOT call writeArtifactWithMeta on this branch.
-      // The ledger file stays on disk without the harness's
-      // `priorAudit:` link, so the state scanner does NOT advance.
-      return emitFinalSummary(false, 'unknown', `Implementation blocked: confidence below 0.95 threshold`, null);
-    }
-
-    // --- Success emit (v5-audit C1: emitted AFTER closeout, before stamp) ---
-    // The success message now reports verified reality: the ledger was
-    // verified AND the plan closeout succeeded with status `done`.
-    // A `closeout_failed` or `blocked` run does NOT reach this line.
-    options.output.stepSucceeded({
-      kind: 'implement',
-      skillId: implementSkillId,
-      version: nextVersion,
-      message: `Implementation completed: ledger verified at ${relOutputPath} and plan closeout wrote status: done`
-    });
-
-    // --- Stamp the harness's front matter (v5-audit C1: after closeout) ---
-    // Closeout succeeded with `done`; the file is now an authentic
-    // record of a completed implementation. Stamp the harness's front
-    // matter onto it so `state.ts:scanImplementArtifacts()` can see the
-    // `priorAudit: <plan-audit-path>` link and
-    // `resolveImplementFacts()` returns `currentPlanImplemented: true`.
-    const meta: ArtifactMeta = {
-      loop: loopName,
-      skill: implementSkillId,
-      kind: 'implement',
-      role: skill.role,
-      version: nextVersion,
-      agent: runner.agent,
-      model: runner.model,
-      target: loopSpec.target,
-      priorAudit: priorAuditRel(projectRoot, approvedPlanAuditPath),
-      timestamp: new Date().toISOString(),
-      durationMs
-    };
-    writeArtifactWithMeta(absOutputPath, ledgerContent, meta);
-
-    steps.push({
-      kind: 'implement',
-      role: skill.role,
-      agent: runner.agent,
-      model: runner.model,
-      version: nextVersion,
-      status: 'done',
-      artifactPath: absOutputPath,
-      mtime: Date.now(),
-      durationMs
-    });
-
-    const summary = emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
-
-    if (options.interactive) {
-      const transitionChoice = await promptContinueToReview();
-      if (transitionChoice === 'review') {
-        const reviewLoopSpec = config.manifest.loops['review'];
-        if (!reviewLoopSpec) {
-          throw new Error("Loop 'review' not found in manifest");
-        }
-        const reviewSkills = [reviewLoopSpec.audit, reviewLoopSpec['follow-up']].filter((s): s is string => !!s);
-        const reviewRunners: Record<string, Runner> = {};
-        const prompted = await promptRunners(reviewSkills, config, options.registry, options.globalOverrides);
-        Object.assign(reviewRunners, prompted);
-        return runLoop(projectRoot, 'review', reviewLoopSpec, config, reviewRunners, {
-          ...options,
-          startPoint: 'fresh'
-        });
-      }
-    }
-    return summary;
-  }
-
-  // --- audit-loop stages ---
-  const initialScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
-  if (initialScan.latestVerdict === 'unknown' && initialScan.auditSteps.length > 0) {
-    throw new Error(`latest audit is unparseable; resolve or delete it before smashing`);
-  }
-
-  let N = 1;
-  let pendingFollowUp = false;
-  let isSecondOpinion = false;
-
-  if (options.startPoint === 'resume') {
-    const latestStep = initialScan.timeline[initialScan.timeline.length - 1];
-    if (latestStep && latestStep.kind === 'audit' && latestStep.verdict === 'REJECTED') {
-      N = latestStep.version + 1;
-      pendingFollowUp = true;
     } else {
-      N = initialScan.latestVersion + 1;
-      pendingFollowUp = false;
+      const decision = resolveNextStep({
+        latestVerdict: stateScan.latestVerdict,
+        latestVersion: stateScan.latestVersion,
+        hasAudits: stateScan.auditSteps.length > 0,
+        latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+      });
+
+      latestAuditVersionVal = stateScan.latestVersion;
+
+      if (decision.state === 'fresh') {
+        phase = 'fresh';
+      } else if (decision.state === 'approved') {
+        phase = 'approved';
+      } else if (decision.state === 'rejected') {
+        const latestVersion = stateScan.latestVersion;
+        const followUpForLatest = stateScan.timeline.find(s => s.kind === 'follow-up' && s.version === latestVersion);
+        const followUpCompleted = followUpForLatest && followUpForLatest.status === 'done' && followUpForLatest.outcome;
+
+        if (pendingFollowUp || !followUpCompleted) {
+          phase = 'rejected-no-followup';
+          pendingFollowUpVersionVal = latestVersion;
+        } else {
+          phase = 'rejected-followup-done';
+        }
+      } else {
+        throw new Error(`latest audit is unparseable; resolve or delete it before smashing`);
+      }
     }
-  } else if (options.startPoint === 'new-round') {
-    N = initialScan.latestVersion + 1;
-    pendingFollowUp = false;
-  } else {
-    // fresh
-    N = 1;
-    pendingFollowUp = false;
-  }
 
-  steps.push(...initialScan.timeline);
-  let iteration = 0;
-  let lastAuditPath: string | null = steps.filter(s => s.kind === 'audit').pop()?.artifactPath ?? null;
+    const menuState: LoopMenuState = {
+      phase,
+      latestAuditVersion: latestAuditVersionVal,
+      pendingFollowUpVersion: pendingFollowUpVersionVal,
+      decisionPoint,
+      loopName
+    };
 
-  const latestAuditStep = () => steps.filter(s => s.kind === 'audit').pop() ?? null;
+    const { actions, recommendedId } = buildStageActions(menuState);
+
+    let targetLoopSpec = loopSpec;
+    if (phase === 'implement-done') {
+      const reviewSpec = config.manifest.loops['review'];
+      if (reviewSpec) {
+        targetLoopSpec = reviewSpec;
+      }
+    }
+
+    // Resolve sessions and check agent support for continuity
+    for (const act of actions) {
+      if (
+        act.id === 'continue' ||
+        act.sessionPolicy === 'resumed' ||
+        (typeof act.sessionPolicy === 'object' &&
+          (act.sessionPolicy.audit === 'resumed' || act.sessionPolicy.followUp === 'resumed'))
+      ) {
+        const skillId = act.stage === 'follow-up' ? targetLoopSpec['follow-up']! : targetLoopSpec.audit!;
+        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+
+        const kindsToFind: StepKind[] = act.stage === 'follow-up' ? ['follow-up'] : ['audit'];
+        const stopAtApproved = act.id !== 'continue' || phase !== 'approved';
+
+        const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
+
+        if (allowAnyAgent) {
+          let lastSessionStep: Step | null = null;
+          for (let i = steps.length - 1; i >= 0; i--) {
+            const s = steps[i]!;
+            if (s.kind === 'audit' && s.verdict === 'APPROVED' && stopAtApproved) {
+              break;
+            }
+            if (kindsToFind.includes(s.kind) && s.sessionId && s.sessionId !== 'none') {
+              lastSessionStep = s;
+              break;
+            }
+          }
+
+          if (lastSessionStep) {
+            const provider = lastSessionStep.agent;
+            const model = lastSessionStep.model;
+            if (!config.registry.providers[provider]) {
+              act.disabledReason = `inherited provider ${provider} is not configured`;
+              continue;
+            }
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (!resolvedModel) {
+              act.disabledReason = `inherited model ${model} is not configured`;
+              continue;
+            }
+            runner = { agent: provider, model: resolvedModel };
+          }
+        }
+
+        if (!deriveContinuity(runner.agent)) {
+          act.disabledReason = `agent ${runner.agent} does not support session resume`;
+          continue;
+        }
+
+        const walkSession = findResumableSession(steps, kindsToFind, runner.agent, runner.model, { stopAtApproved });
+
+        if (walkSession) {
+          act.sessionId = walkSession.sessionId;
+          act.provider = walkSession.provider;
+          act.model = walkSession.model;
+        }
+      }
+    }
+
+    if (options.interactive && !opts?.autoRecommend) {
+      const chosenId = await promptStageAction(actions, recommendedId);
+      const chosen = actions.find(a => a.id === chosenId);
+      if (!chosen) {
+        throw new Error(`Chosen action ID ${chosenId} not found`);
+      }
+      return { action: chosen, phase };
+    } else {
+      const recommended = actions.find(a => a.id === recommendedId);
+      if (!recommended) throw new Error(`Recommended action ID ${recommendedId} not found`);
+      return { action: recommended, phase };
+    }
+  };
+
+  const resolveUpfrontRunners = async (
+    chosenAction: StageAction,
+    phase: MenuPhase,
+    loopSpec: LoopSpec
+  ): Promise<void> => {
+    const isNewSegment = lastActionGroup === null || lastActionGroup === 'run-one-step';
+
+    if (chosenAction.group === 'start-new' || chosenAction.group === 'run-one-step') {
+      upfrontResolved.clear();
+      upfrontPolicies.clear();
+      if (isFirstAction && options.seedResolved) {
+        for (const s of options.seedResolved) {
+          upfrontResolved.add(s);
+        }
+      }
+    }
+
+    let targetLoopSpec = loopSpec;
+    if (phase === 'implement-done') {
+      const reviewSpec = config.manifest.loops['review'];
+      if (!reviewSpec) {
+        throw new Error("Loop 'review' not found in manifest");
+      }
+      targetLoopSpec = reviewSpec;
+    }
+
+    const auditSkillId = targetLoopSpec.audit;
+    const followUpSkillId = targetLoopSpec['follow-up'];
+
+    let skillsToResolve: string[] = [];
+
+    if (chosenAction.id === 'stop' || chosenAction.id === 'implement') {
+      skillsToResolve = [];
+    } else if (chosenAction.group === 'run-one-step') {
+      const skillId = chosenAction.stage === 'follow-up' ? followUpSkillId : auditSkillId;
+      if (skillId) {
+        skillsToResolve = [skillId];
+      }
+    } else if (chosenAction.group === 'start-new') {
+      skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+    } else if (chosenAction.group === 'continue') {
+      if (phase === 'rejected-no-followup') {
+        skillsToResolve = [followUpSkillId, auditSkillId].filter((s): s is string => !!s);
+      } else if (phase === 'rejected-followup-done') {
+        skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+      } else if (phase === 'approved') {
+        skillsToResolve = [auditSkillId, followUpSkillId].filter((s): s is string => !!s);
+      } else {
+        const firstSkill = chosenAction.stage === 'follow-up' ? followUpSkillId : auditSkillId;
+        const secondSkill = chosenAction.stage === 'follow-up' ? auditSkillId : followUpSkillId;
+        skillsToResolve = [firstSkill, secondSkill].filter((s): s is string => !!s);
+      }
+    }
+
+    const getPolicyForSkill = (skillId: string): SessionPolicy => {
+      const isFollowUp = skillId === followUpSkillId;
+      const policy = chosenAction.sessionPolicy;
+      if (typeof policy === 'object') {
+        return isFollowUp ? policy.followUp : policy.audit;
+      }
+      return policy;
+    };
+
+    const targetLabels = targetLoopSpec === loopSpec ? labels : resolveLoopLabels(targetLoopSpec, config.manifest);
+    const skillsToPrompt: string[] = [];
+
+    for (const skillId of skillsToResolve) {
+      const policy = getPolicyForSkill(skillId);
+      if (isNewSegment || !upfrontPolicies.has(skillId)) {
+        upfrontPolicies.set(skillId, policy);
+      }
+
+      if (upfrontResolved.has(skillId)) {
+        continue;
+      }
+      const kind: StepKind = skillId === followUpSkillId ? 'follow-up' : 'audit';
+      let inherited = false;
+
+      if (policy === 'resumed') {
+        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+        const stopAtApproved = chosenAction.id !== 'continue' || phase !== 'approved';
+
+        const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
+        if (allowAnyAgent) {
+          let lastSessionStep: Step | null = null;
+          for (let i = steps.length - 1; i >= 0; i--) {
+            const s = steps[i]!;
+            if (s.kind === 'audit' && s.verdict === 'APPROVED' && stopAtApproved) {
+              break;
+            }
+            if (s.kind === kind && s.sessionId && s.sessionId !== 'none') {
+              lastSessionStep = s;
+              break;
+            }
+          }
+
+          if (lastSessionStep) {
+            const provider = lastSessionStep.agent;
+            const model = lastSessionStep.model;
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (resolvedModel) {
+              runner = { agent: provider, model: resolvedModel };
+            }
+          }
+        }
+
+        if (deriveContinuity(runner.agent)) {
+          const walkSession = findResumableSession(steps, [kind], runner.agent, runner.model, { stopAtApproved });
+          if (walkSession) {
+            runners[skillId] = { agent: walkSession.provider, model: walkSession.model };
+            const labelKey = kind === 'follow-up' ? 'followUp' : 'audit';
+            options.output.note(`Inherited runner for ${targetLabels[labelKey]?.skillId ?? skillId}: ${walkSession.provider} (${walkSession.model}) session ${walkSession.sessionId}`);
+            upfrontResolved.add(skillId);
+            inherited = true;
+          }
+        }
+      }
+
+      if (!inherited) {
+        skillsToPrompt.push(skillId);
+        if (policy === 'resumed') {
+          upfrontPolicies.set(skillId, 'new');
+        }
+      }
+    }
+
+    if (skillsToPrompt.length > 0) {
+      const prompted = await promptRunners(skillsToPrompt, config, options.registry, options.globalOverrides);
+      for (const skillId of skillsToPrompt) {
+        if (prompted[skillId]) {
+          runners[skillId] = prompted[skillId];
+          upfrontResolved.add(skillId);
+        }
+      }
+    }
+    lastActionGroup = chosenAction.group;
+  };
 
   const preparePrompt = (skillId: string, skill: SkillSpec, version: number, runner: Runner, kind: StepKind): string => {
     const roleFile = config.manifest.roles[skill.role];
@@ -608,6 +612,315 @@ export async function runLoop(
     sessionId: sessionId ?? 'none'
   });
 
+  if (loopSpec.kind === 'implement') {
+    const planSpec = config.manifest.loops['plan'];
+    if (!planSpec) {
+      throw new Error("Loop 'plan' not found in manifest");
+    }
+    const approvedPlanAuditPath = requireApprovedPlanAuditPath(projectRoot, {
+      auditPattern: planSpec.auditPattern ?? '',
+      followUpPattern: planSpec.followUpPattern ?? ''
+    });
+
+    const implementSkillId = loopSpec.implement;
+    if (!implementSkillId) {
+      throw new Error(`Loop '${loopName}' of kind 'implement' is missing implement skill`);
+    }
+    const skill = config.manifest.skills[implementSkillId];
+    if (!skill || skill.kind !== 'implement') {
+      throw new Error(`Implement skill '${implementSkillId}' not found or has invalid kind`);
+    }
+
+    const { nextVersion } = resolveImplementFacts(
+      projectRoot,
+      {
+        auditPattern: planSpec.auditPattern ?? '',
+        followUpPattern: planSpec.followUpPattern ?? ''
+      },
+      {
+        implementPattern: loopSpec.implementPattern ?? ''
+      }
+    );
+
+    const planHistory = scan(projectRoot, {
+      auditPattern: planSpec.auditPattern ?? '',
+      followUpPattern: planSpec.followUpPattern ?? ''
+    });
+    steps.push(...planHistory.timeline);
+
+    let runner = runners[implementSkillId];
+    if (!runner && options.interactive) {
+      const prompted = await promptRunners([implementSkillId], config, options.registry, options.globalOverrides, { forceSelect: true });
+      runner = prompted[implementSkillId];
+    }
+    if (!runner) {
+      runner = resolveRunner(implementSkillId, config, options.globalOverrides);
+    }
+
+    renderPanel(
+      { skillId: implementSkillId, agent: runner.agent, model: runner.model },
+      1,
+      `Running ${labels.implement?.skillId ?? implementSkillId} v${nextVersion}...`
+    );
+
+    const roleFile = config.manifest.roles[skill.role];
+    if (!roleFile) {
+      throw new Error(`Role file '${skill.role}' not found in roles list`);
+    }
+    const prompt = composePrompt(implementSkillId, roleFile, skill.file, loopSpec, {
+      targetRoot: projectRoot,
+      version: nextVersion,
+      priorAuditPath: approvedPlanAuditPath,
+      agentName: runner.agent,
+      kind: 'implement'
+    });
+
+    const runResult = await runAdapter(
+      runner,
+      prompt,
+      `Spawning ${runner.agent} for implementation...`,
+      'implement',
+      implementSkillId,
+      nextVersion,
+      1
+    );
+
+    const { result, durationMs } = runResult;
+
+    if (stepFailed(result, false)) {
+      if (result.error?.kind === 'auth') {
+        quarantineAuthArtifact(loopSpec.implementPattern, nextVersion, runner.agent);
+      }
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation ${result.error?.kind ?? 'failed'}`,
+        errorKind: result.error?.kind
+      });
+      const errMessage = structuredMessage(result, { label: 'Implement', model: runner.model, agent: runner.agent });
+      return emitFinalSummary(false, 'unknown', errMessage, null);
+    }
+    if (isNonCleanCompletion(result)) {
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation truncated or interrupted`,
+        errorKind: result.completion
+      });
+      return emitFinalSummary(false, 'unknown', completionMessage(result), null);
+    }
+
+    const relOutputPath = renderPattern(loopSpec.implementPattern!, { n: nextVersion, agent: runner.agent });
+    const absOutputPath = resolve(projectRoot, relOutputPath);
+
+    if (!existsSync(absOutputPath)) {
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation failed: ${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`,
+        errorKind: 'missing_output'
+      });
+      return emitFinalSummary(false, 'unknown', `${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`, null);
+    }
+    const ledgerContent = readFileSync(absOutputPath, 'utf-8');
+    if (!isCompleteImplementLedger(ledgerContent)) {
+      const reason = !ledgerContent.trim()
+        ? 'empty'
+        : 'missing the required evidence table, requirement coverage table, and/or confidence declaration (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")';
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation failed: ledger at ${relOutputPath} is ${reason}`,
+        errorKind: ledgerContent.trim() ? 'invalid_output' : 'empty_output'
+      });
+      return emitFinalSummary(false, 'unknown', `Ledger at ${relOutputPath} is ${reason}`, null);
+    }
+
+    const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
+    const closeoutSignal = deriveCloseoutSignal(ledgerContent);
+    const closeoutOutcome = writePlanCloseout({
+      planPath: projectPlanPath,
+      version: nextVersion,
+      agent: runner.agent,
+      signal: closeoutSignal
+    });
+    if (!closeoutOutcome.ok) {
+      const closeoutError = closeoutOutcome.error.includes('plan file not found')
+        ? `${closeoutOutcome.error}. The implement agent may have removed docs/dev/plan.md during the run; harness closeout owns plan status/change-log updates and expects that file to remain in place.`
+        : closeoutOutcome.error;
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation failed: plan closeout error: ${closeoutError}`,
+        errorKind: 'closeout_failed'
+      });
+      return emitFinalSummary(false, 'unknown', `Plan closeout failed: ${closeoutError}`, null);
+    }
+
+    if (closeoutOutcome.status === 'blocked') {
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation blocked: ${closeoutSignal.reason ?? 'confidence below 0.95 threshold'}`,
+        errorKind: 'implementation_blocked'
+      });
+      return emitFinalSummary(false, 'unknown', `Implementation blocked: confidence below 0.95 threshold`, null);
+    }
+
+    options.output.stepSucceeded({
+      kind: 'implement',
+      skillId: implementSkillId,
+      version: nextVersion,
+      message: `Implementation completed: ledger verified at ${relOutputPath} and plan closeout wrote status: done`
+    });
+
+    const meta: ArtifactMeta = {
+      loop: loopName,
+      skill: implementSkillId,
+      kind: 'implement',
+      role: skill.role,
+      version: nextVersion,
+      agent: runner.agent,
+      model: runner.model,
+      target: loopSpec.target,
+      priorAudit: priorAuditRel(projectRoot, approvedPlanAuditPath),
+      timestamp: new Date().toISOString(),
+      durationMs
+    };
+    writeArtifactWithMeta(absOutputPath, ledgerContent, meta);
+
+    steps.push({
+      kind: 'implement',
+      role: skill.role,
+      agent: runner.agent,
+      model: runner.model,
+      version: nextVersion,
+      status: 'done',
+      artifactPath: absOutputPath,
+      mtime: Date.now(),
+      durationMs
+    });
+
+    const summary = emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
+
+    if (options.interactive) {
+      const { action: chosenAction, phase: chosenPhase } = await chooseAction('in-loop', 'implement-done');
+      if (chosenAction.id === 'stop') {
+        return summary;
+      } else {
+        const reviewLoopSpec = config.manifest.loops['review'];
+        if (!reviewLoopSpec) {
+          throw new Error("Loop 'review' not found in manifest");
+        }
+        
+        await resolveUpfrontRunners(chosenAction, chosenPhase, loopSpec);
+
+        const reviewRunners: Record<string, Runner> = {};
+        if (reviewLoopSpec.audit && runners[reviewLoopSpec.audit]) {
+          reviewRunners[reviewLoopSpec.audit] = runners[reviewLoopSpec.audit];
+        }
+        if (reviewLoopSpec['follow-up'] && runners[reviewLoopSpec['follow-up']]) {
+          reviewRunners[reviewLoopSpec['follow-up']] = runners[reviewLoopSpec['follow-up']];
+        }
+
+        const seedResolved = new Set<string>();
+        if (reviewLoopSpec.audit && runners[reviewLoopSpec.audit]) {
+          seedResolved.add(reviewLoopSpec.audit);
+        }
+        if (reviewLoopSpec['follow-up'] && runners[reviewLoopSpec['follow-up']]) {
+          seedResolved.add(reviewLoopSpec['follow-up']);
+        }
+
+        return runLoop(projectRoot, 'review', reviewLoopSpec, config, reviewRunners, {
+          ...options,
+          seedResolved
+        });
+      }
+    }
+    return summary;
+  }
+
+  const planDocPath = resolve(projectRoot, 'docs/dev/plan.md');
+  const hasPlanDoc = existsSync(planDocPath);
+  options.output.note(hasPlanDoc ? `plan document located: docs/dev/plan.md` : `plan.md NOT found`);
+
+  const planSpec = config.manifest.loops['plan']!;
+  const planScan = scan(projectRoot, { auditPattern: planSpec.auditPattern!, followUpPattern: planSpec.followUpPattern! });
+  const latestAudit = planScan.auditSteps.length > 0 ? planScan.auditSteps[planScan.auditSteps.length - 1] : null;
+  if (latestAudit) {
+    options.output.note(`most recent plan audit: ${relative(projectRoot, latestAudit.artifactPath)}, decision: ${latestAudit.verdict}, sessionId: ${latestAudit.sessionId ?? 'none'}`);
+  } else {
+    options.output.note(`most recent plan audit: none`);
+  }
+  const latestFollowUp = planScan.timeline.filter(s => s.kind === 'follow-up').pop();
+  if (latestFollowUp) {
+    options.output.note(`most recent follow-up: ${relative(projectRoot, latestFollowUp.artifactPath)}, sessionId: ${latestFollowUp.sessionId ?? 'none'}`);
+  } else {
+    options.output.note(`most recent follow-up: none`);
+  }
+
+  const initialScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
+  if (initialScan.latestVerdict === 'unknown' && initialScan.auditSteps.length > 0) {
+    throw new Error(`latest audit is unparseable; resolve or delete it before smashing`);
+  }
+
+  let N = 1;
+  let pendingFollowUp = false;
+
+  steps.push(...initialScan.timeline);
+  let iteration = 0;
+  let lastAuditPath: string | null = steps.filter(s => s.kind === 'audit').pop()?.artifactPath ?? null;
+
+  const latestAuditStep = () => steps.filter(s => s.kind === 'audit').pop() ?? null;
+
+  const { action: currentAction, phase: startupPhase } = await chooseAction('startup');
+  if (options.interactive) {
+    await resolveUpfrontRunners(currentAction, startupPhase, loopSpec);
+    isFirstAction = false;
+  }
+  if (currentAction.id === 'stop') {
+    const latestAudit = latestAuditStep();
+    return emitFinalSummary(true, latestAudit?.verdict || null, `awaiting your review: ${latestAudit?.artifactPath ?? 'none'}`, latestAudit?.artifactPath ?? null);
+  } else if (currentAction.id === 'implement') {
+    const implementLoopSpec = config.manifest.loops['implement'];
+    if (!implementLoopSpec) {
+      throw new Error("Loop 'implement' not found in manifest");
+    }
+    const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
+    const implementRunners: Record<string, Runner> = {};
+    if (options.interactive) {
+      const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
+      Object.assign(implementRunners, prompted);
+    } else {
+      const skill = config.manifest.skills[implementLoopSpec.implement!];
+      implementRunners[implementLoopSpec.implement!] = {
+        agent: skill.agent,
+        model: skill.model
+      };
+    }
+    return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+  }
+
+  let pendingAction: StageAction | null = currentAction;
+  // Chain mode = START NEW or CONTINUE: keep cycling audit -> follow-up -> audit
+  // on rejection without re-prompting the action menu. One-off (run-one-step)
+  // actions return to the menu after their single step. Re-derived whenever the
+  // operator picks a new action below.
+  let chainMode = currentAction.group !== 'run-one-step';
+  if (currentAction.stage === 'follow-up') {
+    N = currentAction.version + 1;
+    pendingFollowUp = true;
+  } else {
+    N = currentAction.version;
+    pendingFollowUp = false;
+  }
+
   while (iteration < options.maxIterations) {
     options.output.iterationStarted({ iteration: iteration + 1, maxIterations: options.maxIterations });
 
@@ -618,6 +931,40 @@ export async function runLoop(
       if (!followUpSkill) {
         throw new Error(`Follow-up skill '${followUpSkillId}' not found in manifest`);
       }
+      let followUpPolicy: SessionPolicy = 'new';
+      if (upfrontPolicies.has(followUpSkillId)) {
+        followUpPolicy = upfrontPolicies.get(followUpSkillId)!;
+      } else if (pendingAction) {
+        if (typeof pendingAction.sessionPolicy === 'object') {
+          followUpPolicy = pendingAction.sessionPolicy.followUp;
+        } else {
+          followUpPolicy = pendingAction.sessionPolicy;
+        }
+      }
+
+      if (!upfrontResolved.has(followUpSkillId)) {
+        if (followUpPolicy === 'resumed') {
+          const provider = pendingAction?.provider;
+          const model = pendingAction?.model;
+          if (provider && model) {
+            if (!config.registry.providers[provider]) {
+              throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
+            }
+            const allowedModels = config.registry.providers[provider] || [];
+            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+            if (!resolvedModel) {
+              if (isValidModelForAgent(provider, model, config.registry)) {
+                resolvedModel = model;
+              }
+            }
+            if (!resolvedModel) {
+              throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+            }
+            runners[followUpSkillId] = { agent: provider, model: resolvedModel };
+          }
+        }
+      }
+
       const runner = runners[followUpSkillId];
       if (!runner) {
         throw new Error(`No runner resolved for follow-up skill '${followUpSkillId}'`);
@@ -631,15 +978,57 @@ export async function runLoop(
       );
 
       const prompt = preparePrompt(followUpSkillId, followUpSkill, followUpVersion, runner, 'follow-up');
-      const { result, durationMs } = await runAdapter(
-        runner,
-        prompt,
-        `Spawning ${runner.agent} for follow-up...`,
-        'follow-up',
-        followUpSkillId,
-        followUpVersion,
-        iteration + 1
-      );
+
+      let followUpContinuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
+      if (deriveContinuity(runner.agent)) {
+        if (followUpPolicy === 'resumed') {
+          const walkSession = findResumableSession(steps, ['follow-up'], runner.agent, runner.model, { stopAtApproved: true });
+          if (walkSession) {
+            followUpContinuity = { mode: 'resumed', sessionId: walkSession.sessionId };
+          } else {
+            options.output.warn(`resumed requested for follow-up but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+            followUpContinuity = { mode: 'fresh' };
+          }
+        } else {
+          followUpContinuity = { mode: 'fresh' };
+        }
+      }
+
+      let runResult: { result: RunResult; durationMs: number };
+      try {
+        runResult = await runAdapter(
+          runner,
+          prompt,
+          `Spawning ${runner.agent} for follow-up...`,
+          'follow-up',
+          followUpSkillId,
+          followUpVersion,
+          iteration + 1,
+          followUpContinuity
+        );
+      } catch (err: any) {
+        options.output.stepFailed({
+          kind: 'follow-up',
+          skillId: followUpSkillId,
+          version: followUpVersion,
+          message: `Follow-up failed: ${err.message}`
+        });
+        return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
+      }
+
+      const { result, durationMs } = runResult;
+
+      // Thread ID mismatch check
+      if (followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity.sessionId) {
+        const mismatchMsg = `Resumed thread ID mismatch: expected ${followUpContinuity.sessionId}, got ${result.sessionId}`;
+        options.output.stepFailed({
+          kind: 'follow-up',
+          skillId: followUpSkillId,
+          version: followUpVersion,
+          message: mismatchMsg
+        });
+        return emitFinalSummary(false, 'unknown', mismatchMsg, lastAuditPath);
+      }
 
       if (stepFailed(result, false)) {
         if (result.error?.kind === 'auth') {
@@ -669,16 +1058,18 @@ export async function runLoop(
       const relFollowUpPath = renderPattern(loopSpec.followUpPattern!, { n: followUpVersion, agent: runner.agent });
       const absFollowUpPath = resolve(projectRoot, relFollowUpPath);
       let followUpOutcome: FollowUpOutcome = 'patched';
+      const mode = followUpContinuity?.mode ?? 'none';
+      const sid = followUpContinuity ? (result.sessionId ?? 'none') : 'none';
       if (existsSync(absFollowUpPath)) {
         const body = readFileSync(absFollowUpPath, 'utf-8');
         followUpOutcome = parseFollowUpOutcome(body);
-        writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs));
+        writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs, mode, sid));
       }
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
         version: followUpVersion, status: 'done', outcome: followUpOutcome,
         artifactPath: absFollowUpPath, mtime: Date.now(), durationMs,
-        sessionMode: 'none', sessionId: 'none'
+        sessionMode: mode, sessionId: sid
       });
 
       options.output.stepSucceeded({
@@ -688,6 +1079,48 @@ export async function runLoop(
         message: `Follow-up completed successfully`
       });
       pendingFollowUp = false;
+
+      if (pendingAction?.oneOff && pendingAction.stage === 'follow-up') {
+        pendingAction = null;
+        const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop');
+        if (options.interactive) {
+          await resolveUpfrontRunners(nextAction, nextPhase, loopSpec);
+        }
+        if (nextAction.id === 'stop') {
+          const latestAudit = latestAuditStep();
+          const relPath = latestAudit?.artifactPath ? relative(projectRoot, latestAudit.artifactPath) : 'none';
+          return emitFinalSummary(latestAudit?.verdict === 'APPROVED', latestAudit?.verdict || null, `awaiting your review: ${relPath}`, latestAudit?.artifactPath ?? null);
+        } else if (nextAction.id === 'implement') {
+          const implementLoopSpec = config.manifest.loops['implement'];
+          if (!implementLoopSpec) {
+            throw new Error("Loop 'implement' not found in manifest");
+          }
+          const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
+          const implementRunners: Record<string, Runner> = {};
+          if (options.interactive) {
+            const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
+            Object.assign(implementRunners, prompted);
+          } else {
+            const skill = config.manifest.skills[implementLoopSpec.implement!];
+            implementRunners[implementLoopSpec.implement!] = {
+              agent: skill.agent,
+              model: skill.model
+            };
+          }
+          return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+        } else {
+          pendingAction = nextAction;
+          chainMode = nextAction.group !== 'run-one-step';
+          if (nextAction.stage === 'follow-up') {
+            N = nextAction.version + 1;
+            pendingFollowUp = true;
+          } else {
+            N = nextAction.version;
+            pendingFollowUp = false;
+          }
+          continue;
+        }
+      }
     }
 
     // --- Step B: Audit ---
@@ -696,6 +1129,40 @@ export async function runLoop(
     if (!auditSkill) {
       throw new Error(`Audit skill '${auditSkillId}' not found in manifest`);
     }
+    let auditPolicy: SessionPolicy = 'new';
+    if (upfrontPolicies.has(auditSkillId)) {
+      auditPolicy = upfrontPolicies.get(auditSkillId)!;
+    } else if (pendingAction) {
+      if (typeof pendingAction.sessionPolicy === 'object') {
+        auditPolicy = pendingAction.sessionPolicy.audit;
+      } else {
+        auditPolicy = pendingAction.sessionPolicy;
+      }
+    }
+
+    if (!upfrontResolved.has(auditSkillId)) {
+      if (auditPolicy === 'resumed') {
+        const provider = pendingAction?.provider;
+        const model = pendingAction?.model;
+        if (provider && model) {
+          if (!config.registry.providers[provider]) {
+            throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
+          }
+          const allowedModels = config.registry.providers[provider] || [];
+          let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
+          if (!resolvedModel) {
+            if (isValidModelForAgent(provider, model, config.registry)) {
+              resolvedModel = model;
+            }
+          }
+          if (!resolvedModel) {
+            throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
+          }
+          runners[auditSkillId] = { agent: provider, model: resolvedModel };
+        }
+      }
+    }
+
     const runner = runners[auditSkillId];
     if (!runner) {
       throw new Error(`No runner resolved for audit skill '${auditSkillId}'`);
@@ -709,51 +1176,59 @@ export async function runLoop(
 
     let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
 
-    const isContinuityEnabledForAgent = (
-      (options.auditContinuity === 'codex-resume' && runner.agent === 'codex') ||
-      (options.auditContinuity === 'opencode-resume' && runner.agent === 'opencode') ||
-      (options.auditContinuity === 'claude-resume' && runner.agent === 'claude')
-    );
-
-    if (isContinuityEnabledForAgent && !isSecondOpinion) {
-      const priorAudit = latestAuditStep();
-      const hasApprovedPriorAudit = priorAudit?.verdict === 'APPROVED';
-      const isFirstAuditOfChain = (N === 1 && options.startPoint !== 'resume') || options.startPoint === 'new-round' || isSecondOpinion || hasApprovedPriorAudit;
-
-      if (isFirstAuditOfChain) {
-        continuity = { mode: 'fresh' };
+    if (deriveContinuity(runner.agent)) {
+      if (auditPolicy === 'resumed') {
+        const planScanForPhase = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
+        const stopAtApproved = !pendingAction || pendingAction.id !== 'continue' || planScanForPhase.latestVerdict !== 'APPROVED';
+        const walkSession = findResumableSession(steps, ['audit'], runner.agent, runner.model, { stopAtApproved });
+        if (walkSession) {
+          continuity = { mode: 'resumed', sessionId: walkSession.sessionId };
+        } else {
+          options.output.warn(`resumed requested for audit but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+          continuity = { mode: 'fresh' };
+        }
       } else {
-        let priorSessionId: string | 'none' = 'none';
-        for (let i = steps.length - 1; i >= 0; i--) {
-          const s = steps[i]!;
-          if (s.kind === 'audit') {
-            if (s.verdict === 'APPROVED') {
-              break;
-            }
-            if (s.agent === runner.agent && s.sessionId && s.sessionId !== 'none') {
-              priorSessionId = s.sessionId;
-              break;
-            }
-          }
-        }
-        if (priorSessionId === 'none') {
-          throw new Error(`Error: --${runner.agent === 'codex' ? 'codex-audit' : 'audit'}-continuity is enabled but no prior ${runner.agent === 'codex' ? 'Codex' : runner.agent} session ID was found in loop history.`);
-        }
-        continuity = { mode: 'resumed', sessionId: priorSessionId };
+        continuity = { mode: 'fresh' };
       }
     }
 
     const prompt = preparePrompt(auditSkillId, auditSkill, N, runner, 'audit');
-    const { result, durationMs } = await runAdapter(
-      runner,
-      prompt,
-      `Spawning ${runner.agent} for audit v${N}...`,
-      'audit',
-      auditSkillId,
-      N,
-      iteration + 1,
-      continuity
-    );
+
+    let runResult: { result: RunResult; durationMs: number };
+    try {
+      runResult = await runAdapter(
+        runner,
+        prompt,
+        `Spawning ${runner.agent} for audit v${N}...`,
+        'audit',
+        auditSkillId,
+        N,
+        iteration + 1,
+        continuity
+      );
+    } catch (err: any) {
+      options.output.stepFailed({
+        kind: 'audit',
+        skillId: auditSkillId,
+        version: N,
+        message: `Audit failed: ${err.message}`
+      });
+      return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
+    }
+
+    const { result, durationMs } = runResult;
+
+    // Thread ID mismatch check
+    if (continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity.sessionId) {
+      const mismatchMsg = `Resumed thread ID mismatch: expected ${continuity.sessionId}, got ${result.sessionId}`;
+      options.output.stepFailed({
+        kind: 'audit',
+        skillId: auditSkillId,
+        version: N,
+        message: mismatchMsg
+      });
+      return emitFinalSummary(false, 'unknown', mismatchMsg, lastAuditPath);
+    }
 
     if (stepFailed(result, true)) {
       if (result.error?.kind === 'auth') {
@@ -787,7 +1262,6 @@ export async function runLoop(
       message: `Audit execution completed`
     });
 
-    // Retrieve written audit file
     const relOutputPath = renderPattern(loopSpec.auditPattern!, { n: N, agent: runner.agent });
     const absOutputPath = resolve(projectRoot, relOutputPath);
 
@@ -806,9 +1280,9 @@ export async function runLoop(
     }
 
     // Write provenance stamp to audit file
+    const mode = continuity?.mode ?? 'none';
+    const sid = continuity ? (result.sessionId ?? 'none') : 'none';
     if (fileContent !== null) {
-      const mode = continuity?.mode ?? 'none';
-      const sid = continuity ? (result.sessionId ?? 'none') : 'none';
       writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs, mode, sid));
     }
 
@@ -817,66 +1291,55 @@ export async function runLoop(
       kind: 'audit', role: auditSkill.role, agent: runner.agent, model: runner.model,
       version: N, status: 'done', verdict,
       artifactPath: absOutputPath, mtime: Date.now(), durationMs,
-      sessionMode: continuity?.mode ?? 'none',
-      sessionId: continuity ? (result.sessionId ?? 'none') : 'none'
+      sessionMode: mode,
+      sessionId: sid
     });
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
 
-    if (verdict === 'APPROVED') {
-      if (options.interactive) {
-        const selectableAgents = [...options.registry.adapters.keys()]
-          .filter((agent) => agent in config.registry.providers);
-        const alternativeAgents = selectableAgents.filter((agent) => agent !== runner.agent);
-        const hasAlternative = alternativeAgents.length > 0;
+    pendingAction = null; // Clear pending action since it's fully consumed
 
-        let allowedActions: ('stop' | 'run-second-opinion' | 'implement')[] = [];
-        if (loopName === 'plan') {
-          allowedActions = hasAlternative
-            ? ['stop', 'run-second-opinion', 'implement']
-            : ['stop', 'implement'];
-        } else {
-          allowedActions = hasAlternative
-            ? ['stop', 'run-second-opinion']
-            : ['stop'];
-        }
-
-        const choice = await promptSecondOpinionDecision(allowedActions);
-        if (choice === 'stop') {
-          return emitFinalSummary(true, 'APPROVED', `awaiting your review: ${relOutputPath}`, lastAuditPath);
-        } else if (choice === 'implement') {
-          const implementLoopSpec = config.manifest.loops['implement'];
-          if (!implementLoopSpec) {
-            throw new Error("Loop 'implement' not found in manifest");
-          }
-          const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
-          const implementRunners: Record<string, Runner> = {};
-          const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides);
-          Object.assign(implementRunners, prompted);
-          return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, {
-            ...options,
-            startPoint: undefined
-          });
-        } else {
-          // run-second-opinion
-          const newRunner = await promptSecondOpinionRunner(runner.agent, config, options.registry);
-          runners[auditSkillId] = newRunner;
-          N = N + 1;
-          pendingFollowUp = false;
-          isSecondOpinion = true;
-          continue;
-        }
-      } else {
-        // Non-interactive stops immediately on APPROVED
-        return emitFinalSummary(true, 'APPROVED', `awaiting your review: ${relOutputPath}`, lastAuditPath);
+    // Chain mode (START NEW / CONTINUE) keeps cycling on rejection: take the
+    // recommended continuation without re-prompting the action menu. APPROVED,
+    // one-off, and terminal verdicts still prompt normally below.
+    const chainReject = chainMode && verdict === 'REJECTED';
+    const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop', undefined, { autoRecommend: chainReject });
+    if (options.interactive) {
+      await resolveUpfrontRunners(nextAction, nextPhase, loopSpec);
+    }
+    if (nextAction.id === 'stop') {
+      return emitFinalSummary(verdict === 'APPROVED', verdict, `awaiting your review: ${relOutputPath}`, lastAuditPath);
+    } else if (nextAction.id === 'implement') {
+      const implementLoopSpec = config.manifest.loops['implement'];
+      if (!implementLoopSpec) {
+        throw new Error("Loop 'implement' not found in manifest");
       }
+      const implementSkills = implementLoopSpec.implement ? [implementLoopSpec.implement] : [];
+      const implementRunners: Record<string, Runner> = {};
+      if (options.interactive) {
+        const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
+        Object.assign(implementRunners, prompted);
+      } else {
+        const skill = config.manifest.skills[implementLoopSpec.implement!];
+        implementRunners[implementLoopSpec.implement!] = {
+          agent: skill.agent,
+          model: skill.model
+        };
+      }
+      return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
     } else {
-      // REJECTED
-      pendingFollowUp = true;
-      N = N + 1;
+      pendingAction = nextAction;
+      chainMode = nextAction.group !== 'run-one-step';
+      if (nextAction.stage === 'follow-up') {
+        N = nextAction.version + 1;
+        pendingFollowUp = true;
+      } else {
+        N = nextAction.version;
+        pendingFollowUp = false;
+      }
+      continue;
     }
   }
 
-  // Hit max iterations
   return emitFinalSummary(false, 'REJECTED', `hit max-iterations, awaiting human`, lastAuditPath);
 }

@@ -107,7 +107,6 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -134,7 +133,6 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -171,7 +169,6 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -209,7 +206,6 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -238,7 +234,6 @@ describe('loop-level live region — failure transition (v8 audit M1 closure)', 
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false

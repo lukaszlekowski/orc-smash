@@ -1,7 +1,7 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
 import chalk from 'chalk';
-import { formatDurationMs, type PanelContext } from './status.js';
+import { formatDurationMs, formatSessionId, type PanelContext } from './status.js';
 import { roleAccent, statusAccent, panelBorderColor } from './status-accent.js';
 
 export function renderStatusPanel(context: PanelContext): string {
@@ -119,6 +119,7 @@ function renderTimelineSection(context: PanelContext): string {
       s.model,
       resultStr,
       chalk.gray(formatDurationMs(s.durationMs)),
+      formatSessionId(s.sessionId),
       statusStr
     ];
   });
@@ -133,6 +134,7 @@ function renderTimelineSection(context: PanelContext): string {
       context.inFlight.model,
       '\u2014',
       chalk.gray(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
+      '\u2014',
       statusAcc.chalk(statusAcc.label)
     ]);
   }
@@ -142,7 +144,7 @@ function renderTimelineSection(context: PanelContext): string {
   }
 
   const table = new Table({
-    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Time', 'Status'],
+    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Time', 'Session ID', 'Status'],
     style: { head: ['cyan'], border: [] },
     chars: {
       top: '', 'top-mid': '', 'top-left': '', 'top-right': '',

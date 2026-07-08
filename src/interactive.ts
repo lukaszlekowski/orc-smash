@@ -2,6 +2,7 @@ import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
 import { isValidModelForAgent } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
+import type { StageAction } from './stage-menu.js';
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
   return select({
@@ -28,11 +29,29 @@ function invalidModelMessage(agent: string, val: string, registry: Config['regis
   return `model '${val}' is not a valid model for agent '${agent}'`;
 }
 
-export async function promptStartPoint(allowedStartPoints: string[], defaultStartPoint: string): Promise<string> {
+export async function promptStageAction(actions: StageAction[], recommendedId: string): Promise<string> {
+  const choices = actions.map(act => {
+    const isRec = act.id === recommendedId;
+    return {
+      name: isRec ? `${act.label} (recommended)` : act.label,
+      value: act.id,
+      disabled: act.disabledReason
+    };
+  });
+
+  // Flat list, recommended first
+  const recommendedIndex = choices.findIndex(c => c.value === recommendedId);
+  if (recommendedIndex > 0) {
+    const [recChoice] = choices.splice(recommendedIndex, 1);
+    if (recChoice) {
+      choices.unshift(recChoice);
+    }
+  }
+
   return select({
-    message: 'Select a start point:',
-    choices: allowedStartPoints.map(sp => ({ name: sp, value: sp })),
-    default: defaultStartPoint
+    message: 'What would you like to do next?',
+    choices,
+    default: recommendedId
   });
 }
 
@@ -55,7 +74,8 @@ export async function promptRunners(
   skills: string[],
   config: Config,
   agentRegistry: AgentRegistry,
-  globalOverrides: { agent?: string; model?: string } = {}
+  globalOverrides: { agent?: string; model?: string } = {},
+  opts?: { forceSelect?: boolean }
 ): Promise<Record<string, { agent: string; model: string }>> {
   const runners: Record<string, { agent: string; model: string }> = {};
 
@@ -66,7 +86,9 @@ export async function promptRunners(
     throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
   }
 
-  const customize = await confirm({
+  // forceSelect skips the yes/no gate so callers that always want a model list
+  // (e.g. the implement dispatch) bypass the default-and-silently-use path.
+  const customize = opts?.forceSelect || await confirm({
     message: 'Would you like to customize skill runners?',
     default: false
   });
@@ -136,99 +158,4 @@ export async function promptRunners(
   return runners;
 }
 
-export async function promptSecondOpinionDecision(
-  allowedActions: ('stop' | 'run-second-opinion' | 'implement')[]
-): Promise<'stop' | 'run-second-opinion' | 'implement'> {
-  const choices = [];
-  if (allowedActions.includes('stop')) {
-    choices.push({ name: 'Stop and await manual review', value: 'stop' as const });
-  }
-  if (allowedActions.includes('run-second-opinion')) {
-    choices.push({ name: 'Run second opinion (with a different agent)', value: 'run-second-opinion' as const });
-  }
-  if (allowedActions.includes('implement')) {
-    choices.push({ name: 'Run implementation', value: 'implement' as const });
-  }
-  return select({
-    message: 'Audit is APPROVED! What would you like to do?',
-    choices,
-    default: 'stop'
-  });
-}
 
-export async function promptSecondOpinionRunner(
-  currentAgent: string,
-  config: Config,
-  agentRegistry: AgentRegistry
-): Promise<{ agent: string; model: string }> {
-  const selectableAgents = [...agentRegistry.adapters.keys()]
-    .filter((agent) => agent in config.registry.providers);
-
-  if (!selectableAgents.includes(config.registry.defaults.agent)) {
-    throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
-  }
-
-  const alternativeAgents = selectableAgents.filter((agent) => agent !== currentAgent);
-  if (alternativeAgents.length === 0) {
-    throw new Error('No alternative configured and runnable agent available for second opinion.');
-  }
-
-  const recommendedAgent = alternativeAgents[0]!;
-  const recommendedModel =
-    config.registry.providers[recommendedAgent]?.[0] ?? config.registry.defaults.model;
-
-  const customize = await confirm({
-    message: `Configure second opinion runner? (Recommended: ${recommendedAgent} using ${recommendedModel})`,
-    default: false
-  });
-
-  if (!customize) {
-    return { agent: recommendedAgent, model: recommendedModel };
-  }
-
-  const agent = await select({
-    message: 'Select agent for second opinion:',
-    choices: selectableAgents.map(a => ({ name: a, value: a })),
-    default: recommendedAgent
-  });
-
-  const models = config.registry.providers[agent] || [];
-  const modelChoices = models.map(m => ({ name: m, value: m }));
-  modelChoices.push({ name: 'Custom model…', value: 'custom' });
-
-  let defaultModelSelection = config.registry.providers[agent]?.[0] || config.registry.defaults.model;
-  if (!models.includes(defaultModelSelection)) {
-    defaultModelSelection = 'custom';
-  }
-
-  let selectedModel = await select({
-    message: `Select model for agent '${agent}':`,
-    choices: modelChoices,
-    default: defaultModelSelection
-  });
-
-  if (selectedModel === 'custom') {
-    selectedModel = (await input({
-      message: `Enter custom model for agent '${agent}':`,
-      validate: (val) => {
-        if (!isValidModelForAgent(agent, val, config.registry)) {
-          return invalidModelMessage(agent, val, config.registry);
-        }
-        return true;
-      }
-    })).trim();
-  }
-
-  return { agent, model: selectedModel };
-}
-
-export async function promptContinueToReview(): Promise<'stop' | 'review'> {
-  return select({
-    message: 'Implementation complete! What would you like to do next?',
-    choices: [
-      { name: 'Stop and await manual review', value: 'stop' as const },
-      { name: 'Run code review', value: 'review' as const }
-    ],
-    default: 'stop'
-  });
-}

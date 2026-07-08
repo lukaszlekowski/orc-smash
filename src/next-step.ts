@@ -73,25 +73,3 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
   }
 }
 
-export type StartPoint = 'fresh' | 'resume' | 'new-round';
-
-/**
- * Map a next-step decision to the single valid CLI start point for that state.
- * Derived from `resolveNextStep` so the smash command cannot re-derive
- * verdict-to-start-point policy independently.
- *
- * Returns `null` when the state admits no start point (unknown-latest-audit is
- * terminal; the caller errors out before reaching start-point selection).
- */
-export function allowedStartPoint(decision: NextStepDecision): StartPoint | null {
-  switch (decision.state) {
-    case 'fresh':
-      return 'fresh';
-    case 'rejected':
-      return 'resume';
-    case 'approved':
-      return 'new-round';
-    default:
-      return null;
-  }
-}

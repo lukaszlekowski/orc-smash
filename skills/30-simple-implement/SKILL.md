@@ -90,7 +90,12 @@ After all steps are complete:
 
 ## Closeout Checklist
 
-1. Update plan status (`done` / `blocked`) and phase checklists
-2. Record all plan deviations in the plan change log
+The harness owns plan closeout after it validates the implementation ledger.
+Do not edit `docs/dev/plan.md` directly for closeout.
+
+1. Ensure the implementation evidence ledger is complete and accurate
+2. Record all deviations in the ledger so the harness can carry them into the plan change log
+3. Do not update plan status (`done` / `blocked`) yourself
+4. Do not edit the plan change log yourself unless the user explicitly asked for a manual plan repair outside the normal harness flow
 
 Do not declare completion until all five steps are done.
