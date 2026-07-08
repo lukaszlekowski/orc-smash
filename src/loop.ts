@@ -266,7 +266,7 @@ export async function runLoop(
   const completionMessage = (result: RunResult): string =>
     `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
 
-  const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase): Promise<{ action: StageAction; phase: MenuPhase }> => {
+  const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase, opts?: { autoRecommend?: boolean }): Promise<{ action: StageAction; phase: MenuPhase }> => {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
 
     let phase: MenuPhase = 'fresh';
@@ -415,7 +415,7 @@ export async function runLoop(
       }
     }
 
-    if (options.interactive) {
+    if (options.interactive && !opts?.autoRecommend) {
       const chosenId = await promptStageAction(actions, recommendedId);
       const chosen = actions.find(a => a.id === chosenId);
       if (!chosen) {
@@ -908,6 +908,11 @@ export async function runLoop(
   }
 
   let pendingAction: StageAction | null = currentAction;
+  // Chain mode = START NEW or CONTINUE: keep cycling audit -> follow-up -> audit
+  // on rejection without re-prompting the action menu. One-off (run-one-step)
+  // actions return to the menu after their single step. Re-derived whenever the
+  // operator picks a new action below.
+  let chainMode = currentAction.group !== 'run-one-step';
   if (currentAction.stage === 'follow-up') {
     N = currentAction.version + 1;
     pendingFollowUp = true;
@@ -1105,6 +1110,7 @@ export async function runLoop(
           return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
         } else {
           pendingAction = nextAction;
+          chainMode = nextAction.group !== 'run-one-step';
           if (nextAction.stage === 'follow-up') {
             N = nextAction.version + 1;
             pendingFollowUp = true;
@@ -1293,7 +1299,11 @@ export async function runLoop(
 
     pendingAction = null; // Clear pending action since it's fully consumed
 
-    const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop');
+    // Chain mode (START NEW / CONTINUE) keeps cycling on rejection: take the
+    // recommended continuation without re-prompting the action menu. APPROVED,
+    // one-off, and terminal verdicts still prompt normally below.
+    const chainReject = chainMode && verdict === 'REJECTED';
+    const { action: nextAction, phase: nextPhase } = await chooseAction('in-loop', undefined, { autoRecommend: chainReject });
     if (options.interactive) {
       await resolveUpfrontRunners(nextAction, nextPhase, loopSpec);
     }
@@ -1319,6 +1329,7 @@ export async function runLoop(
       return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
     } else {
       pendingAction = nextAction;
+      chainMode = nextAction.group !== 'run-one-step';
       if (nextAction.stage === 'follow-up') {
         N = nextAction.version + 1;
         pendingFollowUp = true;
