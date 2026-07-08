@@ -68,7 +68,7 @@ The codebase is being steered toward these architectural properties:
    - `plan` loops APPROVED verdict offers `stop | run-second-opinion | implement` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
    - `implement` stage complete offers `stop | review` to start code review.
    - `review` loops APPROVED verdict offers `stop | run-second-opinion` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
-6. Each execution step resolves its runner → `prompt-composer` assembles role + skill + inputs → the adapter spawns the agent → versioned output is verified and metadata provenance is written.
+6. Each execution step consumes its resolved runner (resolved up-front in interactive mode) → `prompt-composer` assembles role + skill + inputs → the adapter spawns the agent → versioned output is verified and metadata provenance is written.
 7. `cli.ts` serves as the single process-exit boundary mapping structured `CommandResult` to process exit code.
 
 ## Execution completeness

@@ -3,13 +3,11 @@ import { loadConfig, type Config } from '../config.js';
 import { scan, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
 import { validateAgentAndModel, normalizeModelForAgent } from '../runner.js';
-import { resolveNextStep, allowedStartPoint } from '../next-step.js';
 import {
   promptLoopSelect,
-  promptStartPoint,
-  promptRunners,
   promptMaxIterations
 } from '../interactive.js';
+import { deriveContinuity } from '../stage-menu.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
@@ -48,11 +46,9 @@ interface SmashRunSetup {
   config: Config;
   runners: Record<string, { agent: string; model: string }>;
   maxIterations: number;
-  startPoint?: 'fresh' | 'resume' | 'new-round';
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
-  auditContinuity: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume';
 }
 
 async function resolveSmashRunSetup(
@@ -101,31 +97,14 @@ async function resolveSmashRunSetup(
 
   const loopSpec = config.manifest.loops[loopName]!;
 
-  if (options.auditContinuity && options.codexAuditContinuity) {
-    const msg = `Error: --audit-continuity and --codex-audit-continuity are mutually exclusive.`;
+  // Defensive check for obsolete options passed programmatically (e.g. in tests)
+  if (options.auditContinuity || options.codexAuditContinuity) {
+    const msg = `Error: unknown option ${options.auditContinuity ? '--audit-continuity' : '--codex-audit-continuity'}`;
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  if (options.auditContinuity) {
-    if (loopName !== 'plan' && loopName !== 'review') {
-      const msg = `Error: --audit-continuity is only valid for plan and review loops.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-  }
-
-  if (options.codexAuditContinuity) {
-    if (loopName !== 'plan' && loopName !== 'review') {
-      const msg = `Error: --codex-audit-continuity is only valid for plan and review loops.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-  }
-
-  // 2. Scan state & 3. Start Point selection & validation
-  let startPoint: 'fresh' | 'resume' | 'new-round' | undefined = undefined;
-
+  // 2. Scan state
   if (loopSpec.kind === 'implement') {
     try {
       const planSpec = config.manifest.loops['plan'];
@@ -145,30 +124,6 @@ async function resolveSmashRunSetup(
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
     if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
       const msg = 'latest audit is unparseable; resolve or delete it before smashing';
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-
-    const decision = resolveNextStep({
-      latestVerdict: stateScan.latestVerdict,
-      latestVersion: stateScan.latestVersion,
-      hasAudits: stateScan.auditSteps.length > 0,
-      latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
-    });
-    const allowed = allowedStartPoint(decision);
-
-    if (isInteractive) {
-      const allowedList: string[] = allowed ? [allowed] : [];
-      const defaultSP = allowed ?? 'fresh';
-      const sp = await promptStartPoint(allowedList, defaultSP);
-      startPoint = sp as any;
-    } else {
-      startPoint = allowed ?? 'fresh';
-    }
-
-    const latestVerdict = stateScan.latestVerdict;
-    if (startPoint !== allowed) {
-      const msg = `Error: start-point '${startPoint}' is invalid for latest verdict ${latestVerdict || 'null'}`;
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
@@ -197,35 +152,38 @@ async function resolveSmashRunSetup(
     }
   }
 
-  if (isInteractive) {
-    const promptedRunners = await promptRunners(loopSkills, config, registry, globalOverrides);
-    Object.assign(runners, promptedRunners);
-  } else {
-    for (const skillId of loopSkills) {
-      const skill = config.manifest.skills[skillId];
-      if (!skill) continue;
+  // Interactive implement: defer runner selection to runLoop's implement branch
+  // (promptRunners with forceSelect). Pre-seeding the skill default here would
+  // silence that prompt and silently use the configured default model.
+  // Non-interactive runs and explicit --agent/--model overrides still seed below.
+  const deferImplementToPrompt =
+    isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent;
 
-      let resolvedAgent = skill.agent;
-      let resolvedModel = skill.model;
+  for (const skillId of loopSkills) {
+    if (deferImplementToPrompt) break;
+    const skill = config.manifest.skills[skillId];
+    if (!skill) continue;
 
-      if (globalOverrides.agent) {
-        resolvedAgent = globalOverrides.agent;
-        resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
-      }
+    let resolvedAgent = skill.agent;
+    let resolvedModel = skill.model;
 
-      try {
-        validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
-      } catch (err: any) {
-        const msg = `Error: ${err.message}`;
-        options.output.error(msg);
-        return { errorResult: { exitCode: 1, message: msg } };
-      }
-
-      runners[skillId] = {
-        agent: resolvedAgent,
-        model: normalizeModelForAgent(resolvedAgent, resolvedModel)
-      };
+    if (globalOverrides.agent) {
+      resolvedAgent = globalOverrides.agent;
+      resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
     }
+
+    try {
+      validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
+    } catch (err: any) {
+      const msg = `Error: ${err.message}`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+
+    runners[skillId] = {
+      agent: resolvedAgent,
+      model: normalizeModelForAgent(resolvedAgent, resolvedModel)
+    };
   }
 
   // 5. Max iterations
@@ -241,32 +199,12 @@ async function resolveSmashRunSetup(
     }
   }
 
-  let auditContinuity: 'off' | 'codex-resume' | 'opencode-resume' | 'claude-resume' = 'off';
-
-  if (options.codexAuditContinuity) {
-    const auditSkillId = loopSpec.audit;
-    const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
-    if (!auditRunner || auditRunner.agent !== 'codex') {
-      const msg = `Error: --codex-audit-continuity requires the audit runner to be codex.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-    auditContinuity = 'codex-resume';
-  } else if (options.auditContinuity) {
-    const auditSkillId = loopSpec.audit;
-    const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
-    const agent = auditRunner?.agent;
-    if (!agent || (agent !== 'codex' && agent !== 'opencode' && agent !== 'claude')) {
-      const msg = `Error: --audit-continuity requires the audit runner to be codex, opencode, or claude.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-    if (agent === 'codex') {
-      auditContinuity = 'codex-resume';
-    } else if (agent === 'opencode') {
-      auditContinuity = 'opencode-resume';
-    } else if (agent === 'claude') {
-      auditContinuity = 'claude-resume';
+  const auditSkillId = loopSpec.audit;
+  const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
+  if (auditRunner) {
+    const agentSupportsContinuity = deriveContinuity(auditRunner.agent);
+    if (!agentSupportsContinuity) {
+      options.output.warn(`agent ${auditRunner.agent} does not support session resume.`);
     }
   }
 
@@ -278,11 +216,9 @@ async function resolveSmashRunSetup(
       config,
       runners,
       maxIterations,
-      startPoint,
       globalOverrides,
       isInteractive,
-      registry,
-      auditContinuity
+      registry
     }
   };
 }
@@ -311,12 +247,10 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     try {
       const result = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
         maxIterations: setup.maxIterations,
-        startPoint: setup.startPoint,
         globalOverrides: setup.globalOverrides,
         interactive: setup.isInteractive,
         registry: setup.registry,
-        output: options.output,
-        auditContinuity: setup.auditContinuity
+        output: options.output
       });
 
       if (result.success) {

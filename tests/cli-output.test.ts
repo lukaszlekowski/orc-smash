@@ -64,7 +64,6 @@ describe('Plain mode loop-level integration', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -101,7 +100,6 @@ describe('Plain mode loop-level integration', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 5,
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false
@@ -132,7 +130,6 @@ describe('Plain mode loop-level integration', () => {
       'plan-follow-up': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 2, // hit max iterations early
-      startPoint: 'fresh',
       registry,
       output,
       interactive: false

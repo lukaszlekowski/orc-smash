@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { select, confirm, input } from '@inquirer/prompts';
 import {
   promptRunners,
-  promptSecondOpinionRunner,
-  promptSecondOpinionDecision
+  promptStageAction
 } from '../src/interactive.js';
 import { DEFAULT_REGISTRY } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import type { Config } from '../src/config.js';
+import type { StageAction } from '../src/stage-menu.js';
 
 vi.mock('@inquirer/prompts', () => ({
   select: vi.fn(),
@@ -97,36 +97,22 @@ describe('Interactive registry selection', () => {
     ).rejects.toThrow(/Default agent 'opencode' is not selectable/);
   });
 
-  it('promptSecondOpinionRunner default swap respects configuration', async () => {
-    const config = dummyConfig({
-      opencode: ['opencode-model'],
-      codex: ['codex-model']
-    }, { agent: 'opencode', model: 'opencode-model' });
+  it('promptStageAction returns selected action and sets recommended first', async () => {
+    vi.mocked(select).mockResolvedValueOnce('continue');
 
-    const prodRegistry = createProductionAdapterRegistry();
-    
-    // Non-customized second opinion
-    vi.mocked(confirm).mockResolvedValueOnce(false); 
+    const actions: StageAction[] = [
+      { id: 'start-new-new-session', group: 'start-new', stage: 'audit', version: 1, sessionPolicy: 'new', label: 'Start New', recommended: false },
+      { id: 'continue', group: 'continue', stage: 'audit', version: 1, sessionPolicy: 'resumed', label: 'Continue', recommended: true }
+    ];
 
-    const runner = await promptSecondOpinionRunner('opencode', config, prodRegistry);
-    expect(runner).toEqual({ agent: 'codex', model: 'codex-model' });
-  });
-
-  it('promptSecondOpinionDecision filters allowedActions correctly', async () => {
-    vi.mocked(select).mockResolvedValueOnce('stop');
-    await promptSecondOpinionDecision(['stop', 'implement']);
-
+    const result = await promptStageAction(actions, 'continue');
+    expect(result).toBe('continue');
     expect(vi.mocked(select)).toHaveBeenCalled();
     const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
-    const choiceValues = selectArgs.choices.map((c: any) => c.value);
-    expect(choiceValues).toEqual(['stop', 'implement']);
+    expect(selectArgs.choices[0].value).toBe('continue');
+    expect(selectArgs.choices[0].name).toContain('(recommended)');
   });
 
-  // ---------------------------------------------------------------------
-  // §2 agy agent switching: selecting agy re-defaults to providers.agy[0]
-  // without mutating the global defaults pair, and the custom-model flow
-  // enforces the strict providers.agy allow-list (rejects gpt-5.5 etc.).
-  // ---------------------------------------------------------------------
   it('selecting agy re-defaults to providers.agy[0] and does not mutate global defaults', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
@@ -188,5 +174,24 @@ describe('Interactive registry selection', () => {
     expect(validate('opencode-go/deepseek-v4-flash')).not.toBe(true);
     expect(validate('claude-sonnet-4-6')).not.toBe(true);
     expect(validate('Gemini 3.5 Flash (Medium)')).toBe(true);
+  });
+
+  it('promptRunners with forceSelect bypasses the customize confirm and shows the model list', async () => {
+    const config = dummyConfig({
+      opencode: ['opencode-model'],
+      codex: ['codex-model']
+    }, { agent: 'opencode', model: 'opencode-model' });
+    const prodRegistry = createProductionAdapterRegistry();
+
+    // No confirm mock is set up: forceSelect must short-circuit the gate so the
+    // run never blocks on the "customize skill runners?" yes/no.
+    vi.mocked(select).mockResolvedValueOnce('codex'); // choose agent
+    vi.mocked(select).mockResolvedValueOnce('codex-model'); // choose model
+
+    const runners = await promptRunners(['plan-audit'], config, prodRegistry, {}, { forceSelect: true });
+
+    expect(vi.mocked(confirm)).not.toHaveBeenCalled();
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(2);
+    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
   });
 });
