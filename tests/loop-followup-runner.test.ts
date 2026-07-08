@@ -17,6 +17,7 @@ let mockStageActionChoices: string[] = [];
 let promptStageActionCalls = 0;
 let promptRunnersCalls = 0;
 let promptRunnersSkillsCalled: string[][] = [];
+let promptRunnersOptsCalled: any[] = [];
 let mockPromptRunnersChoice: Record<string, { agent: string; model: string }> = {};
 let mockSessionPolicyOverride: any = null;
 let mockOutputWarnings: string[] = [];
@@ -34,9 +35,10 @@ vi.mock('../src/interactive.js', () => {
       return actionIds.includes(choice) ? choice : recommendedId;
     },
     promptLoopSelect: async () => '',
-    promptRunners: async (skills: string[]) => {
+    promptRunners: async (skills: string[], _config?: any, _registry?: any, _overrides?: any, opts?: any) => {
       promptRunnersCalls++;
       promptRunnersSkillsCalled.push(skills);
+      promptRunnersOptsCalled.push(opts);
       const res: Record<string, any> = {};
       for (const s of skills) {
         res[s] = mockPromptRunnersChoice[s] || { agent: 'fake', model: 'fake' };
@@ -61,13 +63,13 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
   const mockOutput = {
     note: () => {},
     warn: (msg: string) => { mockOutputWarnings.push(msg); },
-    error: () => {},
+    error: (msg: string) => { console.error('ERROR:', msg); },
     iterationStarted: () => {},
     stepStarted: () => {},
     stepSucceeded: () => {},
-    stepFailed: () => {},
+    stepFailed: (ctx: any) => { console.error('STEP FAILED:', ctx); },
     renderPanel: () => {},
-    finalSummary: () => {}
+    finalSummary: (ctx: any) => { console.log('FINAL SUMMARY:', ctx); }
   };
 
   beforeEach(() => {
@@ -80,6 +82,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
     promptStageActionCalls = 0;
     promptRunnersCalls = 0;
     promptRunnersSkillsCalled = [];
+    promptRunnersOptsCalled = [];
     mockPromptRunnersChoice = {};
     mockSessionPolicyOverride = null;
     mockOutputWarnings = [];
@@ -898,9 +901,202 @@ defaults:
       interactive: true
     });
 
-    // Startup prompt + post-audit prompt: the one-off audit must re-prompt on
-    // rejection rather than silently chaining into a follow-up.
     expect(promptStageActionCalls).toBe(2);
     expect(promptRunnersSkillsCalled[0]).toEqual(['plan-audit']);
+  });
+
+  it('(l) forceSelect: true is passed to promptRunners only for continue group', async () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), `# My Plan\n`);
+    const priorMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit' as const, role: 'auditor',
+      version: 1, agent: 'fake', model: 'fake-model', target: 'docs/dev/plan.md',
+      priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z',
+      sessionMode: 'none' as const, sessionId: 'none'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-fake.md'),
+      buildFrontMatter(priorMeta) + `\n## Verdict\nREJECTED\n`
+    );
+
+    mockStageActionChoices = ['continue', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 2,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersOptsCalled[0]?.forceSelect).toBe(true);
+  });
+
+  it('(l2) forceSelect is false or undefined when start-new group is chosen', async () => {
+    mockStageActionChoices = ['start-new-new-session', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 2,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersOptsCalled[0]?.forceSelect).toBeFalsy();
+  });
+
+  it('(l3) forceSelect is false or undefined when run-one-step group is chosen', async () => {
+    mockStageActionChoices = ['run-one-step-audit', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' }
+    };
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 2,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersOptsCalled[0]?.forceSelect).toBeFalsy();
+  });
+
+  it('(m) interactive multi-iteration continue chain preserves follow-up sessionId', async () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), `# My Plan\n`);
+    
+    const priorMeta = {
+      loop: 'plan', skill: 'plan-audit', kind: 'audit' as const, role: 'auditor',
+      version: 1, agent: 'codex', model: 'gpt-5.5', target: 'docs/dev/plan.md',
+      priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z',
+      sessionMode: 'fresh' as const, sessionId: 'sess_audit_prior'
+    };
+    writeFileSync(
+      join(devDir, 'plan-audit-v1-codex.md'),
+      buildFrontMatter(priorMeta) + `\n## Verdict\nREJECTED\n`
+    );
+
+    mockStageActionChoices = ['continue', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-follow-up': { agent: 'codex', model: 'gpt-5.5' }
+    };
+
+    const capturedArgs: string[][] = [];
+    let auditCallCount = 0;
+    let followupCallCount = 0;
+
+    const codexProcessRunner = async (options: ProcessRunOptions): Promise<RawProcessResult> => {
+      capturedArgs.push(options.args);
+      
+      const prompt = options.args[options.args.length - 1] || '';
+      const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
+      const isFollowUp = outputPathMatch?.[1]?.includes('followup');
+      
+      if (outputPathMatch?.[1]) {
+        const absOut = resolve(tempDir, outputPathMatch[1]);
+        mkdirSync(dirname(absOut), { recursive: true });
+        
+        if (isFollowUp) {
+          followupCallCount++;
+          writeFileSync(absOut, `# Plan Follow-up\n\n## Follow-up Outcome\n\npatched\n\nFiles patched: docs/dev/plan.md\n`);
+        } else {
+          auditCallCount++;
+          const verdict = auditCallCount === 1 ? 'REJECTED' : 'APPROVED';
+          writeFileSync(absOut, `# Plan Audit\n\n## Verdict\n${verdict}\n`);
+        }
+      }
+      
+      const isResumed = options.args.includes('resume');
+      let sessionId = 'sess_default';
+      if (isResumed) {
+        sessionId = options.args[options.args.indexOf('resume') + 1]!;
+      } else {
+        sessionId = isFollowUp ? 'sess_followup_abc' : 'sess_audit_new';
+      }
+      
+      return {
+        stdout: codexStdout(sessionId, 'Completed.'),
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        signal: null,
+        durationMs: 50
+      };
+    };
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner });
+
+    const runners = {
+      'plan-audit': { agent: 'codex', model: 'gpt-5.5' },
+      'plan-follow-up': { agent: 'codex', model: 'gpt-5.5' }
+    };
+
+    await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 4,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    const fileContent1 = readFileSync(join(devDir, 'plan-followup-v1-codex.md'), 'utf8');
+    const fileContent2 = readFileSync(join(devDir, 'plan-followup-v2-codex.md'), 'utf8');
+
+    const match1 = fileContent1.match(/sessionId:\s*([^\s\r\n]+)/);
+    const match2 = fileContent2.match(/sessionId:\s*([^\s\r\n]+)/);
+
+    expect(match1).not.toBeNull();
+    expect(match2).not.toBeNull();
+    expect(match1![1]).toBe('sess_followup_abc');
+    expect(match2![1]).toBe('sess_followup_abc');
+
+    expect(capturedArgs[0].includes('resume')).toBe(false);
+    expect(capturedArgs[1].includes('resume')).toBe(true);
+    expect(capturedArgs[1][capturedArgs[1].indexOf('resume') + 1]).toBe('sess_audit_prior');
+    
+    expect(capturedArgs[2].includes('resume')).toBe(true);
+    expect(capturedArgs[2][capturedArgs[2].indexOf('resume') + 1]).toBe('sess_followup_abc');
   });
 });

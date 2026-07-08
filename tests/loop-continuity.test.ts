@@ -45,7 +45,7 @@ describe('Loop Continuity Orchestration', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-continuity-test');
   
   const mockOutput = {
-    note: () => {},
+    note: vi.fn(),
     warn: vi.fn(),
     error: () => {},
     iterationStarted: () => {},
@@ -58,6 +58,7 @@ describe('Loop Continuity Orchestration', () => {
 
   beforeEach(() => {
     createTempDir('temp-loop-continuity-test');
+    mockOutput.note.mockClear();
     mockOutput.warn.mockClear();
     mockStageActionChoices = [];
   });
@@ -290,9 +291,10 @@ describe('Loop Continuity Orchestration', () => {
 
     expect(result.success).toBe(true);
 
+    const notes = mockOutput.note.mock.calls.map(c => c[0]);
     const warnings = mockOutput.warn.mock.calls.map(c => c[0]);
-    expect(warnings.some(w => w.includes('resumed requested for follow-up but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
-    expect(warnings.some(w => w.includes('resumed requested for audit but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
+    expect(notes.some(n => n.includes('resumed requested for follow-up but no prior follow-up steps found; starting fresh.'))).toBe(true);
+    expect(warnings.some(w => w.includes("resumed requested for audit but prior steps carry sessionId 'none'; starting fresh."))).toBe(true);
   });
 
   it('second-opinion audit starts a fresh continuity chain with its own session id; a later audit resumes it', async () => {
@@ -735,8 +737,9 @@ describe('Loop Continuity Orchestration', () => {
 
     expect(result.success).toBe(true);
 
+    const notes = mockOutput.note.mock.calls.map(c => c[0]);
     const warnings = mockOutput.warn.mock.calls.map(c => c[0]);
-    expect(warnings.some(w => w.includes('resumed requested for follow-up but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
+    expect(notes.some(n => n.includes('resumed requested for follow-up but no prior follow-up steps found; starting fresh.'))).toBe(true);
     expect(warnings.some(w => w.includes('resumed requested for audit but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
   });
 
@@ -817,9 +820,10 @@ describe('Loop Continuity Orchestration', () => {
 
     expect(result.success).toBe(true);
 
+    const notes = mockOutput.note.mock.calls.map(c => c[0]);
     const warnings = mockOutput.warn.mock.calls.map(c => c[0]);
-    expect(warnings.some(w => w.includes('resumed requested for follow-up but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
-    expect(warnings.some(w => w.includes('resumed requested for audit but no prior codex/gpt-5.5 session found; starting fresh.'))).toBe(true);
+    expect(notes.some(n => n.includes('resumed requested for follow-up but no prior follow-up steps found; starting fresh.'))).toBe(true);
+    expect(warnings.some(w => w.includes('resumed requested for audit but walk is blocked by an APPROVED-audit boundary; starting fresh.'))).toBe(true);
   });
 
   it('new-round-boundary proof: approved audit state forces fresh audit even with prior session in history', async () => {
