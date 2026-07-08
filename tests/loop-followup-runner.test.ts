@@ -14,6 +14,7 @@ import type { ProcessRunOptions, RawProcessResult } from '../src/adapters/utils.
 const tempDir = join(process.cwd(), 'temp-loop-followup-runner');
 
 let mockStageActionChoices: string[] = [];
+let promptStageActionCalls = 0;
 let promptRunnersCalls = 0;
 let promptRunnersSkillsCalled: string[][] = [];
 let mockPromptRunnersChoice: Record<string, { agent: string; model: string }> = {};
@@ -23,6 +24,7 @@ let mockOutputWarnings: string[] = [];
 vi.mock('../src/interactive.js', () => {
   return {
     promptStageAction: async (actions: any[], recommendedId: string) => {
+      promptStageActionCalls++;
       const choice = mockStageActionChoices.shift() ?? 'stop';
       const found = actions.find(a => a.id === choice);
       if (found && found.id === 'continue' && mockSessionPolicyOverride) {
@@ -75,6 +77,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
     fakeAdapterState.stdout = '';
     fakeAdapterState.writeVerdictFile = true;
     mockStageActionChoices = [];
+    promptStageActionCalls = 0;
     promptRunnersCalls = 0;
     promptRunnersSkillsCalled = [];
     mockPromptRunnersChoice = {};
@@ -137,8 +140,8 @@ defaults:
     );
   }
 
-  it('(a) Fresh START NEW: prompts both up front, reject->continue reuses pair with no extra prompt', async () => {
-    mockStageActionChoices = ['start-new-new-session', 'continue', 'stop'];
+  it('(a) Fresh START NEW: prompts both up front; rejected audit auto-chains into follow-up with no menu re-prompt', async () => {
+    mockStageActionChoices = ['start-new-new-session', 'stop'];
     mockPromptRunnersChoice = {
       'plan-audit': { agent: 'fake', model: 'fake-model-other' },
       'plan-follow-up': { agent: 'fake', model: 'fake-model-other' }
@@ -164,6 +167,9 @@ defaults:
     expect(result.success).toBe(true);
     expect(promptRunnersCalls).toBe(1);
     expect(promptRunnersSkillsCalled[0]).toEqual(['plan-audit', 'plan-follow-up']);
+    // Startup menu prompt + post-approval menu prompt only — no re-prompt after
+    // the rejected audit v1, which auto-chains into follow-up v1 then audit v2.
+    expect(promptStageActionCalls).toBe(2);
 
     const auditV2File = join(tempDir, 'docs/dev/plan-audit-v2-fake.md');
     expect(existsSync(auditV2File)).toBe(true);
@@ -780,5 +786,121 @@ defaults:
 
     // Check that no warning is emitted for the fallback
     expect(mockOutputWarnings.some(w => w.includes('resumed requested for follow-up'))).toBe(false);
+  });
+
+  it('(i) START NEW repeated rejection: cycles audit -> follow-up -> audit with a single action-menu prompt', async () => {
+    // Only the startup prompt is queued; chain mode must keep cycling on rejection
+    // without re-prompting the menu until maxIterations is hit.
+    mockStageActionChoices = ['start-new-new-session'];
+    mockPromptRunnersChoice = {
+      'plan-audit': { agent: 'fake', model: 'fake-model-other' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model-other' }
+    };
+    fakeAdapterState.verdicts = ['REJECTED', 'REJECTED', 'REJECTED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    const result = await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 3,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    // One startup menu prompt only — no re-prompt after any rejected audit.
+    expect(promptStageActionCalls).toBe(1);
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersSkillsCalled[0]).toEqual(['plan-audit', 'plan-follow-up']);
+
+    // The chain cycled: audit v1 -> follow-up v1 -> audit v2 -> follow-up v2 -> audit v3.
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v1-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v2-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v2-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v3-fake.md'))).toBe(true);
+    // No follow-up v3: the third rejection exits at maxIterations before running it.
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v3-fake.md'))).toBe(false);
+
+    // Hit max iterations on a rejection — run ends unsuccessful with REJECTED.
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('REJECTED');
+  });
+
+  it('(j) Rejected-no-followup CONTINUE repeated rejection: cycles follow-up -> audit -> follow-up with a single menu prompt', async () => {
+    writePlanAudit(1, 'REJECTED', 'fake', 'fake-model');
+
+    mockStageActionChoices = ['continue'];
+    mockPromptRunnersChoice = {
+      'plan-follow-up': { agent: 'fake', model: 'fake-model-other' },
+      'plan-audit': { agent: 'fake', model: 'fake-model-other' }
+    };
+    fakeAdapterState.verdicts = ['REJECTED', 'REJECTED', 'REJECTED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    const result = await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 3,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    expect(promptStageActionCalls).toBe(1);
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersSkillsCalled[0]).toEqual(['plan-follow-up', 'plan-audit']);
+
+    // CONTINUE runs follow-up v1 first, then the chain cycles through v2 and v3.
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v1-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v2-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v2-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v3-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-followup-v3-fake.md'))).toBe(true);
+    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v4-fake.md'))).toBe(true);
+
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('REJECTED');
+  });
+
+  it('(k) run-one-step-audit stays one-off: a rejected one-off audit re-prompts the menu instead of auto-chaining', async () => {
+    mockStageActionChoices = ['run-one-step-audit', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-audit': { agent: 'fake', model: 'fake-model-other' }
+    };
+    fakeAdapterState.verdicts = ['REJECTED'];
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createTestAdapterRegistry();
+
+    const runners = {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 1,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    // Startup prompt + post-audit prompt: the one-off audit must re-prompt on
+    // rejection rather than silently chaining into a follow-up.
+    expect(promptStageActionCalls).toBe(2);
+    expect(promptRunnersSkillsCalled[0]).toEqual(['plan-audit']);
   });
 });
