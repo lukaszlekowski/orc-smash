@@ -202,8 +202,8 @@ export function buildStageActions(input: LoopMenuState): { actions: StageAction[
         group: 'continue',
         stage: 'audit',
         version: nextVer,
-        sessionPolicy: 'resumed',
-        label: `CONTINUE CHAIN — resume the APPROVAL session — next: ${auditTerm} v${nextVer} in approval session`,
+        sessionPolicy: { followUp: 'resumed', audit: 'resumed' },
+        label: `CONTINUE CHAIN — resume the APPROVAL session — next: ${auditTerm} v${nextVer} → ${followUpTerm} v${nextVer}`,
         recommended: false,
       });
     }
@@ -288,16 +288,22 @@ export function findResumableSession(
       if (stopAtApproved) {
         return null;
       } else {
-        if (kinds.includes(s.kind) && s.agent === agent && s.model === model && s.sessionId && s.sessionId !== 'none') {
-          return {
-            sessionId: s.sessionId,
-            version: s.version,
-            kind: s.kind,
-            provider: s.agent,
-            model: s.model,
-          };
+        if (s.agent === agent && s.model === model) {
+          if (kinds.includes(s.kind) && s.sessionId && s.sessionId !== 'none') {
+            return {
+              sessionId: s.sessionId,
+              version: s.version,
+              kind: s.kind,
+              provider: s.agent,
+              model: s.model,
+            };
+          }
+          // Same agent/model approved session found, but not of the kind we want (e.g. we want follow-up).
+          // Continue walking backward to find the matching follow-up step in this same session.
+        } else {
+          // Approval session belongs to a different agent/model, so we cannot resume.
+          return null;
         }
-        return null;
       }
     }
 

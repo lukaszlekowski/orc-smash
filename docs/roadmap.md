@@ -230,24 +230,61 @@ Goal: prevent blind retry loops after repeated rejected audits or reviews by add
 
 Follow-ups to the **shipped** unified-action-menu feature (commits `b2a0f01` + `334b9ff`). These are gaps in already-shipped behavior, not new roadmap capability, so they are tracked separately from Batches 5–7 to keep those batches scoped to their themes.
 
+> **Plan status (2026-07-07):** the follow-up plan in `docs/dev/plan.md` is now
+> **approved**. Implementation should treat that plan as the source of truth for Batch 8.
+> The most important late clarification is that approved-phase `continue` is no longer a
+> single audit-only resume: it should continue the full upcoming `audit -> follow-up`
+> segment, prompting only for step kinds that do not already have resumable sessions and
+> re-prompting only after the whole segment completes.
+
 ## Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind
 
-Goal: when a user picks CONTINUE, the runner for each step should be inherited from a prior session of that step kind — and when no such session exists (e.g. the first follow-up of a chain), the harness should not silently substitute the skill's manifest-default model.
+Goal: when a user picks CONTINUE, the harness should treat it as continuation of the
+next whole chain segment, not as a one-step action with hidden defaults. For each step
+in that segment, inherit the runner from a prior session of that step kind when one
+exists; when no such session exists, prompt up front for that step's provider/model
+instead of silently substituting the skill's manifest-default model.
 
-> Current observation: auditing with one model (e.g. `codex/gpt-5.5`) and then selecting CONTINUE on the rejected audit spawns the follow-up on `opencode/opencode-go/deepseek-v4-flash` — the `plan-follow-up` skill's manifest default (`skills.yaml:18-19`, also the global registry default) — with no prompt. The user did not select it and has no chance to.
+> Current observation: auditing with one model (e.g. `codex/gpt-5.5`) and then
+> selecting CONTINUE on the rejected audit can spawn the follow-up on
+> `opencode/opencode-go/deepseek-v4-flash` — the `plan-follow-up` skill's manifest
+> default (`skills.yaml:18-19`, also the global registry default) — with no prompt.
+> Separately, approved-phase `CONTINUE CHAIN — resume the APPROVAL session` can behave
+> like a one-off audit rerun when no resumable session exists, creating a fresh session
+> id, asking for only one runner, and re-prompting immediately after the audit. In both
+> cases the operator is denied coherent up-front control over the whole upcoming chain
+> segment.
 
 **Findings so far:**
 
 - **CONTINUE does not prompt** — by design it inherits provider+model and offers no picker (`src/loop.ts` `chooseAction` + the START NEW / RUN ONE STEP branches are the only ones that call `promptRunners`).
 - **Inheritance is per-step-kind** (unified-action-menu plan invariant 2): the follow-up runner is resolved from prior *follow-up* steps, the audit runner from prior *audit* steps. The audit's model is intentionally not inherited by the follow-up.
 - **On the first follow-up there is no prior follow-up session**, so the inheritance walk (`findResumableSession`) returns nothing. Resolution then falls back to the runner `smash.ts` resolved non-interactively — the skill's manifest default.
-- **The plan's Fallbacks cover the *session*, not the *runner*.** "resumed requested but no prior session → warn + fall back to fresh" governs the session (a fresh run, with a warning). It says nothing about the runner/model, which is silently defaulted. This is the gap.
+- **The same gap affects approved-phase continue semantics.** When approved-phase
+  `continue` has no resumable approval-session audit, the code can fall back to a fresh
+  audit run with a new session id, but the action still behaves like a single audit step
+  instead of a full `audit -> follow-up` segment.
+- **The plan's fallbacks must cover both the *session* and the *runner*.** "resumed
+  requested but no prior session → warn + fall back to fresh" is correct for continuity
+  mode. It is not sufficient for runner selection: the harness must prompt for any step
+  in the segment that lacks its own resumable session instead of silently using the
+  manifest default.
 - **Related:** unified-action-menu review v1 Major-3 (single ownership of runner resolution) and review v2 Minor-B (duplicated backward-walk for CONTINUE runner resolution). This is a distinct edge case in the same area.
 
 **Fix:**
 
-- When CONTINUE is chosen and `findResumableSession` returns null for that step kind, **prompt for the runner** (`promptRunners`) instead of silently substituting the manifest default. Keep the warn-and-fresh behavior for the session.
-- Alternatively, inherit the audit's model for the first follow-up when no follow-up session exists — but that breaks the per-step-kind invariant, so prompting is preferred.
-- Add a loop test: CONTINUE on the first follow-up (no prior follow-up session) prompts for the follow-up runner rather than silently using the manifest default.
+- When CONTINUE is chosen, resolve the full upcoming chain segment up front:
+  rejected-state `continue` resolves `follow-up -> audit` or `audit -> follow-up`
+  depending on phase, and approved-phase `continue` resolves `audit -> follow-up`.
+- For each step kind in that segment, when `findResumableSession` returns null, **prompt
+  for the runner** (`promptRunners`) instead of silently substituting the manifest
+  default. Keep the warn-and-fresh behavior for the session.
+- When one step has a resumable session and the other does not, prompt only for the
+  missing step. When both have resumable sessions, prompt for neither. When neither has a
+  resumable session, prompt for both.
+- Re-prompt only after the whole segment completes, not between the two steps.
+- Add loop tests covering rejected continue, approved continue, mixed inheritance, and
+  no-session cases so the segment never silently degrades into a one-step rerun plus
+  menu prompt.
 
 **Effort:** S.
