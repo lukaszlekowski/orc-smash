@@ -321,6 +321,51 @@ export function findResumableSession(
   return null;
 }
 
+export type ResumableSessionStatus =
+  | 'found'
+  | 'no_steps_of_kind'
+  | 'agent_model_mismatch'
+  | 'blocked_by_approved_boundary'
+  | 'session_id_none';
+
+export type ResumableSessionDetail = {
+  status: ResumableSessionStatus;
+  session?: { sessionId: string; version: number; kind: StepKind; provider: string; model: string };
+};
+
+export function findResumableSessionDetail(
+  steps: Step[],
+  kinds: StepKind[],
+  agent: string,
+  model: string,
+  opts?: { stopAtApproved?: boolean }
+): ResumableSessionDetail {
+  const walk = findResumableSession(steps, kinds, agent, model, opts);
+  if (walk) {
+    return { status: 'found', session: walk };
+  }
+
+  const hasKind = steps.some(s => kinds.includes(s.kind));
+  if (!hasKind) {
+    return { status: 'no_steps_of_kind' };
+  }
+
+  const hasAgentModel = steps.some(s => kinds.includes(s.kind) && s.agent === agent && s.model === model);
+  if (!hasAgentModel) {
+    return { status: 'agent_model_mismatch' };
+  }
+
+  const stopAtApproved = opts?.stopAtApproved !== false;
+  if (stopAtApproved) {
+    const walkWithoutStop = findResumableSession(steps, kinds, agent, model, { stopAtApproved: false });
+    if (walkWithoutStop) {
+      return { status: 'blocked_by_approved_boundary' };
+    }
+  }
+
+  return { status: 'session_id_none' };
+}
+
 export function deriveContinuity(agent: string): boolean {
   return ['codex', 'opencode', 'claude'].includes(agent);
 }

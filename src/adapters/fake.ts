@@ -29,6 +29,7 @@ export const fakeAdapter: AgentAdapter = {
     const isFollowUp = /followup-v\d+-/.test(relativePath);
     const isImplement = /impl-v\d+-/.test(relativePath);
 
+
     const emitStart = () => {
       if (input.onLifecycle && input.skillId && input.version !== undefined) {
         input.onLifecycle({

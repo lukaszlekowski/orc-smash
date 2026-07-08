@@ -22,7 +22,7 @@ import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { debugLoopSpawn } from './debug-spawn.js';
 import { quarantineArtifact, quarantineInterruptedResume, setStepCtx } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
-import { buildStageActions, findResumableSession, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
+import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -555,14 +555,17 @@ export async function runLoop(
 
       if (!inherited) {
         skillsToPrompt.push(skillId);
-        if (policy === 'resumed') {
-          upfrontPolicies.set(skillId, 'new');
-        }
       }
     }
 
     if (skillsToPrompt.length > 0) {
-      const prompted = await promptRunners(skillsToPrompt, config, options.registry, options.globalOverrides);
+      const prompted = await promptRunners(
+        skillsToPrompt,
+        config,
+        options.registry,
+        options.globalOverrides,
+        { forceSelect: chosenAction.group === 'continue' }
+      );
       for (const skillId of skillsToPrompt) {
         if (prompted[skillId]) {
           runners[skillId] = prompted[skillId];
@@ -982,11 +985,19 @@ export async function runLoop(
       let followUpContinuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
       if (deriveContinuity(runner.agent)) {
         if (followUpPolicy === 'resumed') {
-          const walkSession = findResumableSession(steps, ['follow-up'], runner.agent, runner.model, { stopAtApproved: true });
-          if (walkSession) {
-            followUpContinuity = { mode: 'resumed', sessionId: walkSession.sessionId };
+          const detail = findResumableSessionDetail(steps, ['follow-up'], runner.agent, runner.model, { stopAtApproved: true });
+          if (detail.status === 'found' && detail.session) {
+            followUpContinuity = { mode: 'resumed', sessionId: detail.session.sessionId };
           } else {
-            options.output.warn(`resumed requested for follow-up but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+            if (detail.status === 'no_steps_of_kind') {
+              options.output.note(`resumed requested for follow-up but no prior follow-up steps found; starting fresh.`);
+            } else if (detail.status === 'agent_model_mismatch') {
+              options.output.warn(`resumed requested for follow-up but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+            } else if (detail.status === 'blocked_by_approved_boundary') {
+              options.output.warn(`resumed requested for follow-up but walk is blocked by an APPROVED-audit boundary; starting fresh.`);
+            } else if (detail.status === 'session_id_none') {
+              options.output.warn(`resumed requested for follow-up but prior steps carry sessionId 'none'; starting fresh.`);
+            }
             followUpContinuity = { mode: 'fresh' };
           }
         } else {
@@ -1180,11 +1191,19 @@ export async function runLoop(
       if (auditPolicy === 'resumed') {
         const planScanForPhase = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
         const stopAtApproved = !pendingAction || pendingAction.id !== 'continue' || planScanForPhase.latestVerdict !== 'APPROVED';
-        const walkSession = findResumableSession(steps, ['audit'], runner.agent, runner.model, { stopAtApproved });
-        if (walkSession) {
-          continuity = { mode: 'resumed', sessionId: walkSession.sessionId };
+        const detail = findResumableSessionDetail(steps, ['audit'], runner.agent, runner.model, { stopAtApproved });
+        if (detail.status === 'found' && detail.session) {
+          continuity = { mode: 'resumed', sessionId: detail.session.sessionId };
         } else {
-          options.output.warn(`resumed requested for audit but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+          if (detail.status === 'no_steps_of_kind') {
+            options.output.note(`resumed requested for audit but no prior audit steps found; starting fresh.`);
+          } else if (detail.status === 'agent_model_mismatch') {
+            options.output.warn(`resumed requested for audit but no prior ${runner.agent}/${runner.model} session found; starting fresh.`);
+          } else if (detail.status === 'blocked_by_approved_boundary') {
+            options.output.warn(`resumed requested for audit but walk is blocked by an APPROVED-audit boundary; starting fresh.`);
+          } else if (detail.status === 'session_id_none') {
+            options.output.warn(`resumed requested for audit but prior steps carry sessionId 'none'; starting fresh.`);
+          }
           continuity = { mode: 'fresh' };
         }
       } else {
