@@ -10,6 +10,15 @@ const EXIT_ALT_SCREEN = '\u001B[?1049l';
 const CURSOR_HOME_CLEAR = '\u001B[H\u001B[2J';
 export const PANEL_RENDER_INTERVAL_MS = 1000;
 
+// Wall-clock prefix for error/log lines so the operator can see when something
+// happened. Kept chalk-free so the plain (piped) output stays machine-readable;
+// panel output wraps it in color at the call site.
+const timestamp = (): string => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}]`;
+};
+
 export interface CliOutput {
   note(message: string): void;
   warn(message: string): void;
@@ -54,6 +63,10 @@ export function createPanelCliOutput(): CliOutput {
   let liveInterval: ReturnType<typeof setInterval> | null = null;
   let liveActive = false;
   let liveSupplier: (() => PanelContext) | null = null;
+  // Errors raised while the alt-screen live region is active are written to the alt
+  // screen and lost on teardown. Buffer them here and flush to the main screen in
+  // finalSummary so every error is visible with a timestamp.
+  const pendingFailures: string[] = [];
 
   const ensureAltScreen = () => {
     if (altScreenActive) {
@@ -96,7 +109,12 @@ export function createPanelCliOutput(): CliOutput {
       console.warn(chalk.yellow(`Warning: ${message}`));
     },
     error(message: string) {
-      console.error(chalk.red(`Error: ${message}`));
+      const line = `Error: ${message}`;
+      if (liveActive) {
+        pendingFailures.push(line);
+      } else {
+        console.error(chalk.red(`${timestamp()} ${line}`));
+      }
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
       // iteration started hook
@@ -124,14 +142,15 @@ export function createPanelCliOutput(): CliOutput {
     },
     stepFailed(ctx) {
       if (liveActive) {
-        console.error(chalk.red(ctx.message));
+        // alt screen is discarded on teardown — buffer for a main-screen flush.
+        pendingFailures.push(ctx.message);
         return;
       }
       if (spinner) {
-        spinner.fail(chalk.red(ctx.message));
+        spinner.fail(chalk.red(`${timestamp()} ${ctx.message}`));
         spinner = null;
       } else {
-        console.error(chalk.red(ctx.message));
+        console.error(chalk.red(`${timestamp()} ${ctx.message}`));
       }
     },
     renderPanel(context: PanelContext) {
@@ -140,10 +159,16 @@ export function createPanelCliOutput(): CliOutput {
     finalSummary(ctx) {
       detach();
       restoreMainScreen();
+      // Flush errors that were raised during the live region (alt screen) so they
+      // survive on the main screen with a timestamp instead of being discarded.
+      for (const failure of pendingFailures) {
+        console.error(chalk.red(`${timestamp()} ${failure}`));
+      }
+      pendingFailures.length = 0;
       if (ctx.success) {
-        console.log(chalk.bold.green(`\nSuccess: ${ctx.message}`));
+        console.log(chalk.bold.green(`\n${timestamp()} Success: ${ctx.message}`));
       } else {
-        console.log(chalk.bold.red(`\nLoop terminated: ${ctx.message}`));
+        console.log(chalk.bold.red(`\n${timestamp()} Loop terminated: ${ctx.message}`));
       }
     },
     attachLiveRegion(supplier: () => PanelContext) {
@@ -179,7 +204,7 @@ export function createPlainCliOutput(): CliOutput {
       console.warn(`Warning: ${message}`);
     },
     error(message: string) {
-      console.error(`Error: ${message}`);
+      console.error(`${timestamp()} Error: ${message}`);
     },
     iterationStarted(ctx) {
       console.log(`Iteration ${ctx.iteration}/${ctx.maxIterations} started`);
@@ -191,7 +216,7 @@ export function createPlainCliOutput(): CliOutput {
       console.log(`Step ${ctx.kind} version ${ctx.version}: succeeded`);
     },
     stepFailed(ctx) {
-      console.log(`Step ${ctx.kind} version ${ctx.version}: failed (error: ${ctx.errorKind ?? 'unknown'})`);
+      console.log(`${timestamp()} Step ${ctx.kind} version ${ctx.version}: failed (error: ${ctx.errorKind ?? 'unknown'})`);
     },
     renderPanel(context: PanelContext) {
       const simplified = {
@@ -221,9 +246,9 @@ export function createPlainCliOutput(): CliOutput {
     },
     finalSummary(ctx) {
       if (ctx.success) {
-        console.log(`Success: ${ctx.message} (Verdict: ${ctx.verdict}, Path: ${ctx.lastAuditPath})`);
+        console.log(`${timestamp()} Success: ${ctx.message} (Verdict: ${ctx.verdict}, Path: ${ctx.lastAuditPath})`);
       } else {
-        console.log(`Loop terminated: ${ctx.message} (Verdict: ${ctx.verdict})`);
+        console.log(`${timestamp()} Loop terminated: ${ctx.message} (Verdict: ${ctx.verdict})`);
       }
     },
     attachLiveRegion: () => {},

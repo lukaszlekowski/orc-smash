@@ -74,7 +74,8 @@ export async function promptRunners(
   skills: string[],
   config: Config,
   agentRegistry: AgentRegistry,
-  globalOverrides: { agent?: string; model?: string } = {}
+  globalOverrides: { agent?: string; model?: string } = {},
+  opts?: { forceSelect?: boolean }
 ): Promise<Record<string, { agent: string; model: string }>> {
   const runners: Record<string, { agent: string; model: string }> = {};
 
@@ -85,7 +86,9 @@ export async function promptRunners(
     throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
   }
 
-  const customize = await confirm({
+  // forceSelect skips the yes/no gate so callers that always want a model list
+  // (e.g. the implement dispatch) bypass the default-and-silently-use path.
+  const customize = opts?.forceSelect || await confirm({
     message: 'Would you like to customize skill runners?',
     default: false
   });

@@ -152,7 +152,15 @@ async function resolveSmashRunSetup(
     }
   }
 
+  // Interactive implement: defer runner selection to runLoop's implement branch
+  // (promptRunners with forceSelect). Pre-seeding the skill default here would
+  // silence that prompt and silently use the configured default model.
+  // Non-interactive runs and explicit --agent/--model overrides still seed below.
+  const deferImplementToPrompt =
+    isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent;
+
   for (const skillId of loopSkills) {
+    if (deferImplementToPrompt) break;
     const skill = config.manifest.skills[skillId];
     if (!skill) continue;
 
