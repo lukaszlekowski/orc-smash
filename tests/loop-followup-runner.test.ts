@@ -718,4 +718,67 @@ defaults:
     // Check that follow-up v2 runs fresh and does not emit a warning
     expect(mockOutputWarnings.some(w => w.includes('resumed requested for follow-up'))).toBe(false);
   });
+
+  it('(b6) Approved-phase CONTINUE with a provider that lacks resumable-session capability: prompts fresh, no warning emitted', async () => {
+    // 1. Seed plan-audit-v1 as APPROVED with codex
+    const meta = makeArtifactMeta({ version: 1, loop: 'plan', skill: 'plan-audit', kind: 'audit', agent: 'codex', model: 'gpt-5.5', sessionId: 'sess_approved_audit', sessionMode: 'fresh' });
+    writeFileSync(
+      join(tempDir, `docs/dev/plan-audit-v1-codex.md`),
+      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
+    );
+
+    mockStageActionChoices = ['continue', 'stop'];
+    mockPromptRunnersChoice = {
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' } // select fake (no continuity capability) for follow-up
+    };
+    fakeAdapterState.verdicts = ['APPROVED']; // subsequent audit v3 will approve
+
+    // Set up codex process runner to mock the audit v2 execution
+    let auditCallCount = 0;
+    const codexProcessRunner = async (options: ProcessRunOptions): Promise<RawProcessResult> => {
+      const isResumed = options.args.includes('resume');
+      const sessionId = isResumed ? options.args[options.args.indexOf('resume') + 1] : 'sess_new';
+      const prompt = options.args[options.args.length - 1] || '';
+      const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
+      if (outputPathMatch?.[1]) {
+        const absOut = resolve(tempDir, outputPathMatch[1]);
+        mkdirSync(dirname(absOut), { recursive: true });
+        auditCallCount++;
+        const verdict = auditCallCount === 1 ? 'REJECTED' : 'APPROVED';
+        writeFileSync(absOut, `# Plan Audit\n\n## Verdict\n${verdict}\n`);
+      }
+      return {
+        stdout: codexStdout(sessionId, 'Completed.'),
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        signal: null,
+        durationMs: 50
+      };
+    };
+
+    const config = loadConfig(tempDir);
+    const planSpec = config.manifest.loops['plan']!;
+    const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner });
+    registry.adapters.set('fake', fakeAdapter);
+
+    const runners = {
+      'plan-audit': { agent: 'codex', model: 'gpt-5.5' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    };
+
+    const result = await runLoop(tempDir, 'plan', planSpec, config, runners, {
+      maxIterations: 5,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    expect(result.success).toBe(true);
+    expect(promptRunnersCalls).toBe(1);
+    expect(promptRunnersSkillsCalled[0]).toEqual(['plan-follow-up']); // prompted since fake agent lacks continuity capability
+
+    // Check that no warning is emitted for the fallback
+    expect(mockOutputWarnings.some(w => w.includes('resumed requested for follow-up'))).toBe(false);
+  });
 });
