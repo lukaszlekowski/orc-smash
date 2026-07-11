@@ -61,7 +61,7 @@ The codebase is being steered toward these architectural properties:
 
 ## Data flow — one `orc smash` run
 
-1. `config` assembles the packaged provider catalogues (`config/providers/*.yaml`), global registry settings (`config/registry.yaml`), and optional compatible `orc.config.yaml` overrides before loading `skills.yaml`. Model registry validations verify that every skill's model is valid.
+1. `config` assembles packaged provider catalogues (`config/providers/*.yaml`), runner profiles (`config/runners.yaml`), and timeout settings (`config/registry.yaml`) before loading `skills.yaml`. Each catalogue owns its `models` list and `defaultModel`; manifest skills name only a runner profile.
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
 3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
 4. `loop` drives the loop execution:

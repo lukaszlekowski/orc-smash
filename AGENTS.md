@@ -30,7 +30,7 @@ itself.
 
 ## 2. Runners are per-skill; four real adapters behind one seam
 
-- Each skill declares its own default `agent`/`model`; the operator can override any skill's
+- Each skill declares a `runnerProfile` that selects its default provider; the provider catalogue supplies its default model. The operator can override any skill's
   runner per run. Different skills in one loop may run on different CLIs/models. On a `CONTINUE`
   runner per run. Different skills in one loop may run on different CLIs/models. On interactive actions,
   the operator selects the full upcoming pair of runners up front, with subsequent steps reusing the
@@ -39,9 +39,9 @@ itself.
   adapters** (no stubs); `fake` is a deterministic no-spawn adapter for tests.
 - Agent and model are a **coupled pair** (each CLI has its own model-id namespace). Runner
   precedence per skill: interactive per-skill pick > `--agent`/`--model` (run-wide) > skill
-  manifest default > `.env` default. **Changing an agent re-defaults its model** to that
-  agent's default model (`registry.providers.<agent>[0]`; the global `defaults.agent/model`
-  pair is never mutated). `runner.ts` resolves this; `loop.ts` selects the adapter **per step**
+  runner profile > provider default model. **Changing an agent re-defaults its model** to that
+  agent's catalogue default (`registry.providers.<agent>.defaultModel`; catalogues and profiles
+  are never mutated). `runner.ts` resolves this; `loop.ts` selects the adapter **per step**
   from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
   excludes `fake`, which is only available in the test registry (`testing.ts`).
 - **Audit filenames follow the skill's convention** `docs/dev/<type>-v{n}-{agent}.md`

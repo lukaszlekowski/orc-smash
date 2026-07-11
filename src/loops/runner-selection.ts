@@ -8,8 +8,9 @@ export function resolveRecordedRunner(
   agent: string,
   model: string
 ): Runner | null {
-  const allowedModels = registry.providers[agent];
-  if (!allowedModels) return null;
+  const catalogue = registry.providers[agent];
+  if (!catalogue) return null;
+  const allowedModels = catalogue.models;
 
   const configuredModel = allowedModels.find(candidate => candidate === model || candidate.endsWith(`/${model}`));
   if (configuredModel) return { agent, model: configuredModel };

@@ -536,7 +536,7 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     };
 
     vi.spyOn(configModule, 'loadConfig').mockReturnValue({
-      registry: { providers: { fake: ['fake-model'] }, defaults: { agent: 'fake', model: 'fake-model' } },
+      registry: { providers: { fake: { models: ['fake-model'], defaultModel: 'fake-model' } }, defaultProfile: 'default', profiles: { default: { provider: 'fake' } } },
       manifest: customManifest as any
     });
 

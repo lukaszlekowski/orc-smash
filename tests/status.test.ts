@@ -73,8 +73,8 @@ describe('assembleNextStepMessage', () => {
   const manifest: Manifest = {
     roles: { auditor: 'r.md', planner: 'p.md' },
     skills: {
-      'plan-audit': { file: 's.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake-model' },
-      'plan-follow-up': { file: 's2.md', role: 'planner', kind: 'follow-up', agent: 'fake', model: 'fake-model' }
+      'plan-audit': { file: 's.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit' },
+      'plan-follow-up': { file: 's2.md', role: 'planner', kind: 'follow-up', runnerProfile: 'follow-up' }
     },
     loops: { plan: loopSpec }
   };
@@ -125,7 +125,7 @@ describe('assembleNextStepMessage', () => {
     const implManifest: Manifest = {
       roles: { implementer: 'r.md' },
       skills: {
-        '30-simple-implement': { file: 's.md', role: 'implementer', kind: 'implement', agent: 'fake', model: 'fake-model' }
+        '30-simple-implement': { file: 's.md', role: 'implementer', kind: 'implement', runnerProfile: 'implement' }
       },
       loops: { implement: implementLoopSpec }
     };

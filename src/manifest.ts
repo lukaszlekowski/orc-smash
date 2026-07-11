@@ -2,7 +2,6 @@ import { z } from 'zod';
 import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 import type { ModelRegistry } from './config.js';
-import { isValidModelForAgent } from './runner.js';
 
 export const InputSourceSchema = z.enum([
   'target',
@@ -26,9 +25,8 @@ export const SkillSchema = z.object({
   file: z.string(),
   role: z.string(),
   kind: z.enum(['audit', 'follow-up', 'implement']),
-  agent: z.string(),
-  model: z.string()
-});
+  runnerProfile: z.string()
+}).strict();
 
 export type SkillSpec = z.infer<typeof SkillSchema>;
 
@@ -65,11 +63,11 @@ export function buildManifestSchema(registry: ModelRegistry) {
         });
       }
 
-      if (!isValidModelForAgent(skill.agent, skill.model, registry)) {
+      if (!registry.profiles[skill.runnerProfile]) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['skills', skillId, 'model'],
-          message: `Skill '${skillId}' model '${skill.model}' is not a registered model for agent '${skill.agent}'.`
+          path: ['skills', skillId, 'runnerProfile'],
+          message: `Skill '${skillId}' references unknown runner profile '${skill.runnerProfile}'.`
         });
       }
     }

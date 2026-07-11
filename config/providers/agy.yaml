@@ -1,3 +1,4 @@
+defaultModel: Gemini 3.5 Flash (High)
 models:
   - Gemini 3.5 Flash (Medium)
   - Gemini 3.5 Flash (High)

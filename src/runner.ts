@@ -14,10 +14,11 @@ export function isOpencodeModelId(model: string): boolean {
 }
 
 export function isValidModelForAgent(agent: string, model: string, registry: ModelRegistry): boolean {
-  const allowedModels = registry.providers[agent];
-  if (!allowedModels) {
+  const catalogue = registry.providers[agent];
+  if (!catalogue) {
     return false;
   }
+  const allowedModels = catalogue.models;
   if (allowedModels.includes(model)) {
     return true;
   }
@@ -75,20 +76,27 @@ export function resolveRunner(
 
   // 2. Global CLI overrides
   if (globalOverrides.agent || globalOverrides.model) {
-    const resolvedAgent = globalOverrides.agent || config.registry.defaults.agent;
+    const defaultProfile = config.registry.profiles[config.registry.defaultProfile];
+    if (!defaultProfile) throw new Error(`unknown default runner profile '${config.registry.defaultProfile}'`);
+    const resolvedAgent = globalOverrides.agent || defaultProfile.provider;
     let resolvedModel = globalOverrides.model;
     if (!resolvedModel) {
-      resolvedModel = config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
+      resolvedModel = config.registry.providers[resolvedAgent]?.defaultModel;
     }
+    if (!resolvedModel) validateAgentAndModel(resolvedAgent, 'unknown', config.registry);
     validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
     return { agent: resolvedAgent, model: normalizeModelForAgent(resolvedAgent, resolvedModel) };
   }
 
-  // 3. Manifest default
+  // 3. Skill runner profile, then its provider catalogue default.
   const skill = config.manifest.skills[skillId];
   if (skill) {
-    const agent = skill.agent;
-    const model = skill.model;
+    const profile = config.registry.profiles[skill.runnerProfile];
+    if (!profile) throw new Error(`unknown runner profile '${skill.runnerProfile}'`);
+    const agent = profile.provider;
+    const catalogue = config.registry.providers[agent];
+    if (!catalogue) throw new Error(`unknown agent '${agent}'; expected ${Object.keys(config.registry.providers).join(' | ')}`);
+    const model = catalogue.defaultModel;
     validateAgentAndModel(agent, model, config.registry);
     return { agent, model: normalizeModelForAgent(agent, model) };
   }

@@ -51,7 +51,7 @@ Goal: Prevent loops from hanging indefinitely due to external CLI issues and pre
   - `codex exec` waits indefinitely for input on stdin (`Reading additional input from stdin...`) when stdin is piped but not closed (which happens in certain script execution environments).
   - **Verification (2026-07-02): already mitigated on the harness path.** Every spawn goes through `runProcess` with `stdio: ['ignore', 'pipe', 'pipe']` (`src/adapters/utils.ts:107`), so stdin is `/dev/null` (closed) — codex reading stdin gets EOF, not a hang. Drop this sub-issue unless a spawn path that pipes stdin is introduced.
   - `agy` hangs indefinitely when it is unauthenticated or when its local daemon/network connectivity is blocked/unavailable.
-- **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in [orc.config.yaml](/Users/lukasz/softDev-temp/orc-smash/orc.config.yaml), the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
+- **Harness Watchdog Deficiencies:** Because config-only timeouts for `claude`, `codex`, and `agy` default to `0` (disabled) in `config/registry.yaml`, the harness never terminates these stuck runs, causing them to stall silently forever without writing any new files.
 - **Follow-up Validation Gap:** In [loop.ts](/Users/lukasz/softDev-temp/orc-smash/src/loop.ts#L628), the follow-up step runner doesn't assert that the follow-up report (`docs/dev/review-followup-v{n}-{agent}.md`) is created on disk. If it's missing (due to an agent failure or hang), the harness silently defaults `followUpOutcome` to `'patched'` and proceeds to the next audit, leaving no follow-up file.
 
 **Fix:**

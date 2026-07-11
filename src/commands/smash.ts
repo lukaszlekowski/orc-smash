@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scan, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
-import { validateAgentAndModel, normalizeModelForAgent } from '../runner.js';
+import { resolveRunner } from '../runner.js';
 import {
   promptLoopSelect,
   promptMaxIterations
@@ -140,50 +140,23 @@ async function resolveSmashRunSetup(
     model: options.model
   };
 
-  if (globalOverrides.agent || globalOverrides.model) {
-    try {
-      const resolvedAgent = globalOverrides.agent || config.registry.defaults.agent;
-      const resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
-      validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
-    } catch (err: any) {
-      const msg = `Error: ${err.message}`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-  }
-
   // Interactive implement: defer runner selection to runLoop's implement branch
   // (promptRunners with forceSelect). Pre-seeding the skill default here would
   // silence that prompt and silently use the configured default model.
   // Non-interactive runs and explicit --agent/--model overrides still seed below.
   const deferImplementToPrompt =
-    isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent;
+    isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent && !globalOverrides.model;
 
   for (const skillId of loopSkills) {
     if (deferImplementToPrompt) break;
-    const skill = config.manifest.skills[skillId];
-    if (!skill) continue;
-
-    let resolvedAgent = skill.agent;
-    let resolvedModel = skill.model;
-
-    if (globalOverrides.agent) {
-      resolvedAgent = globalOverrides.agent;
-      resolvedModel = globalOverrides.model || config.registry.providers[resolvedAgent]?.[0] || config.registry.defaults.model;
-    }
-
     try {
-      validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
+      runners[skillId] = resolveRunner(skillId, config, globalOverrides);
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
 
-    runners[skillId] = {
-      agent: resolvedAgent,
-      model: normalizeModelForAgent(resolvedAgent, resolvedModel)
-    };
   }
 
   // 5. Max iterations

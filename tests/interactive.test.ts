@@ -18,7 +18,11 @@ vi.mock('@inquirer/prompts', () => ({
 
 describe('Interactive registry selection', () => {
   const dummyConfig = (providers: Record<string, string[]>, defaults: { agent: string; model: string }): Config => ({
-    registry: { providers, defaults },
+    registry: {
+      providers: Object.fromEntries(Object.entries(providers).map(([provider, models]) => [provider, { models, defaultModel: models[0]! }])),
+      defaultProfile: 'default',
+      profiles: { default: { provider: defaults.agent } }
+    },
     manifest: {
       roles: { auditor: 'roles/auditor.md' },
       skills: {
@@ -26,8 +30,7 @@ describe('Interactive registry selection', () => {
           file: 'skills/plan-audit/SKILL.md',
           role: 'auditor',
           kind: 'audit',
-          agent: 'opencode',
-          model: 'opencode-go/deepseek-v4-flash'
+          runnerProfile: 'default'
         }
       },
       loops: {}
@@ -85,7 +88,7 @@ describe('Interactive registry selection', () => {
     expect(choices).toContain('fake');
   });
 
-  it('throws error if defaults.agent is not in selectable agents', async () => {
+  it('throws error if default profile provider is not selectable', async () => {
     const config = dummyConfig({
       codex: ['codex-model']
     }, { agent: 'opencode', model: 'opencode-model' }); // opencode has adapter but not configured
@@ -94,7 +97,7 @@ describe('Interactive registry selection', () => {
     
     await expect(
       promptRunners(['plan-audit'], config, prodRegistry)
-    ).rejects.toThrow(/Default agent 'opencode' is not selectable/);
+    ).rejects.toThrow(/Default profile provider 'opencode' is not selectable/);
   });
 
   it('promptStageAction returns selected action and sets recommended first', async () => {
@@ -126,8 +129,8 @@ describe('Interactive registry selection', () => {
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
     expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
     // Global defaults pair is untouched.
-    expect(config.registry.defaults.agent).toBe('opencode');
-    expect(config.registry.defaults.model).toBe('opencode-model');
+    expect(config.registry.profiles.default.provider).toBe('opencode');
+    expect(config.registry.providers.opencode.defaultModel).toBe('opencode-model');
   });
 
   it('agy model choices come from providers.agy (foreign models are not offered)', async () => {

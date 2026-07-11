@@ -1,6 +1,6 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
-import { isValidModelForAgent } from './runner.js';
+import { isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { StageAction } from './stage-menu.js';
 
@@ -23,7 +23,7 @@ function invalidModelMessage(agent: string, val: string, registry: Config['regis
     return `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`;
   }
   if (agent === 'agy') {
-    const example = registry.providers.agy?.[0] ?? 'Gemini 3.5 Flash (Medium)';
+    const example = registry.providers.agy?.models[0] ?? 'Gemini 3.5 Flash (Medium)';
     return `model '${val}' is not a configured agy model; agy accepts only the exact names listed in providers.agy (e.g. ${example})`;
   }
   return `model '${val}' is not a valid model for agent '${agent}'`;
@@ -82,9 +82,11 @@ export async function promptRunners(
   const selectableAgents = [...agentRegistry.adapters.keys()]
     .filter((agent) => agent in config.registry.providers);
 
-  if (!selectableAgents.includes(config.registry.defaults.agent)) {
-    throw new Error(`Default agent '${config.registry.defaults.agent}' is not selectable (not configured or no adapter)`);
+  const defaultProvider = config.registry.profiles[config.registry.defaultProfile]?.provider;
+  if (!defaultProvider || !selectableAgents.includes(defaultProvider)) {
+    throw new Error(`Default profile provider '${defaultProvider ?? config.registry.defaultProfile}' is not selectable (not configured or no adapter)`);
   }
+  const defaultProfileRunner = { agent: defaultProvider, model: config.registry.providers[defaultProvider]!.defaultModel };
 
   // forceSelect skips the yes/no gate so callers that always want a model list
   // (e.g. the implement dispatch) bypass the default-and-silently-use path.
@@ -97,14 +99,9 @@ export async function promptRunners(
     const skill = config.manifest.skills[skillId];
     if (!skill) continue;
 
-    // Use precedence logic to determine default agent/model
-    let defaultAgent = skill.agent;
-    let defaultModel = skill.model;
-
-    if (globalOverrides.agent) {
-      defaultAgent = globalOverrides.agent;
-      defaultModel = globalOverrides.model || config.registry.providers[defaultAgent]?.[0] || config.registry.defaults.model;
-    }
+    const resolved = resolveRunner(skillId, config, globalOverrides);
+    let defaultAgent = resolved.agent;
+    let defaultModel = resolved.model;
 
     if (!customize) {
       runners[skillId] = { agent: defaultAgent, model: defaultModel };
@@ -113,7 +110,7 @@ export async function promptRunners(
 
     let promptDefaultAgent = defaultAgent;
     if (!selectableAgents.includes(promptDefaultAgent)) {
-      promptDefaultAgent = config.registry.defaults.agent;
+      promptDefaultAgent = defaultProfileRunner.agent;
     }
 
     const agent = await select({
@@ -122,13 +119,13 @@ export async function promptRunners(
       default: promptDefaultAgent
     });
 
-    const models = config.registry.providers[agent] || [];
+    const models = config.registry.providers[agent]?.models || [];
     const modelChoices = models.map(m => ({ name: m, value: m }));
     modelChoices.push({ name: 'Custom model…', value: 'custom' });
 
     let defaultModelSelection = defaultModel;
     if (!models.includes(defaultModelSelection)) {
-      defaultModelSelection = config.registry.defaults.model;
+      defaultModelSelection = config.registry.providers[agent]?.defaultModel ?? 'custom';
     }
     if (!models.includes(defaultModelSelection)) {
       defaultModelSelection = models[0] || 'custom';
@@ -157,5 +154,3 @@ export async function promptRunners(
 
   return runners;
 }
-
-
