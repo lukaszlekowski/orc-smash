@@ -78,9 +78,26 @@ export async function promptRunners(
   opts?: { forceSelect?: boolean }
 ): Promise<Record<string, { agent: string; model: string }>> {
   const runners: Record<string, { agent: string; model: string }> = {};
+  const defaultRunners = new Map<string, { agent: string; model: string }>();
+
+  for (const skillId of skills) {
+    if (config.manifest.skills[skillId]) {
+      defaultRunners.set(skillId, resolveRunner(skillId, config, globalOverrides));
+    }
+  }
 
   const selectableAgents = [...agentRegistry.adapters.keys()]
     .filter((agent) => agent in config.registry.providers);
+
+  // Show the exact resolved provider/model pairs before offering to customize
+  // them. These include any CLI override, so accepting the default is never a
+  // blind choice.
+  if (!opts?.forceSelect && defaultRunners.size > 0) {
+    console.log('Default skill runners:');
+    for (const [skillId, runner] of defaultRunners) {
+      console.log(`  ${skillId}: ${runner.agent} (${runner.model})`);
+    }
+  }
 
   // forceSelect skips the yes/no gate so callers that always want a model list
   // (e.g. the implement dispatch) bypass the default-and-silently-use path.
@@ -93,7 +110,7 @@ export async function promptRunners(
     const skill = config.manifest.skills[skillId];
     if (!skill) continue;
 
-    const resolved = resolveRunner(skillId, config, globalOverrides);
+    const resolved = defaultRunners.get(skillId)!;
     let defaultAgent = resolved.agent;
     let defaultModel = resolved.model;
 
