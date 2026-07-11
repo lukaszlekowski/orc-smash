@@ -10,6 +10,22 @@ import type { RawProcessResult, ProcessRunOptions } from '../src/adapters/utils.
 import type { RunInput } from '../src/adapters/types.js';
 import { buildFrontMatter } from '../src/provenance.js';
 
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { createTestConfig } = await import('./helpers/test-config.js');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => createTestConfig({
+      projectRoot,
+      profiles: {
+        audit: { provider: 'codex' },
+        'follow-up': { provider: 'opencode' },
+        implement: { provider: 'opencode' }
+      }
+    })
+  };
+});
+
 let mockStageActionChoices: string[] = [];
 let mockSecondOpinionRunner = { agent: 'codex', model: 'gpt-5.5' };
 
@@ -72,10 +88,6 @@ describe('Loop Continuity Orchestration', () => {
     const devDir = join(root, 'docs/dev');
     mkdirSync(devDir, { recursive: true });
     writeFileSync(join(root, 'docs/dev/plan.md'), `# My Plan\nInitial content.\n`);
-    writeFileSync(
-      join(root, 'orc.config.yaml'),
-      'providers:\n  codex:\n    - gpt-5.5\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  claude:\n    - glm-4.7\ndefaults:\n  agent: codex\n  model: gpt-5.5\n'
-    );
     return root;
   }
 

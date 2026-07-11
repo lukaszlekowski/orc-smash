@@ -49,6 +49,18 @@ vi.mock('../src/interactive.js', () => {
   };
 });
 
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { createTestConfig } = await import('./helpers/test-config.js');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => createTestConfig({
+      projectRoot,
+      fakeModels: ['fake-model', 'fake-model-other']
+    })
+  };
+});
+
 function codexStdout(sessionId: string, text: string) {
   return JSON.stringify({
     type: 'thread.started',
@@ -86,24 +98,6 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
     mockPromptRunnersChoice = {};
     mockSessionPolicyOverride = null;
     mockOutputWarnings = [];
-
-    // Write project-local orc.config.yaml with fake and codex providers
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `
-providers:
-  fake:
-    - fake-model
-    - fake-model-other
-  codex:
-    - gpt-5.5
-  opencode:
-    - opencode-go/deepseek-v4-flash
-defaults:
-  agent: fake
-  model: fake-model
-`
-    );
 
     // Pre-seed plan.md with ready status
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });

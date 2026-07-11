@@ -8,7 +8,7 @@ import { loadManifest, type Manifest } from './manifest.js';
 export interface ModelRegistry {
   providers: Record<string, { models: string[]; defaultModel: string }>;
   defaultProfile: string;
-  profiles: Record<string, { provider: string }>;
+  profiles: Record<string, { provider: string; model?: string }>;
   /**
    * Optional per-agent execution timeouts in ms (`0` disables). Precedence:
    *   - opencode: `OPENCODE_RUN_TIMEOUT_MS` env > `timeouts.opencode` > built-in 600000.
@@ -23,7 +23,7 @@ export const ModelRegistrySchema = z.object({
     defaultModel: z.string()
   }).strict()),
   defaultProfile: z.string(),
-  profiles: z.record(z.string(), z.object({ provider: z.string() }).strict()),
+  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional() }).strict()),
   timeouts: z.object({
     opencode: z.number().int().nonnegative().optional(),
     claude: z.number().int().nonnegative().optional(),
@@ -37,8 +37,11 @@ export const ModelRegistrySchema = z.object({
     }
   }
   for (const [profile, value] of Object.entries(registry.profiles)) {
-    if (!registry.providers[value.provider]) {
+    const catalogue = registry.providers[value.provider];
+    if (!catalogue) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'provider'], message: `Profile '${profile}' names unknown provider '${value.provider}'` });
+    } else if (value.model && !catalogue.models.includes(value.model)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'model'], message: `Profile '${profile}' specifies model '${value.model}' which is not in provider '${value.provider}' catalogue` });
     }
   }
   if (!registry.profiles[registry.defaultProfile]) {
@@ -53,7 +56,7 @@ const ProviderCatalogSchema = z.object({
 
 const RunnersSchema = z.object({
   defaultProfile: z.string(),
-  profiles: z.record(z.string(), z.object({ provider: z.string() }).strict())
+  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional() }).strict())
 }).strict();
 
 const TimeoutsSchema = z.object({
@@ -85,7 +88,9 @@ export function registryTimeoutFor(registry: ModelRegistry, agent: string): numb
   return undefined;
 }
 
-function loadPackagedRegistry(toolRoot: string): ModelRegistry {
+const SUPPORTED_PRODUCTION_PROVIDERS = new Set(['opencode', 'codex', 'claude', 'agy']);
+
+export function loadPackagedRegistry(toolRoot: string): ModelRegistry {
   const configRoot = resolve(toolRoot, 'config');
   const registryPath = resolve(configRoot, 'registry.yaml');
   const runnersPath = resolve(configRoot, 'runners.yaml');
@@ -95,10 +100,20 @@ function loadPackagedRegistry(toolRoot: string): ModelRegistry {
     const global = RegistryTimeoutsSchema.parse(YAML.parse(readFileSync(registryPath, 'utf-8')));
     const runners = RunnersSchema.parse(YAML.parse(readFileSync(runnersPath, 'utf-8')));
     const providers: Record<string, { models: string[]; defaultModel: string }> = {};
+    const seen = new Set<string>();
     for (const file of readdirSync(providersRoot).sort()) {
       if (!file.endsWith('.yaml')) continue;
       const agent = file.slice(0, -'.yaml'.length);
+      if (!SUPPORTED_PRODUCTION_PROVIDERS.has(agent)) {
+        throw new Error(`Unsupported provider file '${file}' in ${providersRoot}; expected one of: ${[...SUPPORTED_PRODUCTION_PROVIDERS].join(', ')}`);
+      }
+      seen.add(agent);
       providers[agent] = ProviderCatalogSchema.parse(YAML.parse(readFileSync(resolve(providersRoot, file), 'utf-8')));
+    }
+    for (const expected of SUPPORTED_PRODUCTION_PROVIDERS) {
+      if (!seen.has(expected)) {
+        throw new Error(`Missing required provider catalogue '${expected}.yaml' in ${providersRoot}`);
+      }
     }
     return ModelRegistrySchema.parse({ providers, ...runners, timeouts: global.timeouts });
   } catch (err: any) {

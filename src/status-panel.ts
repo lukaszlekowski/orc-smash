@@ -28,6 +28,15 @@ export function renderStatusPanel(context: PanelContext): string {
     `Latest version:   v${context.latestVersion}`
   ];
 
+  for (const runner of context.resolvedRunners ?? []) {
+    const source = runner.source === 'inherited' && runner.inheritedFrom
+      ? `inherited from ${runner.inheritedFrom.kind} v${runner.inheritedFrom.version}, session ${formatSessionId(runner.inheritedFrom.sessionId)}`
+      : runner.source === 'selected'
+        ? 'selected this chain'
+        : 'configured for this run';
+    contentLines.push(`Runner (${runner.skillId}): ${chalk.green(`${runner.agent} · ${runner.model}`)} — ${source}`);
+  }
+
   const timelineSection = renderTimelineSection(context);
   contentLines.push('');
   contentLines.push(chalk.bold('Timeline:'));

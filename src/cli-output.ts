@@ -52,6 +52,7 @@ export interface CliOutput {
     verdict: 'APPROVED' | 'REJECTED' | 'unknown' | null;
     message: string;
     lastAuditPath: string | null;
+    details?: string[];
   }): void;
   attachLiveRegion?(supplier: () => PanelContext): void;
   detachLiveRegion?(): void;
@@ -170,6 +171,10 @@ export function createPanelCliOutput(): CliOutput {
       } else {
         console.log(chalk.bold.red(`\n${timestamp()} Loop terminated: ${ctx.message}`));
       }
+      if (ctx.details && ctx.details.length > 0) {
+        console.log(chalk.cyan('Current project snapshot:'));
+        for (const detail of ctx.details) console.log(chalk.gray(`  ${detail}`));
+      }
     },
     attachLiveRegion(supplier: () => PanelContext) {
       if (liveInterval) {
@@ -250,6 +255,7 @@ export function createPlainCliOutput(): CliOutput {
       } else {
         console.log(`${timestamp()} Loop terminated: ${ctx.message} (Verdict: ${ctx.verdict})`);
       }
+      for (const detail of ctx.details ?? []) console.log(`  ${detail}`);
     },
     attachLiveRegion: () => {},
     detachLiveRegion: () => {}

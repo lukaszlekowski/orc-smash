@@ -82,12 +82,6 @@ export async function promptRunners(
   const selectableAgents = [...agentRegistry.adapters.keys()]
     .filter((agent) => agent in config.registry.providers);
 
-  const defaultProvider = config.registry.profiles[config.registry.defaultProfile]?.provider;
-  if (!defaultProvider || !selectableAgents.includes(defaultProvider)) {
-    throw new Error(`Default profile provider '${defaultProvider ?? config.registry.defaultProfile}' is not selectable (not configured or no adapter)`);
-  }
-  const defaultProfileRunner = { agent: defaultProvider, model: config.registry.providers[defaultProvider]!.defaultModel };
-
   // forceSelect skips the yes/no gate so callers that always want a model list
   // (e.g. the implement dispatch) bypass the default-and-silently-use path.
   const customize = opts?.forceSelect || await confirm({
@@ -110,7 +104,14 @@ export async function promptRunners(
 
     let promptDefaultAgent = defaultAgent;
     if (!selectableAgents.includes(promptDefaultAgent)) {
-      promptDefaultAgent = defaultProfileRunner.agent;
+      const defaultProvider = config.registry.profiles[config.registry.defaultProfile]?.provider;
+      if (defaultProvider && selectableAgents.includes(defaultProvider)) {
+        promptDefaultAgent = defaultProvider;
+      } else if (selectableAgents.length > 0) {
+        promptDefaultAgent = selectableAgents[0]!;
+      } else {
+        throw new Error(`No selectable agents available for prompt setup`);
+      }
     }
 
     const agent = await select({

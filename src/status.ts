@@ -33,6 +33,7 @@ export interface PanelContext {
   currentIteration: number;
   maxIterations: number;
   activeSkillRunner: { skillId: string; agent: string; model: string } | null;
+  resolvedRunners?: ResolvedRunnerDisplay[];
   timeline: Step[];
   nextStepMessage: string;
   inFlight: {
@@ -53,6 +54,14 @@ export interface PanelContext {
   readOnly: boolean;
 }
 
+export interface ResolvedRunnerDisplay {
+  skillId: string;
+  agent: string;
+  model: string;
+  source: 'selected' | 'inherited' | 'configured';
+  inheritedFrom?: { kind: StepKind; version: number; sessionId: string };
+}
+
 export function buildPanelContext(
   projectRoot: string,
   loopName: string,
@@ -63,7 +72,8 @@ export function buildPanelContext(
   nextStepMessage: string,
   inFlight: PanelContext['inFlight'] = null,
   latestVersion: number = 0,
-  readOnly: boolean = false
+  readOnly: boolean = false,
+  resolvedRunners: ResolvedRunnerDisplay[] = []
 ): PanelContext {
   return {
     projectRoot,
@@ -71,6 +81,7 @@ export function buildPanelContext(
     currentIteration,
     maxIterations,
     activeSkillRunner,
+    resolvedRunners,
     timeline,
     nextStepMessage,
     inFlight,

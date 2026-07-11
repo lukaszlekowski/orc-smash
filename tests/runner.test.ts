@@ -6,20 +6,39 @@ const config: Config = {
   registry: {
     providers: {
       opencode: { models: ['opencode-go/x'], defaultModel: 'opencode-go/x' },
-      claude: { models: ['claude-x'], defaultModel: 'claude-x' },
+      claude: { models: ['claude-x', 'claude-custom'], defaultModel: 'claude-x' },
       codex: { models: ['gpt-x'], defaultModel: 'gpt-x' },
       agy: { models: ['Gemini'], defaultModel: 'Gemini' },
       fake: { models: ['fake'], defaultModel: 'fake' }
     },
     defaultProfile: 'arbitrary-profile',
-    profiles: { 'arbitrary-profile': { provider: 'opencode' }, other: { provider: 'claude' } }
+    profiles: {
+      'arbitrary-profile': { provider: 'opencode' },
+      other: { provider: 'claude' },
+      exceptional: { provider: 'claude', model: 'claude-custom' },
+      invalidExceptional: { provider: 'claude', model: 'foreign-model' }
+    }
   },
-  manifest: { roles: { auditor: 'a' }, skills: { audit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'other' } }, loops: {} }
+  manifest: {
+    roles: { auditor: 'a' },
+    skills: {
+      audit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'other' },
+      exceptionalAudit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'exceptional' },
+      invalidExceptionalAudit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'invalidExceptional' }
+    },
+    loops: {}
+  }
 };
 
 describe('runner selection', () => {
   it('resolves an arbitrary profile name to its provider default', () => {
     expect(resolveRunner('audit', config)).toEqual({ agent: 'claude', model: 'claude-x' });
+  });
+  it('resolves an exceptional profile to its explicit model', () => {
+    expect(resolveRunner('exceptionalAudit', config)).toEqual({ agent: 'claude', model: 'claude-custom' });
+  });
+  it('throws when resolving a profile with a foreign model', () => {
+    expect(() => resolveRunner('invalidExceptionalAudit', config)).toThrow(/is not a claude model/);
   });
   it('uses CLI agent/model overrides and model-only uses defaultProfile provider', () => {
     expect(resolveRunner('audit', config, { agent: 'codex' })).toEqual({ agent: 'codex', model: 'gpt-x' });

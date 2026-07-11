@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { createTempDir, removeTempDir } from '../helpers/fs.js';
-import { loadConfig } from '../../src/config.js';
+import { createTestConfig } from '../helpers/test-config.js';
 import { createProductionAdapterRegistry } from '../../src/adapters/registry.js';
 import { resolveOpencodeTimeoutMs } from '../../src/adapters/utils.js';
 import type { ProcessRunner, ProcessRunOptions, RawProcessResult } from '../../src/adapters/utils.js';
@@ -29,10 +29,6 @@ describe('config-driven opencode timeout reaches the spawn call site through the
 
   it('project-local timeouts.opencode is forwarded as defaultTimeoutMs to the opencode spawn via the production registry', async () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\ndefaults:\n  agent: opencode\n  model: opencode-go/deepseek-v4-flash\ntimeouts:\n  opencode: 12345\n`
-    );
 
     // Capture the defaultTimeoutMs that the opencode adapter forwards to spawn.
     const captures: { defaultTimeoutMs?: number; resolved: number }[] = [];
@@ -48,9 +44,8 @@ describe('config-driven opencode timeout reaches the spawn call site through the
       return { stdout: '', stderr: '', exitCode: 0 };
     };
 
-    // Same load sequence as src/commands/smash.ts
-    // (loadConfig → createProductionAdapterRegistry(config.registry, { opencodeSpawn })).
-    const config = loadConfig(tempDir);
+    // Same load sequence as src/commands/smash.ts but using createTestConfig directly
+    const config = createTestConfig({ timeouts: { opencode: 12345 } });
     const registry = createProductionAdapterRegistry(config.registry, { opencodeSpawn: spawnSpy });
     const adapter = registry.adapters.get('opencode')!;
     expect(adapter).toBeDefined();
@@ -64,10 +59,6 @@ describe('config-driven opencode timeout reaches the spawn call site through the
 
   it('built-in default (600000) is the fallback when project config has no timeouts block', async () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\ndefaults:\n  agent: opencode\n  model: opencode-go/deepseek-v4-flash\n`
-    );
 
     const captures: { defaultTimeoutMs?: number; resolved: number }[] = [];
     const spawnSpy: OpencodeSpawn = async (
@@ -82,7 +73,7 @@ describe('config-driven opencode timeout reaches the spawn call site through the
       return { stdout: '', stderr: '', exitCode: 0 };
     };
 
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: undefined });
     const registry = createProductionAdapterRegistry(config.registry, { opencodeSpawn: spawnSpy });
     const adapter = registry.adapters.get('opencode')!;
 
@@ -95,10 +86,6 @@ describe('config-driven opencode timeout reaches the spawn call site through the
 
   it('env OPENCODE_RUN_TIMEOUT_MS overrides the configured defaultTimeoutMs at the spawn call site', async () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\ndefaults:\n  agent: opencode\n  model: opencode-go/deepseek-v4-flash\ntimeouts:\n  opencode: 12345\n`
-    );
     process.env['OPENCODE_RUN_TIMEOUT_MS'] = '777';
 
     const captures: { defaultTimeoutMs?: number; resolved: number }[] = [];
@@ -114,7 +101,7 @@ describe('config-driven opencode timeout reaches the spawn call site through the
       return { stdout: '', stderr: '', exitCode: 0 };
     };
 
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: { opencode: 12345 } });
     const registry = createProductionAdapterRegistry(config.registry, { opencodeSpawn: spawnSpy });
     const adapter = registry.adapters.get('opencode')!;
 
@@ -152,13 +139,8 @@ describe('config-driven codex/claude timeouts reach the adapter through the prod
   }
 
   it('configured timeouts.codex reaches the codex adapter as the runner timeoutMs', async () => {
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/x]\n  codex: [gpt-5.4]\ndefaults:\n  agent: opencode\n  model: opencode-go/x\ntimeouts:\n  codex: 4242\n`
-    );
-
     const { runner, captures } = capturingRunner();
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: { codex: 4242 } });
     const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner: runner });
     const adapter = registry.adapters.get('codex')!;
     expect(adapter).toBeDefined();
@@ -172,13 +154,8 @@ describe('config-driven codex/claude timeouts reach the adapter through the prod
   });
 
   it('configured timeouts.claude reaches the claude adapter as the runner timeoutMs', async () => {
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/x]\n  claude: [glm-5.2]\ndefaults:\n  agent: opencode\n  model: opencode-go/x\ntimeouts:\n  claude: 9999\n`
-    );
-
     const { runner, captures } = capturingRunner();
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: { claude: 9999 } });
     const registry = createProductionAdapterRegistry(config.registry, { claudeProcessRunner: runner });
     const adapter = registry.adapters.get('claude')!;
 
@@ -189,13 +166,8 @@ describe('config-driven codex/claude timeouts reach the adapter through the prod
   });
 
   it('codex/claude resolve to disabled (timeoutMs 0) when no timeout is configured', async () => {
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/x]\n  codex: [gpt-5.4]\n  claude: [glm-5.2]\ndefaults:\n  agent: opencode\n  model: opencode-go/x\n`
-    );
-
     const { runner, captures } = capturingRunner();
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: undefined });
     const registry = createProductionAdapterRegistry(config.registry, {
       codexProcessRunner: runner,
       claudeProcessRunner: runner
@@ -211,13 +183,8 @@ describe('config-driven codex/claude timeouts reach the adapter through the prod
   });
 
   it('configured timeouts.agy reaches the agy adapter as the runner timeoutMs', async () => {
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/x]\n  agy: ['Gemini 3.5 Flash (Medium)']\ndefaults:\n  agent: opencode\n  model: opencode-go/x\ntimeouts:\n  agy: 7777\n`
-    );
-
     const { runner, captures } = capturingRunner();
-    const config = loadConfig(tempDir);
+    const config = createTestConfig({ timeouts: { agy: 7777 } });
     const registry = createProductionAdapterRegistry(config.registry, { agyProcessRunner: runner });
     // agy is registered as a fourth real provider.
     expect(registry.adapters.has('agy')).toBe(true);

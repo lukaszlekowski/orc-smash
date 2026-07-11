@@ -6,6 +6,36 @@ vi.mock('../src/loop.js', () => ({
   runLoop: vi.fn().mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null })
 }));
 
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { loadManifest } = await import('../src/manifest.js');
+  const { existsSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => {
+      const registry = structuredClone(actual.DEFAULT_REGISTRY);
+      registry.providers['fake'] = {
+        models: ['fake-model'],
+        defaultModel: 'fake-model'
+      };
+      for (const profileName of Object.keys(registry.profiles)) {
+        registry.profiles[profileName] = { provider: 'fake' };
+      }
+      registry.defaultProfile = 'audit';
+      registry.profiles['audit'] = { provider: 'fake' };
+
+      const pRoot = projectRoot ?? process.cwd();
+      let manifestPath = resolve(pRoot, 'skills.yaml');
+      if (!existsSync(manifestPath)) {
+        manifestPath = resolve(process.cwd(), 'skills.yaml');
+      }
+      const manifest = loadManifest(manifestPath, registry);
+      return { registry, manifest };
+    }
+  };
+});
+
 let lastPromptedDefault: string | undefined;
 let mockedLoopSelectChoice: string | undefined;
 vi.mock('../src/interactive.js', () => ({
@@ -53,10 +83,6 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
 
   beforeEach(() => {
     createTempDir('temp-smash-action');
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
-    );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     mockedLoopSelectChoice = undefined;
@@ -324,10 +350,6 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
 
   beforeEach(() => {
     createTempDir('temp-smash-quarantine');
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
-    );
     mockedRunLoop.mockClear();
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     mockedLoopSelectChoice = undefined;

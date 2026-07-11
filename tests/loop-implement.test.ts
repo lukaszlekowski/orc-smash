@@ -57,6 +57,36 @@ vi.mock('../src/interactive.js', () => {
   };
 });
 
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { loadManifest } = await import('../src/manifest.js');
+  const { existsSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => {
+      const registry = structuredClone(actual.DEFAULT_REGISTRY);
+      registry.providers['fake'] = {
+        models: ['fake-model'],
+        defaultModel: 'fake-model'
+      };
+      for (const profileName of Object.keys(registry.profiles)) {
+        registry.profiles[profileName] = { provider: 'fake' };
+      }
+      registry.defaultProfile = 'audit';
+      registry.profiles['audit'] = { provider: 'fake' };
+
+      const pRoot = projectRoot ?? process.cwd();
+      let manifestPath = resolve(pRoot, 'skills.yaml');
+      if (!existsSync(manifestPath)) {
+        manifestPath = resolve(process.cwd(), 'skills.yaml');
+      }
+      const manifest = loadManifest(manifestPath, registry);
+      return { registry, manifest };
+    }
+  };
+});
+
 describe('Three-stage pipeline loop/implement integration', () => {
   const tempDir = join(process.cwd(), 'temp-loop-implement');
 
@@ -69,12 +99,6 @@ describe('Three-stage pipeline loop/implement integration', () => {
     mockedSecondOpinionDecision = 'stop';
     mockedContinueToReview = 'stop';
     promptRunnersCalls = 0;
-
-    // Write project-local orc.config.yaml with fake provider
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
-    );
 
     // Pre-seed plan.md with ready status for implementation loops
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });

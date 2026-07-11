@@ -1,8 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
+
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { createTestConfig } = await import('./helpers/test-config.js');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => createTestConfig({
+      projectRoot,
+      profiles: {
+        audit: { provider: 'agy' },
+        'follow-up': { provider: 'opencode' },
+        implement: { provider: 'opencode' }
+      }
+    })
+  };
+});
 import { createProductionAdapterRegistry, type AgentRegistry } from '../src/adapters/registry.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
@@ -83,10 +99,6 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
   beforeEach(() => {
     createTempDir('temp-agy-contract');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  agy:\n    - Gemini 3.5 Flash (Medium)\ndefaults:\n  agent: opencode\n  model: opencode-go/deepseek-v4-flash\n'
-    );
     registry = createProductionAdapterRegistry(loadConfig(tempDir).registry);
   });
 

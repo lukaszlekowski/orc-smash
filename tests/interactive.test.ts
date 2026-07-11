@@ -88,16 +88,44 @@ describe('Interactive registry selection', () => {
     expect(choices).toContain('fake');
   });
 
-  it('throws error if default profile provider is not selectable', async () => {
-    const config = dummyConfig({
-      codex: ['codex-model']
-    }, { agent: 'opencode', model: 'opencode-model' }); // opencode has adapter but not configured
+  it('does not throw when defaultProfile provider is unselectable but skill profile provider is selectable', async () => {
+    const config: Config = {
+      registry: {
+        providers: {
+          codex: { models: ['codex-model'], defaultModel: 'codex-model' }
+        },
+        defaultProfile: 'unselectableProfile',
+        profiles: {
+          unselectableProfile: { provider: 'opencode' },
+          selectableProfile: { provider: 'codex' }
+        }
+      },
+      manifest: {
+        roles: { auditor: 'roles/auditor.md' },
+        skills: {
+          'plan-audit': {
+            file: 'skills/plan-audit/SKILL.md',
+            role: 'auditor',
+            kind: 'audit',
+            runnerProfile: 'selectableProfile'
+          }
+        },
+        loops: {}
+      }
+    };
 
-    const prodRegistry = createProductionAdapterRegistry();
-    
-    await expect(
-      promptRunners(['plan-audit'], config, prodRegistry)
-    ).rejects.toThrow(/Default profile provider 'opencode' is not selectable/);
+    const prodRegistry = createProductionAdapterRegistry(); // has codex, opencode
+
+    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select).mockResolvedValueOnce('codex'); // choose agent
+    vi.mocked(select).mockResolvedValueOnce('codex-model'); // choose model
+
+    const runners = await promptRunners(['plan-audit'], config, prodRegistry);
+    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
+
+    // The default agent choice in select should be 'codex'
+    const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
+    expect(selectArgs.default).toBe('codex');
   });
 
   it('promptStageAction returns selected action and sets recommended first', async () => {
