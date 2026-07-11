@@ -1,0 +1,2 @@
+{"type":"step_finish","timestamp":1783799199141,"sessionID":"ses_0ad4cd220ffeWq6FJ3AEDoZmkT","part":{"id":"prt_f52b7b5a2001mDhmwqXMg9bTMt","reason":"tool-calls","type":"step-finish","tokens":{"total":71354,"input":135,"output":406}}}
+{"type":"step_finish","timestamp":1783799203778,"sessionID":"ses_0ad4cd220ffeWq6FJ3AEDoZmkT","part":{"id":"prt_f52b7c7c0001BfjIZvubeTsBWe","reason":"stop","type":"step-finish","tokens":{"total":72223,"input":582,"output":330}}}

@@ -27,6 +27,6 @@ export function missingRequiredArtifact(
   const artifactName = artifact.artifactName ?? `${artifact.kind} artifact`;
   return {
     errorKind: 'missing_output',
-    message: `${artifact.agent} exited cleanly but produced no ${artifactName} at ${artifact.outputPath}`
+    message: `${artifact.agent} exited cleanly but produced no ${artifactName} at ${artifact.outputPath}. Run again with --debug-spawn and verify the exact \"Write your output to\" Input.`
   };
 }

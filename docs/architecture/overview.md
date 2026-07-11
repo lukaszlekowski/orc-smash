@@ -65,7 +65,7 @@ The codebase is being steered toward these architectural properties:
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
 3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
 4. `loop` drives the loop execution:
-   - For `implement` kind, it requires an approved plan audit. Once the agent writes its ledger, `implement-ledger` parses and validates the tables (evidence and coverage) and the overall confidence declaration. On success, `plan-closeout` updates `docs/dev/plan.md`'s front matter status (to `done` or `blocked` based on a 0.95 confidence threshold) and appends a structured versioned log entry under `## Change Log`. The loop stamps the harness metadata provenance onto the ledger only if the closeout was successful and the confidence met the threshold.
+   - For `implement` kind, it requires an approved plan audit and runs `plan-metadata` preflight before provider work. That module migrates a leading legacy Markdown status into parseable YAML front matter with `status: ready`; malformed YAML and unreadable plans fail closed. Once the agent writes its ledger, `implement-ledger` validates the evidence/coverage tables and confidence declaration. `plan-closeout` updates canonical YAML status (`done` or `blocked` at the 0.95 threshold) and appends a structured versioned `## Change Log` entry. Provenance is stamped only after a successful done closeout. A complete unstamped raw ledger is recoverable only through an explicit interactive action, which reuses its version and never spawns a provider.
    - For `doc-audit`/`code-review` loops, it iterates versioned audits and follow-ups.
 5. In interactive runs, stage transitions advance downstream:
    - `plan` loops APPROVED verdict offers `stop | run-second-opinion | implement` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
@@ -83,8 +83,10 @@ The harness distinguishes between:
 - **terminal unknown**: the provider appeared to run but did not complete in a trustworthy way
 
 In the current repo direction, `opencode` is the only adapter with a verified completion signal
-(`stopReason`) that can support this distinction. `codex` and `claude` currently remain exit-code
-/ structured-error based until equivalent support is explicitly proven and implemented.
+(`stopReason`) that can support this distinction. A clean OpenCode process without a recognized
+terminal event is terminal `unknown` with a distinct missing-completion diagnostic; parser support
+is added only from captured `--debug-spawn` stream fixtures. `codex` and `claude` currently remain
+exit-code / structured-error based until equivalent support is explicitly proven and implemented.
 
 ### Model-id ownership boundary
 

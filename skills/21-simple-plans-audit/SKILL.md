@@ -144,4 +144,4 @@ Under each Critical, Major and Minor finding, add a short "Remediation" line wit
 - If overall confidence < 0.95, list the specific areas of uncertainty. Verdict must be **REJECTED**.
 - Use **APPROVED** only when the documents are implementation-ready without conditions.
 - State confidence per finding where relevant
-- Save to: `docs/dev/plan-audit-v[N]-[agent].md`
+- The exact `Write your output to` value in Inputs is authoritative. Write the audit there; do not derive or substitute a filename.

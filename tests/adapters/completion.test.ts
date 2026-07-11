@@ -19,8 +19,8 @@ describe('classifyCompletion (normalized execution-completeness)', () => {
     expect(classifyCompletion('opencode', resultWith('length'))).toBe('truncated');
   });
 
-  it('opencode + null stop reason => interrupted', () => {
-    expect(classifyCompletion('opencode', resultWith(null))).toBe('interrupted');
+  it('opencode + null stop reason => missing completion signal', () => {
+    expect(classifyCompletion('opencode', resultWith(null))).toBe('missing');
   });
 
   it('opencode + any other non-null reason => truncated', () => {

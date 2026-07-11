@@ -198,6 +198,6 @@ Under each Critical, Major and Minor finding, add a short "Remediation" line wit
 - Use **APPROVED** only when the implementation satisfies the plan without conditions.
 - Reviews must reject fixes that merely make the tests pass while weakening ownership, layering, or extensibility.
 - For any rejected Major/Critical issue, the review must state the best-practice long-term recommendation, not just the local symptom to change.
-- Save to: `docs/dev/review-v[N]-[agent].md`
+- The exact `Write your output to` value in Inputs is authoritative. Write the review there; do not derive or substitute a filename.
 
 ---

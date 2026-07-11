@@ -16,8 +16,9 @@ import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
 import { resolveRunner } from './runner.js';
-import { isCompleteImplementLedger } from './implement-ledger.js';
+import { findHighestRawImplementLedger, isCompleteImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
+import { initializePlanMetadata } from './plan-metadata.js';
 import { quarantineArtifact, quarantineInterruptedResume } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
 import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
@@ -200,9 +201,11 @@ export async function runLoop(
   };
 
   const isNonCleanCompletion = (result: RunResult): boolean =>
-    result.completion === 'truncated' || result.completion === 'interrupted';
+    result.completion === 'truncated' || result.completion === 'interrupted' || result.completion === 'missing';
   const completionMessage = (result: RunResult): string =>
-    `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
+    result.completion === 'missing'
+      ? 'Agent exited without the verified OpenCode completion signal; treating the result as unknown. Run again with --debug-spawn and capture the terminal stream event.'
+      : `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
 
   const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase, opts?: { autoRecommend?: boolean }): Promise<{ action: StageAction; phase: MenuPhase }> => {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
@@ -588,6 +591,70 @@ export async function runLoop(
     });
     steps.push(...planHistory.timeline);
 
+    const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
+    const metadataPreflight = initializePlanMetadata(projectPlanPath);
+    if (!metadataPreflight.ok) {
+      const message = `Implementation preflight failed: ${metadataPreflight.error}`;
+      options.output.stepFailed({
+        kind: 'implement', skillId: implementSkillId, version: nextVersion,
+        message, errorKind: 'plan_metadata_invalid'
+      });
+      return emitFinalSummary(false, 'unknown', message, null);
+    }
+
+    const rawLedger = findHighestRawImplementLedger(projectRoot, loopSpec.implementPattern ?? '');
+    if (rawLedger) {
+      const approvedRel = priorAuditRel(projectRoot, approvedPlanAuditPath);
+      if (!options.interactive) {
+        const message = `Found valid raw implementation ledger v${rawLedger.version}-${rawLedger.agent} at ${relative(projectRoot, rawLedger.artifactPath)}. Rerun interactively to recover it against approved audit ${approvedRel}; no provider was started.`;
+        options.output.stepFailed({
+          kind: 'implement', skillId: implementSkillId, version: rawLedger.version,
+          message, errorKind: 'raw_ledger_recovery_required'
+        });
+        return emitFinalSummary(false, 'unknown', message, null);
+      }
+      const recoverId = await promptStageAction([
+        {
+          id: 'recover-implementation', group: 'continue', stage: 'implement',
+          version: rawLedger.version, sessionPolicy: 'new', recommended: true,
+          label: `Recover implementation v${rawLedger.version}-${rawLedger.agent} — link to approved audit ${approvedRel}`
+        },
+        {
+          id: 'stop', group: 'continue', stage: 'stop', version: rawLedger.version,
+          sessionPolicy: 'new', recommended: false, label: 'Stop and await manual review'
+        }
+      ], 'recover-implementation');
+      if (recoverId !== 'recover-implementation') {
+        return emitFinalSummary(true, null, 'Raw implementation ledger left unchanged for manual review.', rawLedger.artifactPath);
+      }
+
+      const signal = deriveCloseoutSignal(rawLedger.content);
+      const closeout = writePlanCloseout({
+        planPath: projectPlanPath, version: rawLedger.version, agent: rawLedger.agent, signal
+      });
+      if (!closeout.ok) {
+        const message = `Plan closeout failed while recovering v${rawLedger.version}-${rawLedger.agent}: ${closeout.error}`;
+        options.output.stepFailed({ kind: 'implement', skillId: implementSkillId, version: rawLedger.version, message, errorKind: 'closeout_failed' });
+        return emitFinalSummary(false, 'unknown', message, null);
+      }
+      if (closeout.status === 'blocked') {
+        const message = `Implementation recovery blocked: ${signal.reason ?? 'confidence below 0.95 threshold'}`;
+        options.output.stepFailed({ kind: 'implement', skillId: implementSkillId, version: rawLedger.version, message, errorKind: 'implementation_blocked' });
+        return emitFinalSummary(false, 'unknown', message, null);
+      }
+      const recoveredModel = config.registry.providers[rawLedger.agent]?.defaultModel ?? 'unknown';
+      writeArtifactWithMeta(rawLedger.artifactPath, rawLedger.content, {
+        loop: loopName, skill: implementSkillId, kind: 'implement', role: skill.role,
+        version: rawLedger.version, agent: rawLedger.agent, model: recoveredModel,
+        target: loopSpec.target, priorAudit: approvedRel, timestamp: new Date().toISOString(), durationMs: 0
+      });
+      options.output.stepSucceeded({
+        kind: 'implement', skillId: implementSkillId, version: rawLedger.version,
+        message: `Recovered implementation v${rawLedger.version}-${rawLedger.agent}; plan closeout wrote status: done`
+      });
+      return emitFinalSummary(true, null, `Recovered implementation successfully: ${relative(projectRoot, rawLedger.artifactPath)}`, rawLedger.artifactPath);
+    }
+
     let runner = runners[implementSkillId];
     if (!runner && options.interactive) {
       const prompted = await promptRunners([implementSkillId], config, options.registry, options.globalOverrides, { forceSelect: true });
@@ -697,7 +764,6 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', `Ledger at ${relOutputPath} is ${reason}`, null);
     }
 
-    const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
     const closeoutSignal = deriveCloseoutSignal(ledgerContent);
     const closeoutOutcome = writePlanCloseout({
       planPath: projectPlanPath,
