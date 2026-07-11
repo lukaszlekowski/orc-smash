@@ -1,5 +1,4 @@
-defaultModel: glm-4.7
+defaultModel: glm-5.2[1m]
 models:
+  - glm-5.2[1m]
   - glm-4.7
-  - glm-5.1
-  - glm-5.2

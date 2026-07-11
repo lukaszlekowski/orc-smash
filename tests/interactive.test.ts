@@ -45,6 +45,18 @@ describe('Interactive registry selection', () => {
     expect(Object.keys(DEFAULT_REGISTRY.providers)).not.toContain('fake');
   });
 
+  it('shows resolved default runners before asking whether to customize', async () => {
+    const config = dummyConfig({ opencode: ['opencode-model'] }, { agent: 'opencode', model: 'opencode-model' });
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+
+    await promptRunners(['plan-audit'], config, createProductionAdapterRegistry());
+
+    expect(output).toHaveBeenCalledWith('Default skill runners:');
+    expect(output).toHaveBeenCalledWith('  plan-audit: opencode (opencode-model)');
+    expect(output.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(confirm).mock.invocationCallOrder[0]!);
+  });
+
   it('promptRunners uses intersection of configured and runnable agents', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],

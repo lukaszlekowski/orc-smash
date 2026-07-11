@@ -8,6 +8,9 @@ describe('provider catalogue configuration', () => {
   it('loads only the committed package registry', () => {
     expect(loadModelRegistry('/a/project')).toEqual(DEFAULT_REGISTRY);
     expect(DEFAULT_REGISTRY.providers.codex.models).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
       'gpt-5.5',
       'gpt-5.4',
       'gpt-5.4-mini'
@@ -55,9 +58,9 @@ describe('provider catalogue configuration', () => {
     removeTempDir(tempWorkspace);
   });
 
-  it('every provider defaultModel matches its pre-migration effective default', () => {
-    expect(DEFAULT_REGISTRY.providers.claude.defaultModel).toBe('glm-4.7');
-    expect(DEFAULT_REGISTRY.providers.codex.defaultModel).toBe('gpt-5.5');
+  it('loads the committed provider defaults', () => {
+    expect(DEFAULT_REGISTRY.providers.claude.defaultModel).toBe('glm-5.2[1m]');
+    expect(DEFAULT_REGISTRY.providers.codex.defaultModel).toBe('gpt-5.6-terra');
     expect(DEFAULT_REGISTRY.providers.opencode.defaultModel).toBe('opencode-go/deepseek-v4-flash');
     expect(DEFAULT_REGISTRY.providers.agy.defaultModel).toBe('Gemini 3.5 Flash (Medium)');
   });
