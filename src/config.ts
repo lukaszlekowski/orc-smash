@@ -1,14 +1,14 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import os from 'node:os';
 import YAML from 'yaml';
 import { z } from 'zod';
 import { loadManifest, type Manifest } from './manifest.js';
 
 export interface ModelRegistry {
-  providers: Record<string, string[]>;
-  defaults: { agent: string; model: string };
+  providers: Record<string, { models: string[]; defaultModel: string }>;
+  defaultProfile: string;
+  profiles: Record<string, { provider: string }>;
   /**
    * Optional per-agent execution timeouts in ms (`0` disables). Precedence:
    *   - opencode: `OPENCODE_RUN_TIMEOUT_MS` env > `timeouts.opencode` > built-in 600000.
@@ -18,26 +18,53 @@ export interface ModelRegistry {
 }
 
 export const ModelRegistrySchema = z.object({
-  providers: z.record(z.string(), z.array(z.string())),
-  defaults: z.object({
-    agent: z.string(),
-    model: z.string()
-  }),
+  providers: z.record(z.string(), z.object({
+    models: z.array(z.string()).min(1),
+    defaultModel: z.string()
+  }).strict()),
+  defaultProfile: z.string(),
+  profiles: z.record(z.string(), z.object({ provider: z.string() }).strict()),
   timeouts: z.object({
     opencode: z.number().int().nonnegative().optional(),
     claude: z.number().int().nonnegative().optional(),
     codex: z.number().int().nonnegative().optional(),
     agy: z.number().int().nonnegative().optional()
   }).strict().optional()
+}).superRefine((registry, ctx) => {
+  for (const [provider, catalogue] of Object.entries(registry.providers)) {
+    if (!catalogue.models.includes(catalogue.defaultModel)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'defaultModel'], message: `defaultModel '${catalogue.defaultModel}' must be listed in models for provider '${provider}'` });
+    }
+  }
+  for (const [profile, value] of Object.entries(registry.profiles)) {
+    if (!registry.providers[value.provider]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'provider'], message: `Profile '${profile}' names unknown provider '${value.provider}'` });
+    }
+  }
+  if (!registry.profiles[registry.defaultProfile]) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['defaultProfile'], message: `defaultProfile '${registry.defaultProfile}' does not exist` });
+  }
 });
 
-const RegistryOverridesSchema = z.object({
-  defaults: ModelRegistrySchema.shape.defaults.optional(),
-  timeouts: ModelRegistrySchema.shape.timeouts
+const ProviderCatalogSchema = z.object({
+  defaultModel: z.string(),
+  models: z.array(z.string()).min(1)
 }).strict();
 
-const ProviderCatalogSchema = z.object({
-  models: z.array(z.string()).min(1)
+const RunnersSchema = z.object({
+  defaultProfile: z.string(),
+  profiles: z.record(z.string(), z.object({ provider: z.string() }).strict())
+}).strict();
+
+const TimeoutsSchema = z.object({
+  opencode: z.number().int().nonnegative().optional(),
+  claude: z.number().int().nonnegative().optional(),
+  codex: z.number().int().nonnegative().optional(),
+  agy: z.number().int().nonnegative().optional()
+}).strict();
+
+const RegistryTimeoutsSchema = z.object({
+  timeouts: TimeoutsSchema.optional()
 }).strict();
 
 /**
@@ -61,20 +88,19 @@ export function registryTimeoutFor(registry: ModelRegistry, agent: string): numb
 function loadPackagedRegistry(toolRoot: string): ModelRegistry {
   const configRoot = resolve(toolRoot, 'config');
   const registryPath = resolve(configRoot, 'registry.yaml');
+  const runnersPath = resolve(configRoot, 'runners.yaml');
   const providersRoot = resolve(configRoot, 'providers');
 
   try {
-    const global = RegistryOverridesSchema.parse(YAML.parse(readFileSync(registryPath, 'utf-8')));
-    if (!global.defaults) throw new Error('packaged registry is missing defaults');
-    const providers: Record<string, string[]> = {};
+    const global = RegistryTimeoutsSchema.parse(YAML.parse(readFileSync(registryPath, 'utf-8')));
+    const runners = RunnersSchema.parse(YAML.parse(readFileSync(runnersPath, 'utf-8')));
+    const providers: Record<string, { models: string[]; defaultModel: string }> = {};
     for (const file of readdirSync(providersRoot).sort()) {
       if (!file.endsWith('.yaml')) continue;
       const agent = file.slice(0, -'.yaml'.length);
-      providers[agent] = ProviderCatalogSchema.parse(
-        YAML.parse(readFileSync(resolve(providersRoot, file), 'utf-8'))
-      ).models;
+      providers[agent] = ProviderCatalogSchema.parse(YAML.parse(readFileSync(resolve(providersRoot, file), 'utf-8')));
     }
-    return ModelRegistrySchema.parse({ providers, defaults: global.defaults, timeouts: global.timeouts });
+    return ModelRegistrySchema.parse({ providers, ...runners, timeouts: global.timeouts });
   } catch (err: any) {
     throw new Error(`Failed to load packaged provider registry at ${configRoot}: ${err.message}`);
   }
@@ -90,41 +116,7 @@ export interface Config {
   manifest: Manifest;
 }
 
-export function loadModelRegistry(projectRoot: string = process.cwd()): ModelRegistry {
-  const localPath = resolve(projectRoot, 'orc.config.yaml');
-  const homePath = resolve(os.homedir(), '.config/orc/config.yaml');
-
-  let configContent: string | null = null;
-  let loadedPath = '';
-
-  if (existsSync(localPath)) {
-    configContent = readFileSync(localPath, 'utf-8');
-    loadedPath = localPath;
-  } else if (existsSync(homePath)) {
-    configContent = readFileSync(homePath, 'utf-8');
-    loadedPath = homePath;
-  }
-
-  if (configContent !== null) {
-    try {
-      const parsed = YAML.parse(configContent);
-      // Existing full registries remain supported for target fixtures and user
-      // configuration. New repository config only overrides global settings;
-      // provider catalogues stay in their dedicated files.
-      if (parsed && typeof parsed === 'object' && 'providers' in parsed) {
-        return ModelRegistrySchema.parse(parsed);
-      }
-      const overrides = RegistryOverridesSchema.parse(parsed);
-      return ModelRegistrySchema.parse({
-        providers: DEFAULT_REGISTRY.providers,
-        defaults: overrides.defaults ?? DEFAULT_REGISTRY.defaults,
-        timeouts: { ...DEFAULT_REGISTRY.timeouts, ...overrides.timeouts }
-      });
-    } catch (err: any) {
-      throw new Error(`Failed to parse or validate model registry config at ${loadedPath}: ${err.message}`);
-    }
-  }
-
+export function loadModelRegistry(_projectRoot: string = process.cwd()): ModelRegistry {
   return structuredClone(DEFAULT_REGISTRY);
 }
 

@@ -765,11 +765,7 @@ export async function runLoop(
       const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
       Object.assign(implementRunners, prompted);
     } else {
-      const skill = config.manifest.skills[implementLoopSpec.implement!];
-      implementRunners[implementLoopSpec.implement!] = {
-        agent: skill.agent,
-        model: skill.model
-      };
+      implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
     }
     return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
   }
@@ -970,11 +966,7 @@ export async function runLoop(
             const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
             Object.assign(implementRunners, prompted);
           } else {
-            const skill = config.manifest.skills[implementLoopSpec.implement!];
-            implementRunners[implementLoopSpec.implement!] = {
-              agent: skill.agent,
-              model: skill.model
-            };
+            implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
           }
           return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
         } else {
@@ -1191,11 +1183,7 @@ export async function runLoop(
         const prompted = await promptRunners(implementSkills, config, options.registry, options.globalOverrides, { forceSelect: true });
         Object.assign(implementRunners, prompted);
       } else {
-        const skill = config.manifest.skills[implementLoopSpec.implement!];
-        implementRunners[implementLoopSpec.implement!] = {
-          agent: skill.agent,
-          model: skill.model
-        };
+        implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
       }
       return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
     } else {

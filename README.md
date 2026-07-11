@@ -15,7 +15,7 @@ The binary is **`orc`**; the main command is **`orc smash`**.
 pnpm install
 ```
 
-Built-in provider model catalogues live in `config/providers/<provider>.yaml`; update the relevant provider file to add or remove a model. Global defaults and timeouts live in `config/registry.yaml`. A target-project `orc.config.yaml` or `~/.config/orc/config.yaml` may override global defaults/timeouts, while the existing full-registry format remains supported for compatibility.
+Each provider's complete catalogue lives in `config/providers/<provider>.yaml`, including its `defaultModel`; update that one file to add or remove models. `config/runners.yaml` maps opaque runner-profile names to providers, and `config/registry.yaml` contains only execution timeouts. `orc.config.yaml` and home-directory overrides are not supported.
 
 Interactive selection lets you choose from configured models or provide a validated custom model.
 

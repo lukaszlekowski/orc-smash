@@ -30,8 +30,8 @@ describe('Manifest validation', () => {
     const invalidManifest = {
       roles: { auditor: 'roles/auditor.md' },
       skills: {
-        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', agent: 'fake', model: 'fake' },
-        'plan-follow-up': { file: 'skills/SKILL.md', role: 'auditor', kind: 'follow-up', agent: 'fake', model: 'fake' }
+        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit' },
+        'plan-follow-up': { file: 'skills/SKILL.md', role: 'auditor', kind: 'follow-up', runnerProfile: 'follow-up' }
       },
       loops: {
         plan: {
@@ -50,13 +50,24 @@ describe('Manifest validation', () => {
     expect(parsed.success).toBe(false);
   });
 
+  it('requires runnerProfile and rejects embedded provider/model policy', () => {
+    const parsed = buildManifestSchema(DEFAULT_REGISTRY).safeParse({
+      roles: { auditor: 'roles/auditor.md' },
+      skills: {
+        audit: { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' }
+      },
+      loops: {}
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it('allows a manifest that defines plan and implement without a review loop (manifest remains generic)', () => {
     const validManifest = {
       roles: { auditor: 'roles/auditor.md', planner: 'roles/planner.md', implementer: 'roles/implementer.md' },
       skills: {
-        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' },
-        'plan-follow-up': { file: 'skills/SKILL.md', role: 'planner', kind: 'follow-up', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' },
-        '30-simple-implement': { file: 'skills/SKILL.md', role: 'implementer', kind: 'implement', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' }
+        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit' },
+        'plan-follow-up': { file: 'skills/SKILL.md', role: 'planner', kind: 'follow-up', runnerProfile: 'follow-up' },
+        '30-simple-implement': { file: 'skills/SKILL.md', role: 'implementer', kind: 'implement', runnerProfile: 'implement' }
       },
       loops: {
         plan: {

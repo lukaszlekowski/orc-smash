@@ -31,11 +31,11 @@ describe('Adapter Registries', () => {
   it('accepts ModelRegistry config and parses timeouts', () => {
     const registry = createProductionAdapterRegistry({
       providers: {
-        opencode: ['opencode-go/x'],
-        codex: ['gpt-5.5'],
-        claude: ['glm-5.2']
+        opencode: { models: ['opencode-go/x'], defaultModel: 'opencode-go/x' },
+        codex: { models: ['gpt-5.5'], defaultModel: 'gpt-5.5' },
+        claude: { models: ['glm-5.2'], defaultModel: 'glm-5.2' }
       },
-      defaults: { agent: 'opencode', model: 'opencode-go/x' },
+      defaultProfile: 'default', profiles: { default: { provider: 'opencode' } },
       timeouts: { opencode: 12345 }
     });
     expect(registry.adapters.has('opencode')).toBe(true);

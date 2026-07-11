@@ -1,7 +1,3 @@
-defaults:
-  agent: opencode
-  model: opencode-go/deepseek-v4-flash
-
 timeouts:
   claude: 0
   codex: 0

@@ -9,32 +9,27 @@ skills:
     file: skills/21-simple-plans-audit/SKILL.md
     role: auditor
     kind: audit
-    agent: opencode
-    model: opencode-go/deepseek-v4-flash
+    runnerProfile: audit
   plan-follow-up:
     file: skills/22-simple-plans-follow-up/SKILL.md
     role: planner
     kind: follow-up
-    agent: opencode
-    model: opencode-go/deepseek-v4-flash
+    runnerProfile: follow-up
   review:
     file: skills/40-simple-review/SKILL.md
     role: reviewer
     kind: audit
-    agent: opencode
-    model: opencode-go/deepseek-v4-flash
+    runnerProfile: audit
   review-follow-up:
     file: skills/42-simple-review-follow-up/SKILL.md
     role: implementer
     kind: follow-up
-    agent: opencode
-    model: opencode-go/deepseek-v4-flash
+    runnerProfile: follow-up
   30-simple-implement:
     file: skills/30-simple-implement/SKILL.md
     role: implementer
     kind: implement
-    agent: opencode
-    model: opencode-go/deepseek-v4-flash
+    runnerProfile: implement
 
 loops:
   plan:
