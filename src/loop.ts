@@ -1,28 +1,29 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import chalk from 'chalk';
-import { scan, type Step, resolveImplementFacts, requireApprovedPlanAuditPath, roleForKind } from './state.js';
+import { scan, type Step, resolveImplementFacts, requireApprovedPlanAuditPath } from './state.js';
 import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.js';
-import { getAdapter, type AgentRegistry } from './adapters/registry.js';
+import type { AgentRegistry } from './adapters/registry.js';
 import type { RunResult } from './adapters/types.js';
 import { renderPattern } from './patterns.js';
 import { composePrompt } from './prompt-composer.js';
 import { writeArtifactWithMeta, type ArtifactMeta, type StepKind } from './provenance.js';
 import { parseVerdict } from './verdict.js';
 import { buildPanelContext, latestAuditVersion, type PanelContext, resolveLoopLabels } from './status.js';
-import type { LifecycleEvent } from './adapter-lifecycle.js';
 import { promptRunners, promptStageAction } from './interactive.js';
 import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
-import { resolveRunner, isValidModelForAgent } from './runner.js';
+import { resolveRunner } from './runner.js';
 import { isCompleteImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
-import { debugLoopSpawn } from './debug-spawn.js';
-import { quarantineArtifact, quarantineInterruptedResume, setStepCtx } from './interrupted-artifact.js';
+import { quarantineArtifact, quarantineInterruptedResume } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
 import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
+import { executeLoopStep } from './loops/execution.js';
+import type { LoopReturn, Runner } from './loops/runtime.js';
+import { resolveRecordedRunner } from './loops/runner-selection.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -33,8 +34,6 @@ export interface LoopOptions {
   seedResolved?: Set<string>;
 }
 
-type Runner = { agent: string; model: string };
-type LoopReturn = { success: boolean; verdict: string; message: string; lastAuditPath: string | null };
 
 export async function runLoop(
   projectRoot: string,
@@ -108,148 +107,16 @@ export async function runLoop(
     version: number,
     currentIteration: number,
     continuity?: { mode: 'fresh' | 'resumed'; sessionId?: string }
-  ) => {
-    const startedAtMs = Date.now();
-
-    let lastProgressMessage = '';
-    let toolCallCount = 0;
-
-    const onLifecycle = (e: LifecycleEvent) => {
-      if (e.type === 'message') {
-        if (e.text) lastProgressMessage = e.text;
-        toolCallCount += e.toolCalls ?? 0;
-        if (liveInFlight) {
-          liveInFlight.toolCallCount = toolCallCount;
-          liveInFlight.progressMessage = lastProgressMessage || null;
-        }
-      }
-      if (e.type === 'failed') {
-        if (liveInFlight) {
-          liveInFlight.status = 'failed';
-        }
-      }
-      if (e.type === 'completed') {
-        liveInFlight = null;
-      }
-    };
-
-    let liveInFlight: NonNullable<PanelContext['inFlight']> | null = {
-      kind,
-      role: config.manifest.skills[skillId]?.role ?? roleForKind(kind),
-      skillId,
-      agent: runner.agent,
-      model: runner.model,
-      version,
-      iteration: currentIteration,
-      startedAtMs,
-      status: 'running',
-      spawnLabel,
-      toolCallCount,
-      progressMessage: null
-    };
-
-    if (options.output.attachLiveRegion) {
-      options.output.attachLiveRegion(() => {
-        const inFlight: PanelContext['inFlight'] = liveInFlight
-          ? {
-              kind: liveInFlight.kind,
-              role: liveInFlight.role,
-              skillId: liveInFlight.skillId,
-              agent: liveInFlight.agent,
-              model: liveInFlight.model,
-              version: liveInFlight.version,
-              iteration: liveInFlight.iteration,
-              startedAtMs: liveInFlight.startedAtMs,
-              status: liveInFlight.status,
-              spawnLabel: liveInFlight.spawnLabel,
-              toolCallCount: liveInFlight.toolCallCount,
-              progressMessage: liveInFlight.progressMessage
-            }
-          : null;
-
-        let activeLabel = skillId;
-        if (kind === 'audit') {
-          activeLabel = labels.audit?.skillId ?? skillId;
-        } else if (kind === 'follow-up') {
-          activeLabel = labels.followUp?.skillId ?? skillId;
-        } else if (kind === 'implement') {
-          activeLabel = labels.implement?.skillId ?? skillId;
-        }
-
-        return buildPanelContext(
-          projectRoot,
-          loopName,
-          currentIteration,
-          options.maxIterations,
-          { skillId, agent: runner.agent, model: runner.model },
-          steps,
-          `Running ${activeLabel} v${version}...`,
-          inFlight,
-          latestAuditVersion(steps),
-          false
-        );
-      });
-    }
-
-    try {
-      options.output.stepStarted({
-        kind,
-        skillId,
-        agent: runner.agent,
-        model: runner.model,
-        iteration: currentIteration,
-        version,
-        message: spawnLabel
-      });
-
-      const adapter = getAdapter(options.registry, runner.agent);
-      debugLoopSpawn({
-        loopName,
-        skillId,
-        kind,
-        agent: runner.agent,
-        model: runner.model,
-        version,
-        cwd: projectRoot,
-        prompt
-      });
-
-      // §3: register the active step context ONLY while the provider subprocess
-      // is live, so an interrupt signal can write an accurate marker. Cleared in
-      // the finally path so a stale context never archives a completed artifact.
-      setStepCtx({
-        loop: loopName,
-        kind,
-        version,
-        agent: runner.agent,
-        model: runner.model,
-        skillId
-      });
-
-      const result = await adapter.run({
-        prompt,
-        model: runner.model,
-        cwd: projectRoot,
-        skillId,
-        version,
-        kind,
-        onLifecycle,
-        continuity
-      });
-
-      // Agent wall-clock runtime for this step, measured from the spawn start
-      // captured above. Persisted into the artifact front matter so `orc status`
-      // can show per-step duration after the fact (status-panel/plain-render).
-      const durationMs = Date.now() - startedAtMs;
-
-      return { result, durationMs };
-    } finally {
-      setStepCtx(null);
-      if (options.output.detachLiveRegion) {
-        options.output.detachLiveRegion();
-      }
-    }
-  };
+  ) => executeLoopStep({
+    projectRoot,
+    loopName,
+    loopSpec,
+    config,
+    registry: options.registry,
+    output: options.output,
+    steps,
+    maxIterations: options.maxIterations
+  }, { runner, prompt, spawnLabel, kind, skillId, version, iteration: currentIteration, continuity });
 
   const stepFailed = (result: RunResult, acceptNonzeroExitWithVerdict: boolean): boolean =>
     Boolean(result.error) || (!acceptNonzeroExitWithVerdict && result.exitCode !== 0);
@@ -385,18 +252,12 @@ export async function runLoop(
               act.disabledReason = `inherited provider ${provider} is not configured`;
               continue;
             }
-            const allowedModels = config.registry.providers[provider] || [];
-            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-            if (!resolvedModel) {
-              if (isValidModelForAgent(provider, model, config.registry)) {
-                resolvedModel = model;
-              }
-            }
-            if (!resolvedModel) {
+            const recordedRunner = resolveRecordedRunner(config.registry, provider, model);
+            if (!recordedRunner) {
               act.disabledReason = `inherited model ${model} is not configured`;
               continue;
             }
-            runner = { agent: provider, model: resolvedModel };
+            runner = recordedRunner;
           }
         }
 
@@ -528,16 +389,8 @@ export async function runLoop(
           if (lastSessionStep) {
             const provider = lastSessionStep.agent;
             const model = lastSessionStep.model;
-            const allowedModels = config.registry.providers[provider] || [];
-            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-            if (!resolvedModel) {
-              if (isValidModelForAgent(provider, model, config.registry)) {
-                resolvedModel = model;
-              }
-            }
-            if (resolvedModel) {
-              runner = { agent: provider, model: resolvedModel };
-            }
+            const recordedRunner = resolveRecordedRunner(config.registry, provider, model);
+            if (recordedRunner) runner = recordedRunner;
           }
         }
 
@@ -964,17 +817,11 @@ export async function runLoop(
             if (!config.registry.providers[provider]) {
               throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
             }
-            const allowedModels = config.registry.providers[provider] || [];
-            let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-            if (!resolvedModel) {
-              if (isValidModelForAgent(provider, model, config.registry)) {
-                resolvedModel = model;
-              }
-            }
-            if (!resolvedModel) {
+            const recordedRunner = resolveRecordedRunner(config.registry, provider, model);
+            if (!recordedRunner) {
               throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
             }
-            runners[followUpSkillId] = { agent: provider, model: resolvedModel };
+            runners[followUpSkillId] = recordedRunner;
           }
         }
       }
@@ -1170,17 +1017,11 @@ export async function runLoop(
           if (!config.registry.providers[provider]) {
             throw new Error(`Inherited provider ${provider} is not configured. Please re-run START NEW to pick a fresh provider+model.`);
           }
-          const allowedModels = config.registry.providers[provider] || [];
-          let resolvedModel = allowedModels.find(m => m === model || m.endsWith('/' + model));
-          if (!resolvedModel) {
-            if (isValidModelForAgent(provider, model, config.registry)) {
-              resolvedModel = model;
-            }
-          }
-          if (!resolvedModel) {
+          const recordedRunner = resolveRecordedRunner(config.registry, provider, model);
+          if (!recordedRunner) {
             throw new Error(`Inherited model ${model} is not configured for provider ${provider}. Please re-run START NEW to pick a fresh provider+model.`);
           }
-          runners[auditSkillId] = { agent: provider, model: resolvedModel };
+          runners[auditSkillId] = recordedRunner;
         }
       }
     }
