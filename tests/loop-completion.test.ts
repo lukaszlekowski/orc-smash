@@ -107,4 +107,51 @@ describe('loop execution-completeness handling (consumes normalized completion f
     expect(result.message).toContain('Agent execution truncated or interrupted');
     expect(existsSync(join(root, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
   });
+
+  it('requires an audit artifact even when a clean provider reports APPROVED on stdout', async () => {
+    const root = setupProject();
+    const config = loadConfig(root);
+    const stepSucceeded: any[] = [];
+    const stepFailed: any[] = [];
+    vi.spyOn(fakeAdapter, 'run').mockResolvedValue({
+      stdout: '## Verdict\n\nAPPROVED',
+      exitCode: 0
+    });
+
+    const result = await baseRunLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
+      maxIterations: 3,
+      interactive: false,
+      registry: testRegistry,
+      output: { ...mockOutput, stepSucceeded: (event: any) => stepSucceeded.push(event), stepFailed: (event: any) => stepFailed.push(event) }
+    });
+
+    expect(result).toMatchObject({ success: false, verdict: 'unknown' });
+    expect(result.message).toContain('fake exited cleanly but produced no audit artifact at docs/dev/plan-audit-v1-fake.md');
+    expect(existsSync(join(root, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
+    expect(stepSucceeded).toEqual([]);
+    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'audit', errorKind: 'missing_output' }));
+  });
+
+  it('requires a follow-up artifact before recording a patched step or starting the next audit', async () => {
+    const root = setupProject();
+    const config = loadConfig(root);
+    const stepSucceeded: any[] = [];
+    const stepFailed: any[] = [];
+    writeFileSync(join(root, 'docs/dev/plan-audit-v1-fake.md'), '# Plan Audit\n\n## Verdict\n\nREJECTED\n');
+    vi.spyOn(fakeAdapter, 'run').mockResolvedValue({ stdout: 'patched', exitCode: 0 });
+
+    const result = await baseRunLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
+      maxIterations: 3,
+      interactive: false,
+      registry: testRegistry,
+      output: { ...mockOutput, stepSucceeded: (event: any) => stepSucceeded.push(event), stepFailed: (event: any) => stepFailed.push(event) }
+    });
+
+    expect(result).toMatchObject({ success: false, verdict: 'unknown' });
+    expect(result.message).toContain('fake exited cleanly but produced no follow-up artifact at docs/dev/plan-followup-v1-fake.md');
+    expect(existsSync(join(root, 'docs/dev/plan-followup-v1-fake.md'))).toBe(false);
+    expect(existsSync(join(root, 'docs/dev/plan-audit-v2-fake.md'))).toBe(false);
+    expect(stepSucceeded).toEqual([]);
+    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'follow-up', errorKind: 'missing_output' }));
+  });
 });

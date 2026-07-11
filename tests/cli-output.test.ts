@@ -113,7 +113,7 @@ describe('Plain mode loop-level integration', () => {
 
     const logs = logSpy.mock.calls.map((c: any) => c.join(' ')).join('\n');
     expect(logs).toContain('Step audit version 1 using fake (fake-model): running...');
-    expect(logs).toContain('Step audit version 1: succeeded');
+    expect(logs).not.toContain('Step audit version 1: succeeded');
     expect(logs).toContain('Loop terminated: Audit failed to write a valid verdict');
   });
 

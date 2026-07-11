@@ -24,6 +24,7 @@ import { buildStageActions, findResumableSession, findResumableSessionDetail, de
 import { executeLoopStep } from './loops/execution.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
 import { resolveRecordedRunner } from './loops/runner-selection.js';
+import { missingRequiredArtifact } from './required-artifact.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -665,15 +666,21 @@ export async function runLoop(
     const relOutputPath = renderPattern(loopSpec.implementPattern!, { n: nextVersion, agent: runner.agent });
     const absOutputPath = resolve(projectRoot, relOutputPath);
 
-    if (!existsSync(absOutputPath)) {
+    const missingArtifact = missingRequiredArtifact(absOutputPath, {
+      agent: runner.agent,
+      kind: 'implement',
+      outputPath: relOutputPath,
+      artifactName: 'implementation ledger'
+    });
+    if (missingArtifact) {
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,
         version: nextVersion,
-        message: `Implementation failed: ${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`,
-        errorKind: 'missing_output'
+        message: `Implementation failed: ${missingArtifact.message}`,
+        errorKind: missingArtifact.errorKind
       });
-      return emitFinalSummary(false, 'unknown', `${runner.agent} exited cleanly but produced no ledger at ${relOutputPath}`, null);
+      return emitFinalSummary(false, 'unknown', missingArtifact.message, null);
     }
     const ledgerContent = readFileSync(absOutputPath, 'utf-8');
     if (!isCompleteImplementLedger(ledgerContent)) {
@@ -1032,14 +1039,27 @@ export async function runLoop(
 
       const relFollowUpPath = renderPattern(loopSpec.followUpPattern!, { n: followUpVersion, agent: runner.agent });
       const absFollowUpPath = resolve(projectRoot, relFollowUpPath);
-      let followUpOutcome: FollowUpOutcome = 'patched';
+      const missingArtifact = missingRequiredArtifact(absFollowUpPath, {
+        agent: runner.agent,
+        kind: 'follow-up',
+        outputPath: relFollowUpPath
+      });
+      if (missingArtifact) {
+        options.output.stepFailed({
+          kind: 'follow-up',
+          skillId: followUpSkillId,
+          version: followUpVersion,
+          message: `Follow-up failed: ${missingArtifact.message}`,
+          errorKind: missingArtifact.errorKind
+        });
+        return emitFinalSummary(false, 'unknown', missingArtifact.message, lastAuditPath);
+      }
+
       const mode = followUpContinuity?.mode ?? 'none';
       const sid = followUpContinuity ? (result.sessionId ?? 'none') : 'none';
-      if (existsSync(absFollowUpPath)) {
-        const body = readFileSync(absFollowUpPath, 'utf-8');
-        followUpOutcome = parseFollowUpOutcome(body);
-        writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs, mode, sid));
-      }
+      const body = readFileSync(absFollowUpPath, 'utf-8');
+      const followUpOutcome: FollowUpOutcome = parseFollowUpOutcome(body);
+      writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs, mode, sid));
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
         version: followUpVersion, status: 'done', outcome: followUpOutcome,
@@ -1228,22 +1248,27 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', completionMessage(result), lastAuditPath);
     }
 
-    options.output.stepSucceeded({
-      kind: 'audit',
-      skillId: auditSkillId,
-      version: N,
-      message: `Audit execution completed`
-    });
-
     const relOutputPath = renderPattern(loopSpec.auditPattern!, { n: N, agent: runner.agent });
     const absOutputPath = resolve(projectRoot, relOutputPath);
-
-    let fileContent: string | null = null;
-    if (existsSync(absOutputPath)) {
-      fileContent = readFileSync(absOutputPath, 'utf-8');
+    const missingArtifact = missingRequiredArtifact(absOutputPath, {
+      agent: runner.agent,
+      kind: 'audit',
+      outputPath: relOutputPath
+    });
+    if (missingArtifact) {
+      options.output.stepFailed({
+        kind: 'audit',
+        skillId: auditSkillId,
+        version: N,
+        message: `Audit failed: ${missingArtifact.message}`,
+        errorKind: missingArtifact.errorKind
+      });
+      return emitFinalSummary(false, 'unknown', missingArtifact.message, lastAuditPath);
     }
 
-    const verdict = parseVerdict(fileContent, result.stdout);
+    const fileContent = readFileSync(absOutputPath, 'utf-8');
+
+    const verdict = parseVerdict(fileContent);
     iteration++;
 
     if (verdict === 'unknown') {
@@ -1255,9 +1280,7 @@ export async function runLoop(
     // Write provenance stamp to audit file
     const mode = continuity?.mode ?? 'none';
     const sid = continuity ? (result.sessionId ?? 'none') : 'none';
-    if (fileContent !== null) {
-      writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs, mode, sid));
-    }
+    writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs, mode, sid));
 
     lastAuditPath = absOutputPath;
     steps.push({
@@ -1266,6 +1289,13 @@ export async function runLoop(
       artifactPath: absOutputPath, mtime: Date.now(), durationMs,
       sessionMode: mode,
       sessionId: sid
+    });
+
+    options.output.stepSucceeded({
+      kind: 'audit',
+      skillId: auditSkillId,
+      version: N,
+      message: `Audit execution completed`
     });
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
