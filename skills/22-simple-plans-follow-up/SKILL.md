@@ -57,7 +57,7 @@ If multiple rejected audits exist and the user did not provide a path, use the m
 
 ## Required Output Shape
 
-Write your follow-up report to the output path given in Inputs (the follow-up output path), not the audit path.
+Write your follow-up report to the exact `Write your output to` value in Inputs (the follow-up output path), not the audit path or a derived filename.
 
 Do not write a `## Verdict` section — follow-ups do not produce verdicts.
 

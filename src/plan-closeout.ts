@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { validateCanonicalPlanMetadata } from './plan-metadata.js';
 
 export type CloseoutStatus = 'done' | 'blocked';
 
@@ -136,9 +137,8 @@ export type WritePlanCloseoutResult =
  * file is missing or the front matter is malformed (no `---` delimiters).
  */
 export function writePlanCloseout(opts: WritePlanCloseoutOptions): WritePlanCloseoutResult {
-  if (!existsSync(opts.planPath)) {
-    return { ok: false, error: `plan file not found at ${opts.planPath}` };
-  }
+  const metadata = validateCanonicalPlanMetadata(opts.planPath);
+  if (!metadata.ok) return metadata;
   const original = readFileSync(opts.planPath, 'utf-8');
   const timestamp = opts.timestamp ?? new Date().toISOString();
   const entryHeading = `### Implementation v${opts.version}-${opts.agent} ${timestamp}`;

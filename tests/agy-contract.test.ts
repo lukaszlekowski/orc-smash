@@ -157,6 +157,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
       'agent: agy\nmodel: Gemini 3.5 Flash (Medium)\ntarget: docs/dev/plan.md\npriorAudit: none\n' +
       'timestamp: 2026-07-01T00:00:00.000Z\n---\n\n# Plan Audit\n\n## Verdict\n\nAPPROVED\n';
     writeFileSync(join(tempDir, 'docs/dev/plan-audit-v1-agy.md'), auditContent);
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Existing plan\n');
 
     registry.adapters.set('agy', makeFakeAgyAdapter({ authFail: true }));
     const implementSpec = config.manifest.loops['implement']!;

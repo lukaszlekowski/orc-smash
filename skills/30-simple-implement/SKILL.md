@@ -60,6 +60,8 @@ If confidence < 0.95, stop and list the specific blockers before writing code.
 
 ## Implementation Evidence Ledger
 
+Write the complete implementation evidence ledger to the exact `Write your output to` value in Inputs. This is the authoritative required durable implementation artifact; do not derive another filename or return the ledger only in chat/stdout.
+
 Before declaring implementation complete, produce this table:
 
 | Plan Step | Files Changed | Tests / Verification | Result | Deviation         |

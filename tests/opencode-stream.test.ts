@@ -20,6 +20,13 @@ describe('opencode stream parser and classifier', () => {
     expect(result.unparsed).toEqual([]);
   });
 
+  it('recognizes the terminal event shape captured by --debug-spawn', () => {
+    const raw = readFileSync(join(process.cwd(), 'tests/fixtures/opencode-captured-terminal.ndjson'), 'utf-8');
+    const result = parseOpencodeStream(raw);
+    expect(result.stopReason).toBe('stop');
+    expect(result.finishReasons).toEqual(['tool-calls', 'stop']);
+  });
+
   it('captures sessionID from stream', () => {
     const raw = '{"type":"step_start","timestamp":1783011546031,"sessionID":"ses_0dc3af79bffe2kxVqBs1l0PFmM"}\n';
     const result = parseOpencodeStream(raw);

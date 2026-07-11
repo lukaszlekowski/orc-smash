@@ -46,7 +46,9 @@ orc status --project <path>         # read-only: detect where we are, render the
 - **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
 - **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
 - **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.
-- **Ledger Verification & Closeout:** For implementation runs, the harness parses the written ledger to verify required tables (evidence and coverage) and confidence declaration. On success, it updates the plan's front-matter status (to `done` or `blocked` based on a 0.95 confidence threshold) and appends a versioned change log.
+- **Ledger Verification & Closeout:** Before implementation, the harness makes `docs/dev/plan.md` YAML front matter canonical (`status: ready`), migrating a leading legacy `**Status:**` line while preserving the plan body. It then verifies the ledger tables and confidence declaration, updates plan status to `done` or `blocked` (0.95 threshold), and appends a versioned change log.
+- **Raw-ledger recovery:** If a complete implementation ledger exists without harness provenance after a closeout failure, an interactive implementation run offers an explicit recovery action. It re-links that same ledger to the approved audit and closes it out without spawning a provider or allocating a new version; non-interactive runs stop with recovery guidance.
+- **Artifact diagnostics:** A clean provider exit is still not success unless the exact `Write your output to` artifact exists. Missing artifacts remain terminal `unknown`; rerun with `--debug-spawn` to inspect the resolved prompt input and provider stream.
 - **Execution Watchdog:** Spawns are protected by a watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default. `claude`, `codex`, and `agy` are config-only: `timeouts.<agent>` > built-in `0` (disabled by default); there are no env vars for these agents. A timeout fires `error.kind === 'timeout'` and a failed lifecycle event.
 - **Interrupted-run handling:** `SIGINT`/`SIGTERM` writes a durable interrupted marker under the active project root, terminates in-flight provider children (SIGTERM → SIGKILL after a grace period), and exits with the conventional signal code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run never resolves to a terminal `unknown` and `orc status` shows the interrupted stage (`plan`/`review`/`implement`) via marker-first loop selection.
 - **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
@@ -67,7 +69,7 @@ Current development is steering the harness toward a cleaner runtime architectur
 - **Execution completeness as an explicit contract:** in the current repo direction, `opencode`
   is the only provider with a verified completion signal (`stopReason`). `codex` and `claude`
   still rely on exit code + structured error handling until equivalent support is explicitly
-  proven and implemented.
+  proven and implemented. A clean OpenCode exit without a recognized terminal stream event is a distinct missing-completion failure, not an inferred interruption.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and

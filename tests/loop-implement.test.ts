@@ -98,6 +98,7 @@ describe('Three-stage pipeline loop/implement integration', () => {
     fakeAdapterState.writeVerdictFile = true;
     mockedSecondOpinionDecision = 'stop';
     mockedContinueToReview = 'stop';
+    mockedStageActionChoice = 'stop';
     promptRunnersCalls = 0;
 
     // Pre-seed plan.md with ready status for implementation loops
@@ -602,7 +603,7 @@ describe('Three-stage pipeline loop/implement integration', () => {
     expect(updatedPlan).not.toMatch(/- status: blocked/);
   });
 
-  it('gated: post-implementation fails with closeout_failed when plan.md is missing', async () => {
+  it('gated: implementation preflight rejects a missing plan.md before spawning a provider', async () => {
     writePlanAudit(1, 'APPROVED');
 
     const config = loadConfig(tempDir);
@@ -621,13 +622,10 @@ describe('Three-stage pipeline loop/implement integration', () => {
 
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/plan file not found|closeout/i);
-    expect(result.message).toMatch(/harness closeout owns plan status\/change-log updates/i);
+    expect(result.message).toMatch(/Implementation preflight failed.*plan file not found/i);
 
     const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(true);
-    const implContent = readFileSync(implFile, 'utf-8');
-    expect(implContent.startsWith('---\nloop:')).toBe(false);
+    expect(existsSync(implFile)).toBe(false);
     const facts = resolveImplementFacts(
       tempDir,
       {
@@ -671,6 +669,32 @@ describe('Three-stage pipeline loop/implement integration', () => {
       }
     );
     expect(facts.currentPlanImplemented).toBe(true);
+  });
+
+  it('recovers a valid raw ledger interactively without spawning a provider or creating v2', async () => {
+    writePlanAudit(1, 'APPROVED');
+    const rawPath = join(tempDir, 'docs/dev/impl-v1-fake.md');
+    writeFileSync(rawPath,
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+      '| --- | --- | --- | --- | --- |\n' +
+      '| Step 1 | src/x.ts | npm test | pass | none |\n\n' +
+      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
+      '| --- | --- | --- | --- |\n' +
+      '| Requirement | src/x.ts | tests/x.test.ts | pass |\n\n' +
+      'State overall confidence: 0.99\n');
+    mockedStageActionChoice = 'recover-implementation';
+    const runSpy = vi.spyOn(fakeAdapter, 'run');
+    const config = loadConfig(tempDir);
+
+    const result = await runLoop(tempDir, 'implement', config.manifest.loops['implement']!, config, {}, {
+      maxIterations: 5, registry: testRegistry, output: mockOutput, interactive: true,
+      globalOverrides: { agent: 'fake', model: 'fake-model' }
+    });
+
+    expect(result.success).toBe(true);
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(readFileSync(rawPath, 'utf-8')).toContain('priorAudit: docs/dev/plan-audit-v1-fake.md');
+    expect(existsSync(join(tempDir, 'docs/dev/impl-v2-fake.md'))).toBe(false);
   });
 
   it('survives a throwing implement adapter (emits stepFailed + unknown verdict, does not propagate)', async () => {

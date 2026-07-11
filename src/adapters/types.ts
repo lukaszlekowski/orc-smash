@@ -46,7 +46,7 @@ export interface RunResult {
   error?: RunError;           // structured adapter error (absent ⇒ success)
   toolCalls?: ToolCall[];     // opencode: parsed tool calls (also feeds item 5 later)
   stopReason?: string | null; // opencode: raw last step_finish.part.reason (e.g. "stop"); diagnostics only
-  completion?: 'complete' | 'truncated' | 'interrupted'; // normalized execution-completeness (Batch 1: opencode only)
+  completion?: 'complete' | 'truncated' | 'interrupted' | 'missing'; // normalized execution-completeness (Batch 1: opencode only)
   sessionId?: string;
 }
 
@@ -55,5 +55,4 @@ export interface AgentAdapter {
   buildRun(input: RunInput): { command: string; args: string[] };
   run(input: RunInput): Promise<RunResult>;
 }
-
 
