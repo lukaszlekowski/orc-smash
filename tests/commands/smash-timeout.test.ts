@@ -16,6 +16,20 @@ vi.mock('../../src/loop.js', () => ({
 
 const mockedRunLoop = vi.mocked(runLoop);
 
+let mockTimeouts: any = undefined;
+
+vi.mock('../../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/config.js')>();
+  const { createTestConfig } = await import('../helpers/test-config.js');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => createTestConfig({
+      projectRoot,
+      timeouts: mockTimeouts
+    })
+  };
+});
+
 vi.mock('../../src/adapters/registry.js', async (importOriginal) => {
   const mod = (await importOriginal()) as any;
   return { ...mod, createProductionAdapterRegistry: vi.fn((...args: any[]) => mod.createProductionAdapterRegistry(...args)) };
@@ -40,6 +54,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
     createTempDir('temp-smash-timeout');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
+    mockTimeouts = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
@@ -51,10 +66,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
 
   it('project-local timeouts.opencode reaches createProductionAdapterRegistry through the real smash.ts setup', async () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\n  fake: [fake-model]\ndefaults:\n  agent: fake\n  model: fake-model\ntimeouts:\n  opencode: 12345\n`
-    );
+    mockTimeouts = { opencode: 12345 };
     // A pre-existing approved plan audit so the implement-loop path can
     // run (smashAction's start-point check).
     writeFileSync(
@@ -95,10 +107,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
 
   it('smashAction default factory (no seam) reaches the production registry end-to-end — v4-audit M3 fix', async () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\n  fake: [fake-model]\ndefaults:\n  agent: fake\n  model: fake-model\ntimeouts:\n  opencode: 99999\n`
-    );
+    mockTimeouts = { opencode: 99999 };
     writeFileSync(
       join(tempDir, 'docs/dev/plan-audit-v1-fake.md'),
       `---\nloop: plan\nskill: plan-audit\nkind: audit\nrole: auditor\nversion: 1\nagent: fake\nmodel: fake\ntarget: docs/dev/plan.md\npriorAudit: none\ntimestamp: 2026-06-30T00:00:00.000Z\n---\n\n# Plan Audit\n\n## Verdict\n\nAPPROVED\n`
@@ -156,10 +165,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
    */
   it('buildDefaultAdapterRegistry (the default factory) forwards config.registry to createProductionAdapterRegistry — v4-audit M3 fix', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
-    writeFileSync(
-      join(tempDir, 'orc.config.yaml'),
-      `providers:\n  opencode: [opencode-go/deepseek-v4-flash]\n  fake: [fake-model]\ndefaults:\n  agent: fake\n  model: fake-model\ntimeouts:\n  opencode: 99999\n`
-    );
+    mockTimeouts = { opencode: 99999 };
     const cfg = loadConfig(tempDir);
     const registry = buildDefaultAdapterRegistry(cfg);
     // The helper is a thin alias: it calls createProductionAdapterRegistry

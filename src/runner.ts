@@ -81,7 +81,7 @@ export function resolveRunner(
     const resolvedAgent = globalOverrides.agent || defaultProfile.provider;
     let resolvedModel = globalOverrides.model;
     if (!resolvedModel) {
-      resolvedModel = config.registry.providers[resolvedAgent]?.defaultModel;
+      resolvedModel = (globalOverrides.agent ? undefined : defaultProfile.model) ?? config.registry.providers[resolvedAgent]?.defaultModel;
     }
     if (!resolvedModel) validateAgentAndModel(resolvedAgent, 'unknown', config.registry);
     validateAgentAndModel(resolvedAgent, resolvedModel, config.registry);
@@ -96,7 +96,7 @@ export function resolveRunner(
     const agent = profile.provider;
     const catalogue = config.registry.providers[agent];
     if (!catalogue) throw new Error(`unknown agent '${agent}'; expected ${Object.keys(config.registry.providers).join(' | ')}`);
-    const model = catalogue.defaultModel;
+    const model = profile.model ?? catalogue.defaultModel;
     validateAgentAndModel(agent, model, config.registry);
     return { agent, model: normalizeModelForAgent(agent, model) };
   }

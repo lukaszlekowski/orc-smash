@@ -12,15 +12,20 @@ import { createTempDir, removeTempDir } from './helpers/fs.js';
 
 const tempWorkspace = join(process.cwd(), 'temp-loop-live-test');
 
+vi.mock('../src/config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config.js')>();
+  const { createTestConfig } = await import('./helpers/test-config.js');
+  return {
+    ...actual,
+    loadConfig: (projectRoot?: string) => createTestConfig({ projectRoot })
+  };
+});
+
 beforeEach(() => {
   createTempDir('temp-loop-live-test');
   mkdirSync(join(tempWorkspace, 'docs/dev'), { recursive: true });
   writeFileSync(join(tempWorkspace, 'docs/dev/plan.md'),
     '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# My Plan\n');
-  writeFileSync(
-    join(tempWorkspace, 'orc.config.yaml'),
-    'providers:\n  opencode:\n    - opencode-go/deepseek-v4-flash\n  fake:\n    - fake-model\ndefaults:\n  agent: fake\n  model: fake-model\n'
-  );
   fakeAdapterState.verdicts = [];
   fakeAdapterState.delayMs = undefined;
   fakeAdapterState.lifecycleMessages = [];

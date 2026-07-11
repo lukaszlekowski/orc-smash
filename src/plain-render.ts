@@ -61,6 +61,15 @@ export function renderPlainPanel(context: PanelContext): string {
     lines.push(...wrapField('Latest version', `v${context.latestVersion}`, width));
   }
 
+  for (const runner of context.resolvedRunners ?? []) {
+    const source = runner.source === 'inherited' && runner.inheritedFrom
+      ? `inherited from ${runner.inheritedFrom.kind} v${runner.inheritedFrom.version}, session ${formatSessionId(runner.inheritedFrom.sessionId)}`
+      : runner.source === 'selected'
+        ? 'selected this chain'
+        : 'configured for this run';
+    lines.push(...wrapField(`Runner (${runner.skillId})`, `${runner.agent} · ${runner.model} — ${source}`, width));
+  }
+
   lines.push('Timeline:');
 
   if (context.timeline.length > 0) {

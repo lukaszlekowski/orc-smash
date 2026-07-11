@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import chalk from 'chalk';
-import { scan, type Step, resolveImplementFacts, requireApprovedPlanAuditPath } from './state.js';
+import { scan, scanImplementAsSteps, type Step, resolveImplementFacts, requireApprovedPlanAuditPath } from './state.js';
 import { parseFollowUpOutcome, type FollowUpOutcome } from './follow-up-outcome.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { RunResult } from './adapters/types.js';
@@ -9,7 +9,7 @@ import { renderPattern } from './patterns.js';
 import { composePrompt } from './prompt-composer.js';
 import { writeArtifactWithMeta, type ArtifactMeta, type StepKind } from './provenance.js';
 import { parseVerdict } from './verdict.js';
-import { buildPanelContext, latestAuditVersion, type PanelContext, resolveLoopLabels } from './status.js';
+import { buildPanelContext, latestAuditVersion, type PanelContext, type ResolvedRunnerDisplay, resolveLoopLabels } from './status.js';
 import { promptRunners, promptStageAction } from './interactive.js';
 import { structuredMessage } from './adapters/errors.js';
 import type { Config } from './config.js';
@@ -54,6 +54,8 @@ export async function runLoop(
   const steps: Step[] = [];
   const upfrontResolved = new Set<string>();
   const upfrontPolicies = new Map<string, SessionPolicy>();
+  const runnerResolution = new Map<string, ResolvedRunnerDisplay>();
+  let projectSummaryDetails: string[] = [];
   let isFirstAction = true;
   let lastActionGroup: string | null = null;
 
@@ -72,6 +74,18 @@ export async function runLoop(
     message: string,
     inFlight: PanelContext['inFlight'] = null
   ) => {
+    const resolvedRunners = [loopSpec.audit, loopSpec['follow-up']]
+      .filter((skillId): skillId is string => !!skillId)
+      .flatMap((skillId) => {
+        const runner = runners[skillId];
+        if (!runner) return [];
+        return [runnerResolution.get(skillId) ?? {
+          skillId,
+          agent: runner.agent,
+          model: runner.model,
+          source: 'configured' as const
+        }];
+      });
     options.output.renderPanel(
       buildPanelContext(
         projectRoot,
@@ -83,7 +97,8 @@ export async function runLoop(
         message,
         inFlight,
         latestAuditVersion(steps),
-        false
+        false,
+        resolvedRunners
       )
     );
   };
@@ -94,9 +109,64 @@ export async function runLoop(
     message: string,
     lastPath: string | null
   ): LoopReturn => {
-    options.output.finalSummary({ success, verdict, message, lastAuditPath: lastPath });
+    const runnerDetails = [loopSpec.audit, loopSpec['follow-up']]
+      .filter((skillId): skillId is string => !!skillId)
+      .flatMap((skillId) => {
+        const runner = runners[skillId];
+        if (!runner) return [];
+        const resolution = runnerResolution.get(skillId);
+        const source = resolution?.source === 'inherited' && resolution.inheritedFrom
+          ? `inherited from ${resolution.inheritedFrom.kind} v${resolution.inheritedFrom.version}, session ${resolution.inheritedFrom.sessionId}`
+          : resolution?.source === 'selected'
+            ? 'selected this chain'
+            : 'configured for this run';
+        return [`runner (${skillId}): ${runner.agent} (${runner.model}) — ${source}`];
+      });
+    options.output.finalSummary({ success, verdict, message, lastAuditPath: lastPath, details: [...buildProjectSummaryDetails(), ...runnerDetails] });
     return { success, verdict: verdict ?? 'unknown', message, lastAuditPath: lastPath };
   };
+
+  function buildProjectSummaryDetails(): string[] {
+    const details: string[] = [];
+    const planDocPath = resolve(projectRoot, 'docs/dev/plan.md');
+    details.push(existsSync(planDocPath) ? 'plan document: docs/dev/plan.md' : 'plan document: not found');
+
+    const planSpec = config.manifest.loops['plan'];
+    if (planSpec?.auditPattern && planSpec.followUpPattern) {
+      const planScan = scan(projectRoot, { auditPattern: planSpec.auditPattern, followUpPattern: planSpec.followUpPattern });
+      const latestPlanAudit = planScan.auditSteps.at(-1);
+      const latestPlanFollowUp = planScan.timeline.filter(s => s.kind === 'follow-up').at(-1);
+      details.push(latestPlanAudit
+        ? `most recent plan audit: ${relative(projectRoot, latestPlanAudit.artifactPath)}, decision: ${latestPlanAudit.verdict}, model: ${latestPlanAudit.agent} (${latestPlanAudit.model}), sessionId: ${latestPlanAudit.sessionId ?? 'none'}`
+        : 'most recent plan audit: none');
+      details.push(latestPlanFollowUp
+        ? `most recent plan follow-up: ${relative(projectRoot, latestPlanFollowUp.artifactPath)}, model: ${latestPlanFollowUp.agent} (${latestPlanFollowUp.model}), sessionId: ${latestPlanFollowUp.sessionId ?? 'none'}`
+        : 'most recent plan follow-up: none');
+    }
+
+    const implementSpec = config.manifest.loops['implement'];
+    if (implementSpec?.implementPattern) {
+      const implementRole = implementSpec.implement && config.manifest.skills[implementSpec.implement]?.role || 'implementer';
+      const latestImplementation = scanImplementAsSteps(projectRoot, implementSpec.implementPattern, implementRole).at(-1);
+      details.push(latestImplementation
+        ? `most recent implementation: ${relative(projectRoot, latestImplementation.artifactPath)}, model: ${latestImplementation.agent} (${latestImplementation.model})`
+        : 'most recent implementation: none');
+    }
+
+    const reviewSpec = config.manifest.loops['review'];
+    if (reviewSpec?.auditPattern && reviewSpec.followUpPattern) {
+      const reviewScan = scan(projectRoot, { auditPattern: reviewSpec.auditPattern, followUpPattern: reviewSpec.followUpPattern });
+      const latestReview = reviewScan.auditSteps.at(-1);
+      const latestReviewFollowUp = reviewScan.timeline.filter(s => s.kind === 'follow-up').at(-1);
+      details.push(latestReview
+        ? `most recent review: ${relative(projectRoot, latestReview.artifactPath)}, decision: ${latestReview.verdict}, model: ${latestReview.agent} (${latestReview.model}), sessionId: ${latestReview.sessionId ?? 'none'}`
+        : 'most recent review: none');
+      details.push(latestReviewFollowUp
+        ? `most recent review follow-up: ${relative(projectRoot, latestReviewFollowUp.artifactPath)}, model: ${latestReviewFollowUp.agent} (${latestReviewFollowUp.model}), sessionId: ${latestReviewFollowUp.sessionId ?? 'none'}`
+        : 'most recent review follow-up: none');
+    }
+    return details;
+  }
 
   const runAdapter = async (
     runner: Runner,
@@ -398,6 +468,13 @@ export async function runLoop(
           const walkSession = findResumableSession(steps, [kind], runner.agent, runner.model, { stopAtApproved });
           if (walkSession) {
             runners[skillId] = { agent: walkSession.provider, model: walkSession.model };
+            runnerResolution.set(skillId, {
+              skillId,
+              agent: walkSession.provider,
+              model: walkSession.model,
+              source: 'inherited',
+              inheritedFrom: { kind: walkSession.kind, version: walkSession.version, sessionId: walkSession.sessionId }
+            });
             const labelKey = kind === 'follow-up' ? 'followUp' : 'audit';
             options.output.note(`Inherited runner for ${targetLabels[labelKey]?.skillId ?? skillId}: ${walkSession.provider} (${walkSession.model}) session ${walkSession.sessionId}`);
             upfrontResolved.add(skillId);
@@ -422,6 +499,12 @@ export async function runLoop(
       for (const skillId of skillsToPrompt) {
         if (prompted[skillId]) {
           runners[skillId] = prompted[skillId];
+          runnerResolution.set(skillId, {
+            skillId,
+            agent: prompted[skillId].agent,
+            model: prompted[skillId].model,
+            source: 'selected'
+          });
           upfrontResolved.add(skillId);
         }
       }
@@ -713,23 +796,50 @@ export async function runLoop(
     return summary;
   }
 
+  const noteProjectSummary = (detail: string): void => {
+    projectSummaryDetails.push(detail);
+    options.output.note(detail);
+  };
+
   const planDocPath = resolve(projectRoot, 'docs/dev/plan.md');
   const hasPlanDoc = existsSync(planDocPath);
-  options.output.note(hasPlanDoc ? `plan document located: docs/dev/plan.md` : `plan.md NOT found`);
+  noteProjectSummary(hasPlanDoc ? `plan document: docs/dev/plan.md` : `plan document: not found`);
 
   const planSpec = config.manifest.loops['plan']!;
   const planScan = scan(projectRoot, { auditPattern: planSpec.auditPattern!, followUpPattern: planSpec.followUpPattern! });
   const latestAudit = planScan.auditSteps.length > 0 ? planScan.auditSteps[planScan.auditSteps.length - 1] : null;
   if (latestAudit) {
-    options.output.note(`most recent plan audit: ${relative(projectRoot, latestAudit.artifactPath)}, decision: ${latestAudit.verdict}, sessionId: ${latestAudit.sessionId ?? 'none'}`);
+    noteProjectSummary(`most recent plan audit: ${relative(projectRoot, latestAudit.artifactPath)}, decision: ${latestAudit.verdict}, model: ${latestAudit.agent} (${latestAudit.model}), sessionId: ${latestAudit.sessionId ?? 'none'}`);
   } else {
-    options.output.note(`most recent plan audit: none`);
+    noteProjectSummary('most recent plan audit: none');
   }
   const latestFollowUp = planScan.timeline.filter(s => s.kind === 'follow-up').pop();
   if (latestFollowUp) {
-    options.output.note(`most recent follow-up: ${relative(projectRoot, latestFollowUp.artifactPath)}, sessionId: ${latestFollowUp.sessionId ?? 'none'}`);
+    noteProjectSummary(`most recent plan follow-up: ${relative(projectRoot, latestFollowUp.artifactPath)}, model: ${latestFollowUp.agent} (${latestFollowUp.model}), sessionId: ${latestFollowUp.sessionId ?? 'none'}`);
   } else {
-    options.output.note(`most recent follow-up: none`);
+    noteProjectSummary('most recent plan follow-up: none');
+  }
+
+  const implementSpec = config.manifest.loops['implement'];
+  if (implementSpec?.implementPattern) {
+    const implementRole = implementSpec.implement && config.manifest.skills[implementSpec.implement]?.role || 'implementer';
+    const latestImplementation = scanImplementAsSteps(projectRoot, implementSpec.implementPattern, implementRole).pop();
+    noteProjectSummary(latestImplementation
+      ? `most recent implementation: ${relative(projectRoot, latestImplementation.artifactPath)}, model: ${latestImplementation.agent} (${latestImplementation.model})`
+      : 'most recent implementation: none');
+  }
+
+  const reviewSpec = config.manifest.loops['review'];
+  if (reviewSpec?.auditPattern && reviewSpec.followUpPattern) {
+    const reviewScan = scan(projectRoot, { auditPattern: reviewSpec.auditPattern, followUpPattern: reviewSpec.followUpPattern });
+    const latestReview = reviewScan.auditSteps.at(-1);
+    const latestReviewFollowUp = reviewScan.timeline.filter(s => s.kind === 'follow-up').at(-1);
+    noteProjectSummary(latestReview
+      ? `most recent review: ${relative(projectRoot, latestReview.artifactPath)}, decision: ${latestReview.verdict}, model: ${latestReview.agent} (${latestReview.model}), sessionId: ${latestReview.sessionId ?? 'none'}`
+      : 'most recent review: none');
+    noteProjectSummary(latestReviewFollowUp
+      ? `most recent review follow-up: ${relative(projectRoot, latestReviewFollowUp.artifactPath)}, model: ${latestReviewFollowUp.agent} (${latestReviewFollowUp.model}), sessionId: ${latestReviewFollowUp.sessionId ?? 'none'}`
+      : 'most recent review follow-up: none');
   }
 
   const initialScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
