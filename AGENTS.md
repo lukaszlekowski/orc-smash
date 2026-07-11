@@ -1,5 +1,7 @@
 # AGENTS.md — orc-smash repo rules
 
+> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+
 orc-smash is a **stateless subprocess harness**: it decides what coding-agent CLI to run, when,
 reads the verdict, and loops. The agents do the LLM work; orc-smash never calls a model API
 itself.

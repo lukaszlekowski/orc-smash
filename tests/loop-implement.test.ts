@@ -9,6 +9,7 @@ import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { buildFrontMatter } from '../src/provenance.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
+import type { AgentAdapter } from '../src/adapters/types.js';
 
 const testRegistry = createTestAdapterRegistry();
 const mockOutput = {
@@ -646,5 +647,80 @@ describe('Three-stage pipeline loop/implement integration', () => {
       }
     );
     expect(facts.currentPlanImplemented).toBe(true);
+  });
+
+  it('survives a throwing implement adapter (emits stepFailed + unknown verdict, does not propagate)', async () => {
+    writePlanAudit(1, 'APPROVED');
+
+    // Adapter that throws inside run() — simulates a real-provider failure that
+    // escapes as an exception (spawn ENOENT, watchdog throw, stream-parse error).
+    // The implement branch must catch this the same way Step A (follow-up) and
+    // Step B (audit) do, instead of propagating to smash.ts's top-level catch.
+    const throwingAdapter: AgentAdapter = {
+      name: 'fake',
+      buildRun: () => ({ command: 'fake', args: [] }),
+      run: async () => { throw new Error('provider spawn failed: ENOENT'); }
+    };
+    const registry = createTestAdapterRegistry();
+    registry.adapters.set('fake', throwingAdapter);
+
+    const stepFailedCalls: any[] = [];
+    const localOutput = {
+      ...mockOutput,
+      stepFailed: (ctx: any) => { stepFailedCalls.push(ctx); }
+    };
+
+    const config = loadConfig(tempDir);
+    const implementSpec = config.manifest.loops['implement']!;
+
+    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
+      maxIterations: 5,
+      registry,
+      output: localOutput,
+      interactive: false,
+      globalOverrides: { agent: 'fake', model: 'fake-model' }
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('unknown');
+    expect(stepFailedCalls.some(c => c.kind === 'implement')).toBe(true);
+  });
+
+  it('DIAGNOSE: provider exits 1, does code work, writes NO ledger (agy-style) — does the harness crash?', async () => {
+    writePlanAudit(1, 'APPROVED');
+
+    // agy-style: it did real work (simulate by editing a source file) but exited 1
+    // and wrote NO ledger artifact at the outputPath.
+    const adapter: AgentAdapter = {
+      name: 'fake',
+      buildRun: () => ({ command: 'fake', args: [] }),
+      run: async () => {
+        // simulate "agy updated the code"
+        mkdirSync(join(tempDir, 'src'), { recursive: true });
+        writeFileSync(join(tempDir, 'src/changed.ts'), 'export const x = 1;\n');
+        // ...but exited nonzero with stderr, and wrote no ledger
+        return { exitCode: 1, stdout: '', stderr: 'agy: runtime error after edits' };
+      }
+    };
+    const registry = createTestAdapterRegistry();
+    registry.adapters.set('fake', adapter);
+
+    const config = loadConfig(tempDir);
+    const implementSpec = config.manifest.loops['implement']!;
+
+    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
+      maxIterations: 5,
+      registry,
+      output: mockOutput,
+      interactive: false,
+      globalOverrides: { agent: 'fake', model: 'fake-model' }
+    });
+
+    // If the harness handles this cleanly it returns {success:false, verdict:'unknown'};
+    // if it crashes, this await throws and the test fails with the real error.
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('unknown');
+    // agy's code edits are still on disk (harness doesn't delete them) — no data loss
+    expect(existsSync(join(tempDir, 'src/changed.ts'))).toBe(true);
   });
 });
