@@ -1099,4 +1099,106 @@ defaults:
     expect(capturedArgs[2].includes('resume')).toBe(true);
     expect(capturedArgs[2][capturedArgs[2].indexOf('resume') + 1]).toBe('sess_followup_abc');
   });
+
+  it('(n) review loop multi-iteration continue chain preserves review-follow-up sessionId', async () => {
+    const devDir = join(tempDir, 'docs/dev');
+    mkdirSync(devDir, { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), `# My Plan\n`);
+
+    // Seed a prior review audit (v1) REJECTED so the review loop starts in a
+    // rejected-no-followup state and CONTINUE runs the follow-up -> audit segment.
+    const priorMeta = {
+      loop: 'review', skill: 'review', kind: 'audit' as const, role: 'reviewer',
+      version: 1, agent: 'codex', model: 'gpt-5.5', target: '.',
+      priorAudit: 'none', timestamp: '2026-06-26T20:00:00.000Z',
+      sessionMode: 'fresh' as const, sessionId: 'sess_review_audit_prior'
+    };
+    writeFileSync(
+      join(devDir, 'review-v1-codex.md'),
+      buildFrontMatter(priorMeta) + `\n## Verdict\nREJECTED\n`
+    );
+
+    mockStageActionChoices = ['continue', 'stop'];
+    mockPromptRunnersChoice = {
+      'review-follow-up': { agent: 'codex', model: 'gpt-5.5' }
+    };
+
+    const capturedArgs: string[][] = [];
+    let auditCallCount = 0;
+
+    const codexProcessRunner = async (options: ProcessRunOptions): Promise<RawProcessResult> => {
+      capturedArgs.push(options.args);
+
+      const prompt = options.args[options.args.length - 1] || '';
+      const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
+      const isFollowUp = outputPathMatch?.[1]?.includes('followup');
+
+      if (outputPathMatch?.[1]) {
+        const absOut = resolve(tempDir, outputPathMatch[1]);
+        mkdirSync(dirname(absOut), { recursive: true });
+
+        if (isFollowUp) {
+          writeFileSync(absOut, `# Review Follow-up\n\n## Follow-up Outcome\n\npatched\n`);
+        } else {
+          auditCallCount++;
+          const verdict = auditCallCount === 1 ? 'REJECTED' : 'APPROVED';
+          writeFileSync(absOut, `# Review\n\n## Verdict\n${verdict}\n`);
+        }
+      }
+
+      const isResumed = options.args.includes('resume');
+      let sessionId = 'sess_default';
+      if (isResumed) {
+        sessionId = options.args[options.args.indexOf('resume') + 1]!;
+      } else {
+        sessionId = isFollowUp ? 'sess_review_followup_abc' : 'sess_review_audit_new';
+      }
+
+      return {
+        stdout: codexStdout(sessionId, 'Completed.'),
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        signal: null,
+        durationMs: 50
+      };
+    };
+
+    const config = loadConfig(tempDir);
+    const reviewSpec = config.manifest.loops['review']!;
+    const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner });
+
+    const runners = {
+      'review': { agent: 'codex', model: 'gpt-5.5' },
+      'review-follow-up': { agent: 'codex', model: 'gpt-5.5' }
+    };
+
+    await runLoop(tempDir, 'review', reviewSpec, config, runners, {
+      maxIterations: 4,
+      registry,
+      output: mockOutput,
+      interactive: true
+    });
+
+    // Decisive assertion: review-follow-up v2 must resume v1's session id
+    // (the shared-code #43 fix, now proven on the review path).
+    const fileContent1 = readFileSync(join(devDir, 'review-followup-v1-codex.md'), 'utf8');
+    const fileContent2 = readFileSync(join(devDir, 'review-followup-v2-codex.md'), 'utf8');
+
+    const match1 = fileContent1.match(/sessionId:\s*([^\s\r\n]+)/);
+    const match2 = fileContent2.match(/sessionId:\s*([^\s\r\n]+)/);
+
+    expect(match1).not.toBeNull();
+    expect(match2).not.toBeNull();
+    expect(match1![1]).toBe('sess_review_followup_abc');
+    expect(match2![1]).toBe('sess_review_followup_abc');
+
+    // [0] review-followup v1 (fresh); [1] review v2 (resumes seeded audit);
+    // [2] review-followup v2 (resumes v1 follow-up — the property under test).
+    expect(capturedArgs[0].includes('resume')).toBe(false);
+    expect(capturedArgs[1].includes('resume')).toBe(true);
+    expect(capturedArgs[1][capturedArgs[1].indexOf('resume') + 1]).toBe('sess_review_audit_prior');
+    expect(capturedArgs[2].includes('resume')).toBe(true);
+    expect(capturedArgs[2][capturedArgs[2].indexOf('resume') + 1]).toBe('sess_review_followup_abc');
+  });
 });

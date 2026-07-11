@@ -8,8 +8,10 @@ Current pending work, grouped into recommended implementation batches.
 
 **Batch A — Runner & session continuity**
 
-- [ ] **Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind**
-- [ ] **43 — Chain follow-up never resumes its prior session (startup 'resumed' → 'new' downgrade is permanent)**
+- [x] **Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind**
+- **43 — Chain follow-up never resumes its prior session (startup 'resumed' → 'new' downgrade is permanent)**
+  - [x] plan / plan-follow-up — done (verified by test (m); the resume assertion is proven discriminating)
+  - [x] review / review-follow-up — done (verified by test (n): review-follow-up v2 resumes v1's session id through the shared `runLoop` continuity code — the #43 fix holds on the review path)
 
 **Batch B — smash output & error diagnostics**
 
@@ -82,211 +84,18 @@ The implementation goal for this roadmap is a **clean, scalable, high-quality ha
 
 ---
 
-## Batch 5 notes
+## Batch A notes — Runner & session continuity
 
-This batch groups two small, operator-visible fixes: one artifact-integrity correction and one interactive control-flow improvement. Neither should materially reshape the runtime architecture.
-
-## 33 — Follow-up artifacts carry duplicate front-matter blocks
-
-Goal: ensure every loop artifact (audit, follow-up, implement) carries exactly one harness-owned metadata block, so provenance is unambiguous and the agent cannot leave a stale, hallucinated second block on disk.
-
-> Current observation: the follow-up docs in `docs/dev/` (`review-followup-vN-opencode.md`, `plan-followup-v11-opencode.md`) each carry **two** YAML front-matter blocks (4 `---` fences), while audit docs and `impl-v1-opencode.md` carry only one. The second block is agent-written and dead — nothing reads it.
-
-**Findings so far:**
-
-- **Two independent writers each emit a block.** The follow-up agent writes its own front matter when it writes the report, then the harness prepends a canonical block on top via `writeArtifactWithMeta` (`src/provenance.ts:27-32`), which does `buildFrontMatter(meta) + body` without stripping any front matter already present in `body`. The follow-up stage reads the agent-written file and re-stamps it (`src/loop.ts:583-587`).
-- **The follow-up skills lack the "harness owns metadata" instruction.** The audit skills carry an explicit note — _"Document metadata … is written as YAML front matter by the orc-smash harness. Do not write metadata headers yourself"_ (`skills/40-simple-review/SKILL.md:138`, `skills/21-simple-plans-audit/SKILL.md:95`) — but `skills/42-simple-review-follow-up/SKILL.md` and `skills/22-simple-plans-follow-up/SKILL.md` do not, so the follow-up agent emits its own block.
-- **The two blocks disagree, confirming distinct authors.** In `review-followup-v4-opencode.md` the harness block (top) has `loop: review` + `role: implementer` + a real-precision timestamp from `new Date().toISOString()`, while the agent block (lower) has `loop: review-follow-up`, no `role`, and a round synthetic `.000Z` timestamp.
-- **Only the first block is ever read.** `parseArtifactMeta` → `extractFrontMatter` (`src/provenance.ts:35-38`) is a `^`-anchored non-greedy regex that matches only the leading block, so the agent's lower block is silently ignored dead metadata carrying hallucinated values. The duplicate is cosmetic today but becomes a latent correctness bug if write-ordering ever flips or a reader parses the wrong block.
-- **Audits and the implement ledger are clean by contrast.** Audit skills tell the agent not to write metadata (one block), and the implement skill's output shape is a ledger table with no front matter (one block); only follow-ups hit both writers at once.
-
-**Fix:**
-
-- Make `writeArtifactWithMeta` robust: strip any leading `---\n…\n---\n` block from `body` before prepending the canonical block, so a second writer can never produce a duplicate regardless of skill wording.
-- And/or add the "metadata is written by the harness; do not write metadata headers yourself" instruction to the two follow-up skills so the agent stops emitting its own block (consistent with the audit skills).
-- Add a regression test asserting every emitted artifact (audit, follow-up, implement) contains exactly one leading front-matter block after the harness stamps it.
-
-**Effort:** S.
-
----
-
-## Batch 9 notes
-
-This batch is about operator recovery from transient infrastructure failures without
-weakening the harness safety rule that terminal `unknown` outcomes never advance state
-automatically.
-
-## 38 — Manual retry flow for transient provider / transport failures
-
-Goal: when a provider run fails for a transient infrastructure reason (for example
-provider overload, temporary upstream gateway failure, or short-lived transport
-instability), give the operator a first-class way to retry the same step with the same
-resolved runner and version instead of forcing a full manual re-entry of the command and
-menu flow.
-
-> Current observation: a real `claude` run using `glm-5.2` can terminate with a
-> server-side overload error such as `API Error: 529 ... service may be temporarily
-> overloaded`. Today that resolves to terminal `unknown`, the loop stops, and the
-> operator must restart `orc smash` manually even though the desired next action is often
-> simply "retry the same step in a moment."
-
-**Findings so far:**
-
-- **`unknown` is terminal by design and should stay that way.** The repo rule in
-  `AGENTS.md` / `README.md` is correct: missing output, malformed verdicts, and
-  transport/provider failures must stop the loop and must not silently advance state.
-- **There is no first-class retry affordance today.** After a transient provider failure
-  the operator has to relaunch the CLI, reselect the loop, re-enter iteration limits,
-  and navigate back through the menu even when the intended action is "retry the exact
-  same step."
-- **Some failures are likely transient, not semantic.** Provider overloads (`529`),
-  temporary gateway failures, and similar server-side failures are operationally
-  different from rejected audits or malformed outputs: the source artifact may be fine,
-  and retrying the same resolved runner is often the right next move.
-- **Automatic retry would be risky.** Blind retries could hide infrastructure issues,
-  create duplicate provider executions, or make state transitions ambiguous. The safe
-  product direction is an explicit operator choice after a terminal `unknown`, not an
-  automatic loop-internal retry.
-- **The harness already has most of the needed ingredients.** `runLoop` knows the step
-  kind, version, resolved runner, and pending action at failure time; the missing piece
-  is a structured recovery path that surfaces "retry same step" as a deliberate option.
-
-**Fix:**
-
-- Add an interactive-only recovery prompt for terminal `unknown` outcomes caused by
-  provider / transport / timeout-style failures.
-- The prompt should prefer explicit bounded actions such as:
-  `stop`, `retry same step`, `pick different runner`, and possibly `restart from menu`.
-- Preserve the `unknown` safety rule: the original failed attempt still terminates the
-  current run as `unknown`; retry is an operator-triggered follow-up action, not an
-  invisible continuation.
-- Keep non-interactive behavior unchanged: CI / scripted runs should still exit on
-  terminal `unknown` exactly as today.
-- Add regression coverage for at least:
-  - transient provider error → interactive retry same step
-  - retry with same runner preserves version and artifact path
-  - retry with different runner re-prompts only the affected skill
-  - non-interactive mode still exits immediately on `unknown`
-
-**Effort:** M.
-
----
-
-## Batch 10 notes
-
-This batch is about keeping the live `smash` UI consistent with the authoritative
-filesystem-backed state that `orc status` already reports correctly.
-
-## 39 — `smash` panel does not refresh timeline after persisted follow-up artifacts
-
-Goal: when a follow-up or audit artifact is written during an interactive `smash` run,
-the live panel should reflect the updated timeline immediately instead of requiring a
-subsequent fresh scan through `orc status` or a new `smash` invocation.
-
-> Current observation: after running a manual follow-up step, the follow-up artifact is
-> written under the target's `docs/dev/` and `orc status` shows it correctly, but the
-> live `smash` timeline shown during the current run does not visibly update to include
-> that persisted step. This makes it look like the step was not recorded even though the
-> artifact exists and the next scan sees it.
-
-**Findings so far:**
-
-- **The filesystem scan is working.** `orc status` performs a fresh `scan(...)` over the
-  target root and correctly discovers the new follow-up artifact, so the issue is not in
-  filename matching, artifact persistence, or state normalization.
-- **The gap appears to be in live rendering / state refresh during `smash`.** The
-  running loop maintains in-memory step state and emits progress events, but the live
-  panel does not always re-render from a freshly scanned timeline after a one-off or
-  manual follow-up completes.
-- **This is especially confusing after one-off actions.** When an operator runs a manual
-  follow-up because `CONTINUE` was disabled or unavailable, they reasonably expect the
-  timeline in the same run to show that follow-up immediately before the next action
-  prompt.
-- **Authoritative state should stay filesystem-backed.** The correct fix direction is not
-  to create a parallel UI-only timeline model that can drift. The live panel should be
-  refreshed from the same normalized step facts / scan source that powers `orc status`,
-  or from an equivalent canonical in-memory representation that is guaranteed to match the
-  persisted artifact facts.
-
-**Fix:**
-
-- Refresh the live `smash` timeline after step completion using the same canonical facts
-- source that `status` uses, especially after follow-up artifact persistence and before
-- re-prompting the operator.
-- Ensure one-off follow-up and one-off audit paths update the visible timeline before the
-  next action menu is shown.
-- Add regression coverage for:
-  - one-off follow-up writes artifact → live timeline shows the new step in the same run
-  - normal chained follow-up writes artifact → live timeline stays in sync
-  - `orc status` and the live `smash` panel agree on timeline contents after each step
-
-**Effort:** S.
-
----
-
-## 8 — Prompt to extend iterations at max (consideration)
-
-Goal: when the loop reaches `max-iterations`, instead of a hard stop, offer the interactive user a choice —
-extend by N more iterations, or stop — so a run that's converging isn't cut off just because the up-front
-guess was too low.
-
-> Current observation: after the iteration budget is exhausted the app fully stops with
-> `hit max-iterations, awaiting human`. There is no chance to continue without re-running.
-
-**Findings so far:**
-
-- **It is a hard stop today.** `src/loop.ts` falls out of the `while (iteration < options.maxIterations)` loop and returns `hit max-iterations, awaiting human` in both interactive and non-interactive modes.
-- **A similar prompt already exists** at the other decision point: since the unified action menu shipped, interactive mode at `APPROVED` (and every decision point) uses `promptStageAction` (`src/interactive.ts`). `promptMaxIterations` also already asks for the count up-front, so this change mirrors existing interaction patterns. _(The earlier stop-vs-second-opinion prompt, `promptSecondOpinionDecision`, was removed by the menu work — mirror `promptStageAction`, not it.)_
-- **Extending is mechanically cheap.** `maxIterations` lives on `LoopOptions`, so extending is a local control-flow change rather than a state-model rewrite.
-- **Must be interactive-only.** CI and `--loop` runs should keep the current exit behavior.
-
-**Fix (to consider):**
-
-- Add a dedicated continuation prompt to `src/interactive.ts`, but prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) over free-form numeric input.
-- Restructure the loop-exit branch so interactive continuation happens before the function returns, rather than by relying on awkward post-loop state mutation.
-- Guard against accidental infinite prompting with bounded continuation rules or a clear "ask once per limit hit" policy.
-- Keep non-interactive behavior and exit codes byte-for-byte identical.
-
-**Effort:** S. This is a localized control-flow change in the loop termination path.
-
----
-
-## 35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error
-
-Goal: make implementation-ledger validation truthful and contract-aligned, so a provider-written ledger that structurally contains both required tables and a confidence line fails for the real reason and the skill/runtime contract stays in sync.
-
-> Current observation: a real `claude` implementation run wrote `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline) with both required tables and `State overall confidence: 0.96`, yet the harness terminated with `Ledger at docs/dev/impl-v1-claude.md is missing the required evidence table, requirement coverage table, and/or confidence declaration`. The actual mismatch is in row status semantics, not missing sections.
-
-**Findings so far:**
-
-- **The validator is stricter than the error text.** `src/implement-ledger.ts` requires both tables, a confidence line, and every `Result` / `Status` cell to match the passing-status allow-list. A ledger can therefore fail even when the tables and confidence declaration are present.
-- **The observed Claude ledger failed on non-passing row values, not on structure.** In `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline), rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate` do not match the current `PASSING_STATUS` contract, so `isCompleteImplementLedger(...)` returns `false`.
-- **The runtime error hides the real cause.** `src/loop.ts` collapses every non-empty invalid ledger into the same catch-all message about missing tables / confidence, which sends debugging effort in the wrong direction.
-- **The skill and validator need one explicit contract for release-gate items.** If pending env-gated verification is allowed but not implementation-blocking, it should not be encoded as a failing row in the two required gate tables unless the validator is intentionally widened to model that state.
-
-**Fix:**
-
-- Decide one source-of-truth contract for non-blocking release-gate items: either keep the two required tables strictly pass/fail and move pending release-gate items into a separate prose section, or explicitly add a supported pending status shape with clear gating semantics.
-- Replace the catch-all invalid-ledger message in `src/loop.ts` with reasoned diagnostics that distinguish missing evidence table, missing coverage table, missing confidence declaration, blank required cells, and non-passing status cells.
-- Add regression tests in `tests/implement-ledger.test.ts` and implement-loop gate tests for the real Claude ledger shape, including at least one case with structurally present tables plus pending/release-gate cells.
-- If the skill contract changes, update `skills/30-simple-implement/SKILL.md` so provider outputs stop drifting into unsupported ledger states.
-
-**Effort:** S.
-
----
-
-## Batch 8 notes
-
-Follow-ups to the **shipped** unified-action-menu feature (commits `b2a0f01` + `334b9ff`). These are gaps in already-shipped behavior, not new roadmap capability, so they are tracked separately from Batches 5–7 to keep those batches scoped to their themes.
+Runner selection and session-continuity for chain segments: CONTINUE must prompt for any step kind lacking a resumable session (instead of silently using the manifest default), and a chain's follow-up must resume the prior follow-up's session instead of running fresh every iteration.
 
 > **Plan status (2026-07-07):** the follow-up plan in `docs/dev/plan.md` is now
-> **approved**. Implementation should treat that plan as the source of truth for Batch 8.
+> **approved**. Implementation should treat that plan as the source of truth for Batch A.
 > The most important late clarification is that approved-phase `continue` is no longer a
 > single audit-only resume: it should continue the full upcoming `audit -> follow-up`
 > segment, prompting only for step kinds that do not already have resumable sessions and
 > re-prompting only after the whole segment completes.
 
-## Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind
+### Menu — CONTINUE silently uses the manifest-default model when no prior session exists for the step kind
 
 Goal: when a user picks CONTINUE, the harness should treat it as continuation of the
 next whole chain segment, not as a one-step action with hidden defaults. For each step
@@ -340,14 +149,105 @@ instead of silently substituting the skill's manifest-default model.
 
 ---
 
-## Batch 11 notes
+### 43 — Chain follow-up never resumes its prior session (startup 'resumed' → 'new' downgrade is permanent)
 
-Three small operator-facing clarity fixes in `smash` runs: the printed startup context is
-hard-wired to the `plan` loop (#40), a clean implement failure leaves no diagnostic
-artifact (#41), and panel mode discards the alternate screen on exit — taking the error
-with it (#42). All are display / diagnostic gaps, not control-flow bugs.
+Goal: in a chain (START NEW / CONTINUE) that cycles through multiple versions, each
+follow-up should resume the prior follow-up's session — like the audit does — instead of
+starting fresh every version.
 
-## 40 — `smash` startup notes report plan-stage artifacts when running a non-plan loop
+> Current observation: a review chain (codex audit + opencode follow-up) cycled v1→v4 on
+> repeated rejection. The audit kept one session id (`*a096f` across v1–v4) but the
+> follow-up got a fresh session every version (`awTfO` → `FmoJk` → `kqnnT`), defeating
+> session continuity for the follow-up step.
+
+**Findings so far:**
+
+- **The startup downgrade is permanent.** `resolveUpfrontRunners` (`src/loop.ts:557-560`)
+  downgrades a `'resumed'`-policy step to `'new'` when no prior session exists to inherit
+  at startup. `upfrontPolicies` is never re-evaluated — `resolveUpfrontRunners` is a no-op
+  mid-chain for already-resolved runners — so a follow-up on a fresh chain is locked to
+  `'new'` for the whole chain and every follow-up runs fresh.
+- **The adapter can resume; it is just never asked.** opencode supports `-c <sessionId>`
+  resume (`src/adapters/opencode.ts:41-42`) and each follow-up returns a fresh session id,
+  so v2/v3/v4 *could* resume v1/v2/v3 — but the locked `'new'` policy means the resumed
+  branch in Step A (`src/loop.ts:~977-990`) is never taken.
+- **Why the audit resumes but the follow-up doesn't.** At this run's startup a prior codex
+  audit session existed to inherit (audit stayed `'resumed'`, keeps resuming one id), but
+  no prior opencode follow-up session existed (follow-up downgraded to `'new'`).
+- **The downgrade exists to suppress a warning** — and that warning is load-bearing both
+  ways: `loop-continuity.test.ts` (non-interactive) expects `"resumed requested … no prior
+  session"` to warn; `loop-followup-runner` b5/b6 (interactive) expect it suppressed.
+- **Pre-existing** — not introduced by the chain-mode cycling fix or the timestamp work.
+
+**Fix:**
+
+- Stop locking the policy to `'new'`. Keep the step's policy as chosen (`'resumed'`) for
+  the chain and let the per-cycle `findResumableSession` in Step A / Step B resume when a
+  prior session exists — so follow-up v2+ resumes v1's session.
+- Reconcile the warning contract: a fresh chain's first follow-up legitimately has nothing
+  to resume, so "no prior session → fresh" should be silent (or a note), not a warning;
+  reserve the warning for a genuine mismatch (prior steps of that kind exist but none
+  match agent/model). Update the six assertions in `loop-continuity.test.ts` and
+  `loop-followup-runner.test.ts` (b5/b6) to match.
+- Add a regression test: a fresh chain (no prior follow-up) where follow-up v2 resumes v1's
+  session id (prompt/artifact-version assertion, like the existing chain tests).
+
+**Effort:** M.
+
+---
+
+## Batch B notes — smash output & error diagnostics
+
+Operator-visible output and error diagnostics in `smash` runs.
+
+### 39 — `smash` panel does not refresh timeline after persisted follow-up artifacts
+
+Goal: when a follow-up or audit artifact is written during an interactive `smash` run,
+the live panel should reflect the updated timeline immediately instead of requiring a
+subsequent fresh scan through `orc status` or a new `smash` invocation.
+
+> Current observation: after running a manual follow-up step, the follow-up artifact is
+> written under the target's `docs/dev/` and `orc status` shows it correctly, but the
+> live `smash` timeline shown during the current run does not visibly update to include
+> that persisted step. This makes it look like the step was not recorded even though the
+> artifact exists and the next scan sees it.
+
+**Findings so far:**
+
+- **The filesystem scan is working.** `orc status` performs a fresh `scan(...)` over the
+  target root and correctly discovers the new follow-up artifact, so the issue is not in
+  filename matching, artifact persistence, or state normalization.
+- **The gap appears to be in live rendering / state refresh during `smash`.** The
+  running loop maintains in-memory step state and emits progress events, but the live
+  panel does not always re-render from a freshly scanned timeline after a one-off or
+  manual follow-up completes.
+- **This is especially confusing after one-off actions.** When an operator runs a manual
+  follow-up because `CONTINUE` was disabled or unavailable, they reasonably expect the
+  timeline in the same run to show that follow-up immediately before the next action
+  prompt.
+- **Authoritative state should stay filesystem-backed.** The correct fix direction is not
+  to create a parallel UI-only timeline model that can drift. The live panel should be
+  refreshed from the same normalized step facts / scan source that powers `orc status`,
+  or from an equivalent canonical in-memory representation that is guaranteed to match the
+  persisted artifact facts.
+
+**Fix:**
+
+- Refresh the live `smash` timeline after step completion using the same canonical facts
+- source that `status` uses, especially after follow-up artifact persistence and before
+- re-prompting the operator.
+- Ensure one-off follow-up and one-off audit paths update the visible timeline before the
+  next action menu is shown.
+- Add regression coverage for:
+  - one-off follow-up writes artifact → live timeline shows the new step in the same run
+  - normal chained follow-up writes artifact → live timeline stays in sync
+  - `orc status` and the live `smash` panel agree on timeline contents after each step
+
+**Effort:** S.
+
+---
+
+### 40 — `smash` startup notes report plan-stage artifacts when running a non-plan loop
 
 Goal: when a non-plan loop is run (e.g. `review`), the startup notes should describe that
 loop's own audit/follow-up artifacts (or report `none`), not the `plan` loop's artifacts.
@@ -394,7 +294,7 @@ loop's own audit/follow-up artifacts (or report `none`), not the `plan` loop's a
 
 ---
 
-## 41 — Clean implement failures leave no diagnostic artifact (only interrupts / auth do)
+### 41 — Clean implement failures leave no diagnostic artifact (only interrupts / auth do)
 
 Goal: when an implement run fails cleanly (provider error, nonzero exit, missing or
 invalid ledger), preserve a diagnostic artifact the way an interrupt does — so the
@@ -448,7 +348,7 @@ operator can inspect the stopped work and `orc status` reflects that a run was a
 
 ---
 
-## 42 — Hold the alternate screen until q/Esc on run end
+### 42 — Hold the alternate screen until q/Esc on run end
 
 > **Status (2026-07-08):** option (a) shipped — `error` / `stepFailed` / `finalSummary`
 > now prefix a `[HH:MM:SS]` timestamp, and failures raised while the live region is active
@@ -500,47 +400,139 @@ wanted.
 
 ---
 
-## 43 — Chain follow-up never resumes its prior session (startup 'resumed' → 'new' downgrade is permanent)
+## Batch C notes — Artifact & validation integrity
 
-Goal: in a chain (START NEW / CONTINUE) that cycles through multiple versions, each
-follow-up should resume the prior follow-up's session — like the audit does — instead of
-starting fresh every version.
+Artifact structure and implementation-ledger validation integrity.
 
-> Current observation: a review chain (codex audit + opencode follow-up) cycled v1→v4 on
-> repeated rejection. The audit kept one session id (`*a096f` across v1–v4) but the
-> follow-up got a fresh session every version (`awTfO` → `FmoJk` → `kqnnT`), defeating
-> session continuity for the follow-up step.
+### 33 — Follow-up artifacts carry duplicate front-matter blocks
+
+Goal: ensure every loop artifact (audit, follow-up, implement) carries exactly one harness-owned metadata block, so provenance is unambiguous and the agent cannot leave a stale, hallucinated second block on disk.
+
+> Current observation: the follow-up docs in `docs/dev/` (`review-followup-vN-opencode.md`, `plan-followup-v11-opencode.md`) each carry **two** YAML front-matter blocks (4 `---` fences), while audit docs and `impl-v1-opencode.md` carry only one. The second block is agent-written and dead — nothing reads it.
 
 **Findings so far:**
 
-- **The startup downgrade is permanent.** `resolveUpfrontRunners` (`src/loop.ts:557-560`)
-  downgrades a `'resumed'`-policy step to `'new'` when no prior session exists to inherit
-  at startup. `upfrontPolicies` is never re-evaluated — `resolveUpfrontRunners` is a no-op
-  mid-chain for already-resolved runners — so a follow-up on a fresh chain is locked to
-  `'new'` for the whole chain and every follow-up runs fresh.
-- **The adapter can resume; it is just never asked.** opencode supports `-c <sessionId>`
-  resume (`src/adapters/opencode.ts:41-42`) and each follow-up returns a fresh session id,
-  so v2/v3/v4 *could* resume v1/v2/v3 — but the locked `'new'` policy means the resumed
-  branch in Step A (`src/loop.ts:~977-990`) is never taken.
-- **Why the audit resumes but the follow-up doesn't.** At this run's startup a prior codex
-  audit session existed to inherit (audit stayed `'resumed'`, keeps resuming one id), but
-  no prior opencode follow-up session existed (follow-up downgraded to `'new'`).
-- **The downgrade exists to suppress a warning** — and that warning is load-bearing both
-  ways: `loop-continuity.test.ts` (non-interactive) expects `"resumed requested … no prior
-  session"` to warn; `loop-followup-runner` b5/b6 (interactive) expect it suppressed.
-- **Pre-existing** — not introduced by the chain-mode cycling fix or the timestamp work.
+- **Two independent writers each emit a block.** The follow-up agent writes its own front matter when it writes the report, then the harness prepends a canonical block on top via `writeArtifactWithMeta` (`src/provenance.ts:27-32`), which does `buildFrontMatter(meta) + body` without stripping any front matter already present in `body`. The follow-up stage reads the agent-written file and re-stamps it (`src/loop.ts:583-587`).
+- **The follow-up skills lack the "harness owns metadata" instruction.** The audit skills carry an explicit note — _"Document metadata … is written as YAML front matter by the orc-smash harness. Do not write metadata headers yourself"_ (`skills/40-simple-review/SKILL.md:138`, `skills/21-simple-plans-audit/SKILL.md:95`) — but `skills/42-simple-review-follow-up/SKILL.md` and `skills/22-simple-plans-follow-up/SKILL.md` do not, so the follow-up agent emits its own block.
+- **The two blocks disagree, confirming distinct authors.** In `review-followup-v4-opencode.md` the harness block (top) has `loop: review` + `role: implementer` + a real-precision timestamp from `new Date().toISOString()`, while the agent block (lower) has `loop: review-follow-up`, no `role`, and a round synthetic `.000Z` timestamp.
+- **Only the first block is ever read.** `parseArtifactMeta` → `extractFrontMatter` (`src/provenance.ts:35-38`) is a `^`-anchored non-greedy regex that matches only the leading block, so the agent's lower block is silently ignored dead metadata carrying hallucinated values. The duplicate is cosmetic today but becomes a latent correctness bug if write-ordering ever flips or a reader parses the wrong block.
+- **Audits and the implement ledger are clean by contrast.** Audit skills tell the agent not to write metadata (one block), and the implement skill's output shape is a ledger table with no front matter (one block); only follow-ups hit both writers at once.
 
 **Fix:**
 
-- Stop locking the policy to `'new'`. Keep the step's policy as chosen (`'resumed'`) for
-  the chain and let the per-cycle `findResumableSession` in Step A / Step B resume when a
-  prior session exists — so follow-up v2+ resumes v1's session.
-- Reconcile the warning contract: a fresh chain's first follow-up legitimately has nothing
-  to resume, so "no prior session → fresh" should be silent (or a note), not a warning;
-  reserve the warning for a genuine mismatch (prior steps of that kind exist but none
-  match agent/model). Update the six assertions in `loop-continuity.test.ts` and
-  `loop-followup-runner.test.ts` (b5/b6) to match.
-- Add a regression test: a fresh chain (no prior follow-up) where follow-up v2 resumes v1's
-  session id (prompt/artifact-version assertion, like the existing chain tests).
+- Make `writeArtifactWithMeta` robust: strip any leading `---\n…\n---\n` block from `body` before prepending the canonical block, so a second writer can never produce a duplicate regardless of skill wording.
+- And/or add the "metadata is written by the harness; do not write metadata headers yourself" instruction to the two follow-up skills so the agent stops emitting its own block (consistent with the audit skills).
+- Add a regression test asserting every emitted artifact (audit, follow-up, implement) contains exactly one leading front-matter block after the harness stamps it.
+
+**Effort:** S.
+
+---
+
+### 35 — Implementation-ledger validator rejects non-passing rows but reports a misleading "missing table / confidence" error
+
+Goal: make implementation-ledger validation truthful and contract-aligned, so a provider-written ledger that structurally contains both required tables and a confidence line fails for the real reason and the skill/runtime contract stays in sync.
+
+> Current observation: a real `claude` implementation run wrote `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline) with both required tables and `State overall confidence: 0.96`, yet the harness terminated with `Ledger at docs/dev/impl-v1-claude.md is missing the required evidence table, requirement coverage table, and/or confidence declaration`. The actual mismatch is in row status semantics, not missing sections.
+
+**Findings so far:**
+
+- **The validator is stricter than the error text.** `src/implement-ledger.ts` requires both tables, a confidence line, and every `Result` / `Status` cell to match the passing-status allow-list. A ledger can therefore fail even when the tables and confidence declaration are present.
+- **The observed Claude ledger failed on non-passing row values, not on structure.** In `docs/dev/impl-v1-claude.md` (file since deleted; row values reproduced inline), rows such as `✅ (deterministic); env-gated pending` and `⏳ release-gate` do not match the current `PASSING_STATUS` contract, so `isCompleteImplementLedger(...)` returns `false`.
+- **The runtime error hides the real cause.** `src/loop.ts` collapses every non-empty invalid ledger into the same catch-all message about missing tables / confidence, which sends debugging effort in the wrong direction.
+- **The skill and validator need one explicit contract for release-gate items.** If pending env-gated verification is allowed but not implementation-blocking, it should not be encoded as a failing row in the two required gate tables unless the validator is intentionally widened to model that state.
+
+**Fix:**
+
+- Decide one source-of-truth contract for non-blocking release-gate items: either keep the two required tables strictly pass/fail and move pending release-gate items into a separate prose section, or explicitly add a supported pending status shape with clear gating semantics.
+- Replace the catch-all invalid-ledger message in `src/loop.ts` with reasoned diagnostics that distinguish missing evidence table, missing coverage table, missing confidence declaration, blank required cells, and non-passing status cells.
+- Add regression tests in `tests/implement-ledger.test.ts` and implement-loop gate tests for the real Claude ledger shape, including at least one case with structurally present tables plus pending/release-gate cells.
+- If the skill contract changes, update `skills/30-simple-implement/SKILL.md` so provider outputs stop drifting into unsupported ledger states.
+
+**Effort:** S.
+
+---
+
+## Batch D notes — Interactive exit / recovery prompts
+
+Interactive exit and recovery prompts.
+
+### 8 — Prompt to extend iterations at max (consideration)
+
+Goal: when the loop reaches `max-iterations`, instead of a hard stop, offer the interactive user a choice —
+extend by N more iterations, or stop — so a run that's converging isn't cut off just because the up-front
+guess was too low.
+
+> Current observation: after the iteration budget is exhausted the app fully stops with
+> `hit max-iterations, awaiting human`. There is no chance to continue without re-running.
+
+**Findings so far:**
+
+- **It is a hard stop today.** `src/loop.ts` falls out of the `while (iteration < options.maxIterations)` loop and returns `hit max-iterations, awaiting human` in both interactive and non-interactive modes.
+- **A similar prompt already exists** at the other decision point: since the unified action menu shipped, interactive mode at `APPROVED` (and every decision point) uses `promptStageAction` (`src/interactive.ts`). `promptMaxIterations` also already asks for the count up-front, so this change mirrors existing interaction patterns. _(The earlier stop-vs-second-opinion prompt, `promptSecondOpinionDecision`, was removed by the menu work — mirror `promptStageAction`, not it.)_
+- **Extending is mechanically cheap.** `maxIterations` lives on `LoopOptions`, so extending is a local control-flow change rather than a state-model rewrite.
+- **Must be interactive-only.** CI and `--loop` runs should keep the current exit behavior.
+
+**Fix (to consider):**
+
+- Add a dedicated continuation prompt to `src/interactive.ts`, but prefer bounded preset actions first (`stop`, `+1`, `+3`, `+5`) over free-form numeric input.
+- Restructure the loop-exit branch so interactive continuation happens before the function returns, rather than by relying on awkward post-loop state mutation.
+- Guard against accidental infinite prompting with bounded continuation rules or a clear "ask once per limit hit" policy.
+- Keep non-interactive behavior and exit codes byte-for-byte identical.
+
+**Effort:** S. This is a localized control-flow change in the loop termination path.
+
+---
+
+### 38 — Manual retry flow for transient provider / transport failures
+
+Goal: when a provider run fails for a transient infrastructure reason (for example
+provider overload, temporary upstream gateway failure, or short-lived transport
+instability), give the operator a first-class way to retry the same step with the same
+resolved runner and version instead of forcing a full manual re-entry of the command and
+menu flow.
+
+> Current observation: a real `claude` run using `glm-5.2` can terminate with a
+> server-side overload error such as `API Error: 529 ... service may be temporarily
+> overloaded`. Today that resolves to terminal `unknown`, the loop stops, and the
+> operator must restart `orc smash` manually even though the desired next action is often
+> simply "retry the same step in a moment."
+
+**Findings so far:**
+
+- **`unknown` is terminal by design and should stay that way.** The repo rule in
+  `AGENTS.md` / `README.md` is correct: missing output, malformed verdicts, and
+  transport/provider failures must stop the loop and must not silently advance state.
+- **There is no first-class retry affordance today.** After a transient provider failure
+  the operator has to relaunch the CLI, reselect the loop, re-enter iteration limits,
+  and navigate back through the menu even when the intended action is "retry the exact
+  same step."
+- **Some failures are likely transient, not semantic.** Provider overloads (`529`),
+  temporary gateway failures, and similar server-side failures are operationally
+  different from rejected audits or malformed outputs: the source artifact may be fine,
+  and retrying the same resolved runner is often the right next move.
+- **Automatic retry would be risky.** Blind retries could hide infrastructure issues,
+  create duplicate provider executions, or make state transitions ambiguous. The safe
+  product direction is an explicit operator choice after a terminal `unknown`, not an
+  automatic loop-internal retry.
+- **The harness already has most of the needed ingredients.** `runLoop` knows the step
+  kind, version, resolved runner, and pending action at failure time; the missing piece
+  is a structured recovery path that surfaces "retry same step" as a deliberate option.
+
+**Fix:**
+
+- Add an interactive-only recovery prompt for terminal `unknown` outcomes caused by
+  provider / transport / timeout-style failures.
+- The prompt should prefer explicit bounded actions such as:
+  `stop`, `retry same step`, `pick different runner`, and possibly `restart from menu`.
+- Preserve the `unknown` safety rule: the original failed attempt still terminates the
+  current run as `unknown`; retry is an operator-triggered follow-up action, not an
+  invisible continuation.
+- Keep non-interactive behavior unchanged: CI / scripted runs should still exit on
+  terminal `unknown` exactly as today.
+- Add regression coverage for at least:
+  - transient provider error → interactive retry same step
+  - retry with same runner preserves version and artifact path
+  - retry with different runner re-prompts only the affected skill
+  - non-interactive mode still exits immediately on `unknown`
 
 **Effort:** M.

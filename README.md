@@ -1,5 +1,7 @@
 # orc-smash
 
+> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+
 A thin **TypeScript CLI harness** that drives coding-agent CLIs (**opencode, codex, claude, agy** —
 all real) through skill-based `audit ↔ follow-up` loops until a verdict is **APPROVED**, then
 stops for human review (or runs a second-opinion pass). Stateless — all per-run state is derived
@@ -72,7 +74,7 @@ Current development is steering the harness toward a cleaner runtime architectur
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch 3 implementation plan.
+[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch A implementation plan.
 
 ## Verification and CI
 

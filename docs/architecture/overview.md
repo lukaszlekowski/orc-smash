@@ -1,5 +1,7 @@
 # orc-smash — Architecture Overview
 
+> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+
 orc-smash is a **stateless subprocess harness** that drives coding-agent CLIs through skill-based
 `audit ↔ follow-up` loops until a verdict is APPROVED, then stops for human review (or runs a
 second-opinion pass). The agents do the LLM work; orc-smash decides what to run, when, reads the

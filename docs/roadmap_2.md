@@ -37,11 +37,11 @@ Current pending work, grouped into recommended implementation batches.
 
 ---
 
-## Batch 6 notes
+## Batch E notes — Runtime liveness (standalone, highest risk)
 
-This batch is the highest-risk runtime work still open. It groups loop-liveness failures and contract-validation failures because both affect whether the harness can safely advance state after a provider run.
+Loop-liveness and contract-validation gaps that affect whether the harness can safely advance state after a provider run.
 
-## 36 — Agent CLI connection hanging and follow-up validation gaps
+### 36 — Agent CLI connection hanging and follow-up validation gaps
 
 Goal: Prevent loops from hanging indefinitely due to external CLI issues and prevent the loop from silently proceeding when a follow-up step produces no output file.
 
@@ -64,30 +64,11 @@ Goal: Prevent loops from hanging indefinitely due to external CLI issues and pre
 
 ---
 
-## Batch 7 notes
+## Batch F notes — Escalation stage (standalone feature)
 
-This batch is intentionally last. It consolidates architecture documentation only after the remaining runtime, rendering, and contract changes have settled.
+A dedicated escalation stage after repeated rejected audits/reviews.
 
-## 14 — Docs canonicalization + broken plan reference fix
-
-Goal: make the architecture documentation internally consistent, reduce duplication, and remove stale references that no longer match the repo's current source-of-truth layout.
-
-> Current observation: architecture guidance is split across multiple documents, and some references still point at `docs/dev/plan.md` even though that file is no longer a stable canonical target.
-
-> **Verification (2026-07-02; updated 2026-07-07):** `docs/dev/plan.md` was later **re-created** (it now holds the Batches 5–7 follow-up plan), so the `README.md` (:74,:105) and `AGENTS.md` (:15,:116) links **resolve again** — they are no longer broken. The remaining issue is that the link *text* is stale (calls plan.md the "current implementation plan" / "design source of truth") while the file's own header says "deferred." The canonicalization goal stands; the "broken links" framing no longer applies, and the line numbers have drifted.
-
-**Focus:**
-
-- Make [docs/architecture/overview.md](/Users/lukasz/softDev-temp/orc-smash/docs/architecture/overview.md) the canonical architecture reference.
-- Reduce duplicated architecture prose in [README.md](/Users/lukasz/softDev-temp/orc-smash/README.md), [AGENTS.md](/Users/lukasz/softDev-temp/orc-smash/AGENTS.md), and other supporting docs where the same rules are repeated.
-- Fix or remove stale references to `docs/dev/plan.md` and any other outdated roadmap-era anchors.
-- Do one final wording-alignment pass only after the remaining runtime and rendering items are finished, so this cleanup does not need to be repeated.
-
-**Effort:** S.
-
----
-
-## 37 — Escalation stage after repeated rejected audits/reviews
+### 37 — Escalation stage after repeated rejected audits/reviews
 
 Goal: prevent blind retry loops after repeated rejected audits or reviews by adding an explicit loop stage that evaluates the rejection history and advises whether to patch the source artifact or continue iterating.
 
@@ -103,3 +84,26 @@ Goal: prevent blind retry loops after repeated rejected audits or reviews by add
 - Keep the feature compatible with manifest-as-data, including loop/stage declaration, artifact naming, and timeline rendering.
 
 **Effort:** M.
+
+---
+
+## Batch G notes — Docs canonicalization (last)
+
+Canonicalize architecture docs and remove stale references; intentionally last.
+
+### 14 — Docs canonicalization + broken plan reference fix
+
+Goal: make the architecture documentation internally consistent, reduce duplication, and remove stale references that no longer match the repo's current source-of-truth layout.
+
+> Current observation: architecture guidance is split across multiple documents, and some references still point at `docs/dev/plan.md` even though that file is no longer a stable canonical target.
+
+> **Verification (2026-07-02; updated 2026-07-07):** `docs/dev/plan.md` was later **re-created** (it now holds the Batch A follow-up plan), so the `README.md` (:74,:105) and `AGENTS.md` (:15,:116) links **resolve again** — they are no longer broken. The remaining issue is that the link *text* is stale (calls plan.md the "current implementation plan" / "design source of truth") while the file's own header says "deferred." The canonicalization goal stands; the "broken links" framing no longer applies, and the line numbers have drifted.
+
+**Focus:**
+
+- Make [docs/architecture/overview.md](/Users/lukasz/softDev-temp/orc-smash/docs/architecture/overview.md) the canonical architecture reference.
+- Reduce duplicated architecture prose in [README.md](/Users/lukasz/softDev-temp/orc-smash/README.md), [AGENTS.md](/Users/lukasz/softDev-temp/orc-smash/AGENTS.md), and other supporting docs where the same rules are repeated.
+- Fix or remove stale references to `docs/dev/plan.md` and any other outdated roadmap-era anchors.
+- Do one final wording-alignment pass only after the remaining runtime and rendering items are finished, so this cleanup does not need to be repeated.
+
+**Effort:** S.

@@ -678,15 +678,26 @@ export async function runLoop(
       kind: 'implement'
     });
 
-    const runResult = await runAdapter(
-      runner,
-      prompt,
-      `Spawning ${runner.agent} for implementation...`,
-      'implement',
-      implementSkillId,
-      nextVersion,
-      1
-    );
+    let runResult: { result: RunResult; durationMs: number };
+    try {
+      runResult = await runAdapter(
+        runner,
+        prompt,
+        `Spawning ${runner.agent} for implementation...`,
+        'implement',
+        implementSkillId,
+        nextVersion,
+        1
+      );
+    } catch (err: any) {
+      options.output.stepFailed({
+        kind: 'implement',
+        skillId: implementSkillId,
+        version: nextVersion,
+        message: `Implementation failed: ${err.message}`
+      });
+      return emitFinalSummary(false, 'unknown', err.message, null);
+    }
 
     const { result, durationMs } = runResult;
 
