@@ -16,13 +16,14 @@ shorter and point here rather than restating the same internals in full.
 ```
 cli.ts ──▶ commands/{smash,status}.ts
                 │
-                ├─ config.ts        loads model registry (orc.config.yaml) + skills.yaml → typed Config
+                ├─ config.ts        assembles config/providers/*.yaml, config/registry.yaml, and overrides → typed Config
                 ├─ manifest.ts      zod schema + validation (source of truth: skills.yaml, validates model registry)
                 ├─ runner.ts        per-skill {agent,model} resolution (agent model namespaces validation)
                 ├─ state.ts         scan target docs/dev → normalized artifact and implement facts
                 ├─ follow-up-outcome.ts shared outcome enum, parser, and heading contract
                 ├─ interactive.ts   registry-driven prompts, filtered to configured ∩ runnable agents
-                ├─ loop.ts          three-stage pipeline orchestrator (plan → implement → review)
+                ├─ loop.ts          public three-stage pipeline facade (plan → implement → review)
+                ├─ loops/           execution, runner-selection, and shared loop contracts
                 ├─ implement-ledger.ts implementation ledger tables and confidence validator
                 ├─ plan-closeout.ts plan front-matter status closeout and change log appender
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
@@ -60,7 +61,7 @@ The codebase is being steered toward these architectural properties:
 
 ## Data flow — one `orc smash` run
 
-1. `config` loads the model registry (`orc.config.yaml`) and `skills.yaml`. Model registry validations verify that every skill's model is valid.
+1. `config` assembles the packaged provider catalogues (`config/providers/*.yaml`), global registry settings (`config/registry.yaml`), and optional compatible `orc.config.yaml` overrides before loading `skills.yaml`. Model registry validations verify that every skill's model is valid.
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
 3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
 4. `loop` drives the loop execution:

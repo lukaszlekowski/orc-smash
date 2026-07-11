@@ -1,0 +1,6 @@
+models:
+  - opencode-go/deepseek-v4-flash
+  - opencode-go/deepseek-v4-pro
+  - opencode-go/glm-5.2
+  - opencode-go/minimax-m3
+  - opencode-go/qwen3.7-max

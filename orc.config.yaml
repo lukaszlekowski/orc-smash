@@ -1,29 +1,4 @@
-providers:
-  opencode:
-    - opencode-go/deepseek-v4-flash
-    - opencode-go/deepseek-v4-pro
-    - opencode-go/glm-5.2
-    - opencode-go/minimax-m3
-    - opencode-go/qwen3.7-max
-  claude:
-    - glm-4.7
-    - glm-5.1
-    - glm-5.2
-    - glm-5.2[1m]
-  codex:
-    - gpt-5.5
-    - gpt-5.4
-    - gpt-5.4-mini
-  # Antigravity (agy): human-readable model ids from `agy models`, passed verbatim.
-  agy:
-    - Gemini 3.5 Flash (Medium)
-    - Gemini 3.5 Flash (High)
-    - Gemini 3.5 Flash (Low)
-    - Gemini 3.1 Pro (Low)
-    - Gemini 3.1 Pro (High)
-    - Claude Sonnet 4.6 (Thinking)
-    - Claude Opus 4.6 (Thinking)
-    - GPT-OSS 120B (Medium)
+# Model catalogues are maintained in config/providers/<provider>.yaml.
 defaults:
   agent: opencode
   model: opencode-go/deepseek-v4-flash

@@ -15,10 +15,7 @@ The binary is **`orc`**; the main command is **`orc smash`**.
 pnpm install
 ```
 
-Model configuration, allowed providers, and defaults are defined in the model registry (`orc.config.yaml`). Precedence resolves from:
-1. Target project root: `projectRoot/orc.config.yaml`
-2. User home config: `~/.config/orc/config.yaml`
-3. Built-in defaults (`DEFAULT_REGISTRY`)
+Built-in provider model catalogues live in `config/providers/<provider>.yaml`; update the relevant provider file to add or remove a model. Global defaults and timeouts live in `config/registry.yaml`. A target-project `orc.config.yaml` or `~/.config/orc/config.yaml` may override global defaults/timeouts, while the existing full-registry format remains supported for compatibility.
 
 Interactive selection lets you choose from configured models or provide a validated custom model.
 
@@ -45,7 +42,7 @@ orc status --project <path>         # read-only: detect where we are, render the
 
 - **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
 - **Up-front interactive runner selection:** In interactive mode, selecting a start-new or continue action prompts the operator to choose the full upcoming pair of runners up front (for both steps in the segment, such as audit and follow-up). The selections are reused without mid-chain re-prompts, and any step kind with a prior resumable session skips prompting and inherits its runner automatically.
-- **Four real adapters:** opencode, codex, claude, and agy (Antigravity) all run for real; each skill picks its own agent/model, validated against the model registry. `agy` runs headless via `agy -p <prompt> --model <model> --dangerously-skip-permissions`; its model ids are the exact human-readable names from `agy models` (a strict configured allow-list — no namespace fallbacks). When unauthenticated, `agy` can fall back to a default provider while exiting 0, so the adapter detects this with a bounded phrase list and surfaces a structured `auth` error; the loop then quarantines any partial artifact so no resumable file is left behind.
+- **Four real adapters:** opencode, codex, claude, and agy (Antigravity) all run for real; each skill picks its own agent/model, validated against the assembled model registry. `agy` runs headless via `agy -p <prompt> --model <model> --dangerously-skip-permissions`; its model ids are the exact human-readable names from `agy models` (a strict configured allow-list — no namespace fallbacks). When unauthenticated, `agy` can fall back to a default provider while exiting 0, so the adapter detects this with a bounded phrase list and surfaces a structured `auth` error; the loop then quarantines any partial artifact so no resumable file is left behind.
 - **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
 - **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
 - **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.

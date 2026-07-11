@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -31,6 +31,15 @@ export const ModelRegistrySchema = z.object({
   }).strict().optional()
 });
 
+const RegistryOverridesSchema = z.object({
+  defaults: ModelRegistrySchema.shape.defaults.optional(),
+  timeouts: ModelRegistrySchema.shape.timeouts
+}).strict();
+
+const ProviderCatalogSchema = z.object({
+  models: z.array(z.string()).min(1)
+}).strict();
+
 /**
  * Resolve a per-agent timeout from the registry, or `undefined` if unset.
  *
@@ -49,45 +58,32 @@ export function registryTimeoutFor(registry: ModelRegistry, agent: string): numb
   return undefined;
 }
 
-export const DEFAULT_REGISTRY: ModelRegistry = {
-  providers: {
-    opencode: [
-      'opencode-go/deepseek-v4-flash',
-      'opencode-go/deepseek-v4-pro',
-      'opencode-go/glm-5.2',
-      'opencode-go/minimax-m3',
-      'opencode-go/qwen3.7-max'
-    ],
-    claude: [
-      'glm-4.7',
-      'glm-5.1',
-      'glm-5.2',
-      'glm-5.2[1m]'
-    ],
-    codex: [
-      'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini'
-    ],
-    // Antigravity (`agy`): model ids are the human-readable names printed by
-    // `agy models`, passed verbatim. The fallback model when an operator selects
-    // `agy` is `providers.agy[0]` (no per-agent default config field this batch).
-    agy: [
-      'Gemini 3.5 Flash (Medium)',
-      'Gemini 3.5 Flash (High)',
-      'Gemini 3.5 Flash (Low)',
-      'Gemini 3.1 Pro (Low)',
-      'Gemini 3.1 Pro (High)',
-      'Claude Sonnet 4.6 (Thinking)',
-      'Claude Opus 4.6 (Thinking)',
-      'GPT-OSS 120B (Medium)'
-    ]
-  },
-  defaults: {
-    agent: 'opencode',
-    model: 'opencode-go/deepseek-v4-flash'
+function loadPackagedRegistry(toolRoot: string): ModelRegistry {
+  const configRoot = resolve(toolRoot, 'config');
+  const registryPath = resolve(configRoot, 'registry.yaml');
+  const providersRoot = resolve(configRoot, 'providers');
+
+  try {
+    const global = RegistryOverridesSchema.parse(YAML.parse(readFileSync(registryPath, 'utf-8')));
+    if (!global.defaults) throw new Error('packaged registry is missing defaults');
+    const providers: Record<string, string[]> = {};
+    for (const file of readdirSync(providersRoot).sort()) {
+      if (!file.endsWith('.yaml')) continue;
+      const agent = file.slice(0, -'.yaml'.length);
+      providers[agent] = ProviderCatalogSchema.parse(
+        YAML.parse(readFileSync(resolve(providersRoot, file), 'utf-8'))
+      ).models;
+    }
+    return ModelRegistrySchema.parse({ providers, defaults: global.defaults, timeouts: global.timeouts });
+  } catch (err: any) {
+    throw new Error(`Failed to load packaged provider registry at ${configRoot}: ${err.message}`);
   }
-};
+}
+
+const TOOL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// Kept as an export for callers/tests; data lives exclusively in config/*.yaml.
+export const DEFAULT_REGISTRY: ModelRegistry = loadPackagedRegistry(TOOL_ROOT);
 
 export interface Config {
   registry: ModelRegistry;
@@ -112,17 +108,28 @@ export function loadModelRegistry(projectRoot: string = process.cwd()): ModelReg
   if (configContent !== null) {
     try {
       const parsed = YAML.parse(configContent);
-      return ModelRegistrySchema.parse(parsed);
+      // Existing full registries remain supported for target fixtures and user
+      // configuration. New repository config only overrides global settings;
+      // provider catalogues stay in their dedicated files.
+      if (parsed && typeof parsed === 'object' && 'providers' in parsed) {
+        return ModelRegistrySchema.parse(parsed);
+      }
+      const overrides = RegistryOverridesSchema.parse(parsed);
+      return ModelRegistrySchema.parse({
+        providers: DEFAULT_REGISTRY.providers,
+        defaults: overrides.defaults ?? DEFAULT_REGISTRY.defaults,
+        timeouts: { ...DEFAULT_REGISTRY.timeouts, ...overrides.timeouts }
+      });
     } catch (err: any) {
       throw new Error(`Failed to parse or validate model registry config at ${loadedPath}: ${err.message}`);
     }
   }
 
-  return { ...DEFAULT_REGISTRY };
+  return structuredClone(DEFAULT_REGISTRY);
 }
 
 export function loadConfig(projectRoot: string = process.cwd()): Config {
-  const toolRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const toolRoot = TOOL_ROOT;
   let manifestPath = resolve(toolRoot, 'skills.yaml');
   if (!existsSync(manifestPath)) {
     manifestPath = resolve(projectRoot, 'skills.yaml');

@@ -1,0 +1,5 @@
+models:
+  - glm-4.7
+  - glm-5.1
+  - glm-5.2
+  - glm-5.2[1m]

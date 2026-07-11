@@ -31,6 +31,14 @@ describe('ModelRegistry config system', () => {
     expect(registry).toEqual(DEFAULT_REGISTRY);
   });
 
+  it('loads the built-in Codex catalogue from the dedicated provider registry', () => {
+    expect(DEFAULT_REGISTRY.providers['codex']).toEqual([
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini'
+    ]);
+  });
+
   it('uses project-local orc.config.yaml if it exists', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(join(tempDir, 'home'));
     
