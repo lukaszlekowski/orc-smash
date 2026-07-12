@@ -1,6 +1,7 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess, resolveCodexTimeoutMs, type ProcessRunner } from './utils.js';
 import { parseCodexJsonOutput } from './codex-json.js';
+import type { SpawnRuntime } from './process-group.js';
 
 export interface CreateCodexAdapterOptions {
   /** Config-tier watchdog deadline in ms (0 / unset disables). */
@@ -10,11 +11,12 @@ export interface CreateCodexAdapterOptions {
    * independent of real-binary runs. Production code never passes this.
    */
   processRunner?: ProcessRunner;
+  groupRuntime?: SpawnRuntime;
 }
-
 export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentAdapter {
   const defaultTimeoutMs = opts.defaultTimeoutMs;
   const processRunner = opts.processRunner;
+  const groupRuntime = opts.groupRuntime;
   return {
     name: 'codex',
 
@@ -57,7 +59,9 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
         skillId: input.skillId,
         version: input.version,
         onLifecycle: input.onLifecycle,
-        timeoutMs: resolveCodexTimeoutMs({ defaultTimeoutMs })
+        timeoutMs: resolveCodexTimeoutMs({ defaultTimeoutMs }),
+        spawnRuntime: groupRuntime ?? input.spawnRuntime,
+        ownership: input.ownership
       }, processRunner);
 
       if (input.continuity && !result.error && result.exitCode === 0) {

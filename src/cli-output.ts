@@ -50,7 +50,7 @@ export interface CliOutput {
   renderPanel(context: PanelContext): void;
   finalSummary(ctx: {
     success: boolean;
-    verdict: 'APPROVED' | 'REJECTED' | 'unknown' | null;
+    verdict: string | null;
     message: string;
     lastAuditPath: string | null;
     details?: string[];
@@ -218,6 +218,8 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       liveInterval = setInterval(() => {
         process.stdout.write(CURSOR_HOME_CLEAR + renderStatusPanel(supplier()) + '\n');
       }, PANEL_RENDER_INTERVAL_MS);
+      // Rendering is auxiliary; it must not keep a completed CLI or test worker alive.
+      liveInterval.unref();
     },
     detachLiveRegion() {
       detach();

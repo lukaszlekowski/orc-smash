@@ -322,3 +322,159 @@ export async function handleInterruptSignal(signal: NodeJS.Signals): Promise<voi
   const signo = signal === 'SIGINT' ? 2 : signal === 'SIGTERM' ? 15 : 0;
   process.exit(128 + signo);
 }
+
+let isHandlingOwnershipLoss = false;
+
+/**
+ * Structured ownership-loss cleanup result. The lease-expiry race must always
+ * resolve to an ownership-specific outcome; this type carries whether cleanup
+ * completed cleanly (`ownership-stopped`, admission released) or hit a terminal
+ * ownership-failure condition (`ownership-blocked`, admission retained for an
+ * operator). It is returned — never thrown — so `executeLoopStep()`'s
+ * `Promise.race` can never escape as a generic transport failure.
+ */
+export type OwnershipLossResult =
+  | { kind: 'ownership-stopped' }
+  | { kind: 'ownership-blocked'; reason: string };
+
+/**
+ * Record a terminal ownership-failure state in `active.json` + `project.json`
+ * and RETAIN the project admission lock (it is never released here). Best-effort:
+ * if the records are unreadable the fail-closed guarantee still holds because no
+ * admission is released. Used by both the survivor-gate branch and the catch-all
+ * for unexpected cleanup errors.
+ */
+async function recordTerminalOwnershipFailure(ctx: any, reason: string): Promise<void> {
+  try {
+    const { readActive, writeActive, readProjectIndex, writeProjectIndex } = await import('./run-ownership.js');
+    const record = readActive(ctx.runDir);
+    record.state = 'failed';
+    record.reason = reason;
+    writeActive(ctx.runDir, record);
+    try {
+      const projectIndex = readProjectIndex(ctx.projectDir);
+      projectIndex.state = 'failed';
+      writeProjectIndex(ctx.projectDir, projectIndex);
+    } catch {
+      // project.json optional/missing — admission lock retention is the guarantee.
+    }
+  } catch {
+    // active.json unreadable/missing — admission lock is retained regardless.
+  }
+}
+
+export async function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
+  if (isHandlingOwnershipLoss) return { kind: 'ownership-stopped' };
+  isHandlingOwnershipLoss = true;
+
+  try {
+    const stepCtx = activeStepCtx;
+    const root = activeProjectRoot;
+
+    // 1. Write the interrupted marker
+    if (stepCtx && root) {
+      writeInterruptedMarker(root, {
+        loop: stepCtx.loop,
+        kind: stepCtx.kind,
+        version: stepCtx.version,
+        agent: stepCtx.agent,
+        model: stepCtx.model,
+        skillId: stepCtx.skillId,
+        interruptedAtMs: Date.now()
+      });
+    }
+
+    // 2. Two-phase terminate each registered group
+    const { readActive, writeActive, authorizeLiveRunSignal } = await import('./run-ownership.js');
+    const { terminateProcessGroup, readCgroupProcs } = await import('./adapters/process-group.js');
+
+    const activeRecord = readActive(ctx.runDir);
+
+    // Set active.json state to stopping
+    activeRecord.state = 'stopping';
+    writeActive(ctx.runDir, activeRecord);
+
+    const groupTerminationPromises = activeRecord.groups.map(async (group) => {
+      const handle = {
+        cgroupPath: group.cgroupPath,
+        pgid: group.pgid,
+        leaderPid: group.leaderPid,
+        leaderStartMs: group.leaderStartMs,
+        command: group.command,
+        cgroupIno: group.cgroupIno,
+        cgroupDev: group.cgroupDev
+      };
+
+      const authorized = await authorizeLiveRunSignal(handle, { liveToken: ctx.token }, ctx.control);
+      if (!authorized) {
+        throw new Error(`Signal not authorized for live group: ${group.cgroupPath}`);
+      }
+
+      await terminateProcessGroup(handle);
+    });
+
+    await Promise.all(groupTerminationPromises);
+
+    // 3. Quarantine raw provider output
+    if (root && stepCtx) {
+      // Resolve the in-flight artifact path
+      const inFlight = resolveInterruptedArtifactPath(root, {
+        loop: stepCtx.loop,
+        kind: stepCtx.kind,
+        version: stepCtx.version,
+        agent: stepCtx.agent,
+        model: stepCtx.model,
+        skillId: stepCtx.skillId,
+        interruptedAtMs: Date.now()
+      }, { [stepCtx.loop]: loopSpec });
+
+      if (inFlight) {
+        quarantineArtifact(root, inFlight, { reason: 'interrupted' });
+      }
+      quarantineLateArtifactsForLoop(root, loopSpec, Date.now() - 5000);
+    }
+
+    // 4. Survivor gate
+    const recordAfterKill = readActive(ctx.runDir);
+    let allEmpty = true;
+    for (const group of recordAfterKill.groups) {
+      const procs = readCgroupProcs(group.cgroupPath, group.cgroupIno, group.cgroupDev);
+      if (procs.length > 0) {
+        allEmpty = false;
+        break;
+      }
+    }
+
+    if (allEmpty) {
+      recordAfterKill.state = 'stopped';
+      recordAfterKill.reason = 'ownership-lost';
+      recordAfterKill.groups = [];
+      writeActive(ctx.runDir, recordAfterKill);
+
+      const { releaseProjectLock } = await import('./run-ownership.js');
+      releaseProjectLock(ctx.projectDir, ctx.runId);
+      return { kind: 'ownership-stopped' };
+    }
+
+    // Survivors remain (unkillable/unreadable cgroup). Record a terminal
+    // ownership-failure state and RETAIN admission — but RESOLVE as a blocked
+    // ownership outcome rather than throwing, so the lease-expiry race cannot
+    // escape as a generic transport failure.
+    await recordTerminalOwnershipFailure(ctx, 'ownership-lost-with-survivors');
+    return {
+      kind: 'ownership-blocked',
+      reason: 'cgroup contains unkillable survivors or is unreadable; admission retained for operator recovery'
+    };
+  } catch (err: any) {
+    // Any unexpected cleanup failure (e.g. live-signal authorization rejected for
+    // a registered group) is a terminal ownership failure: record it, retain
+    // admission, and resolve as blocked. It must never escape the lease watcher's
+    // race as an untyped exception.
+    const message = (err as Error)?.message ?? 'unknown ownership-loss cleanup error';
+    await recordTerminalOwnershipFailure(ctx, `ownership-loss-cleanup-error: ${message}`);
+    return { kind: 'ownership-blocked', reason: message };
+  } finally {
+    isHandlingOwnershipLoss = false;
+  }
+}
+

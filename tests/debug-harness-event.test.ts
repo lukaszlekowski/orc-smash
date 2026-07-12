@@ -52,7 +52,7 @@ describe('Debug Harness Events and Buffering', () => {
 
   it('buffers and flushes event log in createPanelCliOutput', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const output = createPanelCliOutput(tempDir);
     output.note('Test Note');

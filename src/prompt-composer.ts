@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { resolve, relative, dirname } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { LoopSpec } from './manifest.js';
 import { renderPattern } from './patterns.js';
@@ -7,6 +7,10 @@ import { renderPattern } from './patterns.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const defaultToolRoot = resolve(__dirname, '..');
+
+function resolvePromptPath(targetRoot: string, value: string | null | undefined): string {
+  return !value || value === 'none' ? 'none' : resolve(targetRoot, value);
+}
 
 export function resolveInput(
   source: string,
@@ -27,27 +31,24 @@ export function resolveInput(
 ): string {
   switch (source) {
     case 'target':
-      return context.targetKind === 'worktree' ? '.' : context.target;
+      return context.targetKind === 'worktree'
+        ? context.targetRoot
+        : resolve(context.targetRoot, context.target);
     case 'version':
       return String(context.version);
     case 'priorAudit':
-      if (!context.priorAuditPath) return 'none';
-      // priorAuditPath might be absolute or relative. Let's make sure it is relative to targetRoot
-      if (context.priorAuditPath.startsWith(context.targetRoot)) {
-        return relative(context.targetRoot, context.priorAuditPath);
-      }
-      return context.priorAuditPath;
+      return resolvePromptPath(context.targetRoot, context.priorAuditPath);
     case 'outputPath': {
       const pattern =
         context.kind === 'follow-up' ? (context.followUpPattern ?? '') :
         context.kind === 'implement' ? (context.implementPattern ?? '') :
         (context.auditPattern ?? '');
-      return renderPattern(pattern, { n: context.version, agent: context.agentName });
+      return resolve(context.targetRoot, renderPattern(pattern, { n: context.version, agent: context.agentName }));
     }
     case 'planPath':
-      return context.planPath || 'none';
+      return resolvePromptPath(context.targetRoot, context.planPath);
     case 'checklistPath':
-      return context.checklistPath || 'none';
+      return resolvePromptPath(context.targetRoot, context.checklistPath);
     default:
       return 'none';
   }

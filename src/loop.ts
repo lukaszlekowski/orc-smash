@@ -22,11 +22,12 @@ import { initializePlanMetadata } from './plan-metadata.js';
 import { quarantineArtifact, quarantineInterruptedResume } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
 import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
-import { executeLoopStep } from './loops/execution.js';
+import { executeLoopStep, type ExecuteLoopStepOutcome } from './loops/execution.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
 import { resolveRecordedRunner } from './loops/runner-selection.js';
 import { missingRequiredArtifact } from './required-artifact.js';
 import { debugHarnessEvent } from './debug-spawn.js';
+import type { OwnershipContext } from './run-ownership.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -35,6 +36,7 @@ export interface LoopOptions {
   registry: AgentRegistry;
   output: CliOutput;
   seedResolved?: Set<string>;
+  ownership?: OwnershipContext | null;
 }
 
 
@@ -109,7 +111,7 @@ export async function runLoop(
 
   const emitFinalSummary = (
     success: boolean,
-    verdict: 'APPROVED' | 'REJECTED' | 'unknown' | null,
+    verdict: string | null,
     message: string,
     lastPath: string | null
   ): LoopReturn => {
@@ -189,7 +191,8 @@ export async function runLoop(
     registry: options.registry,
     output: options.output,
     steps,
-    maxIterations: options.maxIterations
+    maxIterations: options.maxIterations,
+    ownership: options.ownership
   }, { runner, prompt, spawnLabel, kind, skillId, version, iteration: currentIteration, continuity });
 
   const stepFailed = (result: RunResult, acceptNonzeroExitWithVerdict: boolean): boolean =>
@@ -208,6 +211,10 @@ export async function runLoop(
     result.completion === 'missing'
       ? 'Agent exited without the verified OpenCode completion signal; treating the result as unknown. Run again with --debug-spawn and capture the terminal stream event.'
       : `Agent execution truncated or interrupted. Stop reason: ${result.stopReason}`;
+  const ownershipLostMessage = (o: ExecuteLoopStepOutcome): string =>
+    o.kind === 'ownership-lost' && o.reason
+      ? `Ownership of the run was lost: ${o.reason}.`
+      : 'Ownership of the run was lost.';
 
   const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase, opts?: { autoRecommend?: boolean }): Promise<{ action: StageAction; phase: MenuPhase }> => {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
@@ -694,7 +701,7 @@ export async function runLoop(
       kind: 'implement'
     });
 
-    let runResult: { result: RunResult; durationMs: number };
+    let runResult: ExecuteLoopStepOutcome;
     try {
       runResult = await runAdapter(
         runner,
@@ -715,6 +722,9 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', err.message, null);
     }
 
+    if (runResult.kind === 'ownership-lost') {
+      return emitFinalSummary(false, 'ownership-lost', ownershipLostMessage(runResult), null);
+    }
     const { result, durationMs } = runResult;
 
     if (stepFailed(result, false)) {
@@ -1076,7 +1086,7 @@ export async function runLoop(
         }
       }
 
-      let runResult: { result: RunResult; durationMs: number };
+      let runResult: ExecuteLoopStepOutcome;
       try {
         runResult = await runAdapter(
           runner,
@@ -1098,19 +1108,22 @@ export async function runLoop(
         return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
       }
 
+      if (runResult.kind === 'ownership-lost') {
+        return emitFinalSummary(false, 'ownership-lost', ownershipLostMessage(runResult), lastAuditPath);
+      }
       const { result, durationMs } = runResult;
 
       // Thread ID mismatch check
-      const threadIdMismatch = followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity.sessionId;
+      const threadIdMismatch = followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity?.sessionId;
       debugHarnessEvent({
         cwd: projectRoot,
         category: 'check',
         event: 'session-mismatch:follow-up',
         result: threadIdMismatch ? 'fail' : 'pass',
-        detail: threadIdMismatch ? `expected ${followUpContinuity.sessionId}, got ${result.sessionId}` : 'matched/fresh'
+        detail: threadIdMismatch ? `expected ${followUpContinuity?.sessionId}, got ${result.sessionId}` : 'matched/fresh'
       });
       if (threadIdMismatch) {
-        const mismatchMsg = `Resumed thread ID mismatch: expected ${followUpContinuity.sessionId}, got ${result.sessionId}`;
+        const mismatchMsg = `Resumed thread ID mismatch: expected ${followUpContinuity?.sessionId}, got ${result.sessionId}`;
         options.output.stepFailed({
           kind: 'follow-up',
           skillId: followUpSkillId,
@@ -1309,7 +1322,7 @@ export async function runLoop(
 
     const prompt = preparePrompt(auditSkillId, auditSkill, N, runner, 'audit');
 
-    let runResult: { result: RunResult; durationMs: number };
+    let runResult: ExecuteLoopStepOutcome;
     try {
       runResult = await runAdapter(
         runner,
@@ -1331,19 +1344,22 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', err.message, lastAuditPath);
     }
 
+    if (runResult.kind === 'ownership-lost') {
+      return emitFinalSummary(false, 'ownership-lost', ownershipLostMessage(runResult), lastAuditPath);
+    }
     const { result, durationMs } = runResult;
 
     // Thread ID mismatch check
-    const threadIdMismatch = continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity.sessionId;
+    const threadIdMismatch = continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity?.sessionId;
     debugHarnessEvent({
       cwd: projectRoot,
       category: 'check',
       event: 'session-mismatch:audit',
       result: threadIdMismatch ? 'fail' : 'pass',
-      detail: threadIdMismatch ? `expected ${continuity.sessionId}, got ${result.sessionId}` : 'matched/fresh'
+      detail: threadIdMismatch ? `expected ${continuity?.sessionId}, got ${result.sessionId}` : 'matched/fresh'
     });
     if (threadIdMismatch) {
-      const mismatchMsg = `Resumed thread ID mismatch: expected ${continuity.sessionId}, got ${result.sessionId}`;
+      const mismatchMsg = `Resumed thread ID mismatch: expected ${continuity?.sessionId}, got ${result.sessionId}`;
       options.output.stepFailed({
         kind: 'audit',
         skillId: auditSkillId,

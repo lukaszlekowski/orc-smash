@@ -1,4 +1,14 @@
 import type { LifecycleEvent } from '../adapter-lifecycle.js';
+import type { OwnershipContext } from '../run-ownership.js';
+import type { SpawnRuntime } from './process-group.js';
+
+export interface SpawnRequest {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  onStdoutChunk?: (chunk: string) => void;
+}
 
 export interface RunInput {
   prompt: string;
@@ -12,6 +22,8 @@ export interface RunInput {
     mode: 'fresh' | 'resumed';
     sessionId?: string;
   };
+  ownership?: OwnershipContext;
+  spawnRuntime?: SpawnRuntime;
 }
 
 export type RunErrorKind =
@@ -21,7 +33,8 @@ export type RunErrorKind =
   | 'server'
   | 'spawn'
   | 'timeout'
-  | 'nonzero-exit';
+  | 'nonzero-exit'
+  | 'ownership';
 
 export interface RunError {
   kind: RunErrorKind;

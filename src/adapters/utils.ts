@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { RunInput, RunResult, RunError } from './types.js';
 import type { LifecycleEvent } from '../adapter-lifecycle.js';
+import type { SpawnRuntime, ProcessGroupHandle } from './process-group.js';
+import type { OwnershipContext } from '../run-ownership.js';
 import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress } from './opencode-stream.js';
 import { classifyCompletion } from './completion.js';
 import { debugProcessLifecycle } from '../debug-spawn.js';
@@ -90,6 +92,13 @@ export interface RawProcessResult {
   durationMs: number;
   /** Present when the process failed to spawn (e.g. ENOENT). */
   spawnErrorMessage?: string;
+  /**
+   * Present when an owned spawn failed at the ownership boundary (group close
+   * verification, cgroup cleanup) rather than at process spawn. This is an
+   * ownership-control failure, not "CLI missing from PATH", so result builders
+   * classify it as `error.kind === 'ownership'` ahead of any `spawnErrorMessage`.
+   */
+  ownershipFailure?: { message: string };
 }
 
 /**
@@ -214,11 +223,20 @@ export const realProcessRunner: ProcessRunner = runProcess;
 // single registry; `terminateActiveChildren` is the only terminator.
 
 const activeChildren = new Set<ChildProcess>();
+const activeHandles = new Set<ProcessGroupHandle>();
 
 /** Register a live child for interrupt-time termination. Auto-removes on exit. */
-export function registerActiveChild(proc: ChildProcess): void {
+export function registerActiveChild(proc: ChildProcess, handle?: ProcessGroupHandle): void {
   activeChildren.add(proc);
-  const remove = () => activeChildren.delete(proc);
+  if (handle) {
+    activeHandles.add(handle);
+  }
+  const remove = () => {
+    activeChildren.delete(proc);
+    if (handle) {
+      activeHandles.delete(handle);
+    }
+  };
   proc.once('exit', remove);
   proc.once('error', remove);
 }
@@ -226,6 +244,7 @@ export function registerActiveChild(proc: ChildProcess): void {
 /** Test seam: reset the active-child registry between tests. */
 export function resetActiveChildren(): void {
   activeChildren.clear();
+  activeHandles.clear();
 }
 
 /**
@@ -234,7 +253,12 @@ export function resetActiveChildren(): void {
  * Resolves once the grace window has elapsed so the caller can exit cleanly.
  */
 export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
+  const handles = [...activeHandles];
   const procs = [...activeChildren].filter((p) => !p.killed);
+
+  const { terminateProcessGroup } = await import('./process-group.js');
+  const groupPromises = handles.map(h => terminateProcessGroup(h, graceMs));
+
   for (const p of procs) {
     try {
       p.kill('SIGTERM');
@@ -242,6 +266,9 @@ export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
       // Process may have already exited between snapshot and kill.
     }
   }
+  
+  await Promise.all(groupPromises);
+
   if (procs.length === 0) return;
   await new Promise((r) => setTimeout(r, graceMs));
   for (const p of procs) {
@@ -253,6 +280,36 @@ export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
       // Best-effort; the child is likely already gone.
     }
   }
+}
+
+/**
+ * Owned-spawn bootstrap barrier. The owned runtime's `ready` resolves only after
+ * the wrapper handshake, the durable `registerGroup()` write, and the ACK — i.e.
+ * the provider group is durably tracked BEFORE the provider execs. Await it
+ * before `result` so the run is not treated as active (and lease-loss cleanup
+ * never operates) against an unregistered handle. A `ready` rejection means
+ * registration failed (the wrapper was `killCgroup`'d before exec); surface it
+ * as an ownership failure rather than a transport/spawn error. Runtimes without
+ * a `ready` (terminal/legacy) are unaffected.
+ */
+function awaitReadyThenResult(spawnRes: {
+  result: Promise<RawProcessResult>;
+  ready?: Promise<void>;
+}): Promise<RawProcessResult> {
+  return (spawnRes.ready ?? Promise.resolve()).then(
+    () => spawnRes.result,
+    (readyErr: unknown): RawProcessResult => ({
+      stdout: '',
+      stderr: '',
+      exitCode: -1,
+      timedOut: false,
+      signal: null,
+      durationMs: 0,
+      ownershipFailure: {
+        message: `Bootstrap registration barrier failed: ${(readyErr as Error)?.message ?? String(readyErr)}`
+      }
+    })
+  );
 }
 
 /** Generic agent spawn (codex/claude/agy): capture + spawn-failure handling +
@@ -271,6 +328,8 @@ export function spawnAgentProcess(
     onLifecycle?: (e: LifecycleEvent) => void;
     /** Watchdog deadline in ms; <= 0 / unset disables timeout handling. */
     timeoutMs?: number;
+    spawnRuntime?: SpawnRuntime;
+    ownership?: OwnershipContext;
   },
   processRunner: ProcessRunner = realProcessRunner
 ): Promise<RunResult> {
@@ -287,13 +346,38 @@ export function spawnAgentProcess(
   }
 
   const timeoutMs = lifecycle?.timeoutMs ?? 0;
-  return processRunner({ command, args, cwd, timeoutMs }).then((raw) => {
-    // Classification precedence: spawn error → timeout → nonzero exit → completed.
-    // A nonzero exit emits a failed lifecycle event but (by existing contract)
-    // does NOT populate RunResult.error; timeout and spawn errors both do.
+  let resultPromise: Promise<RawProcessResult>;
+  if (lifecycle && lifecycle.spawnRuntime) {
+    const runtime = lifecycle.spawnRuntime;
+    const spawnRes = runtime.spawn({
+      command,
+      args,
+      env: lifecycle.ownership?.env,
+      cwd
+    });
+    // Production owned path: await the bootstrap registration barrier (`ready`)
+    // before `result`, so codex/claude/agy cannot treat the run as active before
+    // the provider group is durably registered. (Previously only the fake adapter
+    // awaited `ready`; the real shared path bypassed it.)
+    resultPromise = awaitReadyThenResult(spawnRes);
+  } else {
+    resultPromise = processRunner({ command, args, cwd, timeoutMs });
+  }
+
+  return resultPromise.then((raw) => {
+    // Classification precedence: ownership failure → spawn error → timeout →
+    // nonzero exit → completed. An ownership-control failure (owned spawn close
+    // verification / cgroup cleanup) is distinct from a transport spawn failure
+    // and must surface as `ownership` so the operator gets recovery wording, not
+    // "CLI missing from PATH". A nonzero exit emits a failed lifecycle event but
+    // (by existing contract) does NOT populate RunResult.error; timeout, spawn,
+    // and ownership errors all do.
     let error: RunError | undefined;
     let failedKind: string | undefined;
-    if (raw.spawnErrorMessage) {
+    if (raw.ownershipFailure) {
+      error = { kind: 'ownership', message: raw.ownershipFailure.message };
+      failedKind = 'ownership';
+    } else if (raw.spawnErrorMessage) {
       error = { kind: 'spawn', message: `failed to spawn '${command}': ${raw.spawnErrorMessage}` };
       failedKind = 'spawn';
     } else if (raw.timedOut) {
@@ -373,31 +457,49 @@ export function spawnOpencode(
     });
   }
 
-  return runner({
-    command: 'opencode',
-    args,
-    cwd: input.cwd,
-    timeoutMs,
-    onStdoutChunk: input.onLifecycle && input.version !== undefined
-      ? (chunk: string) => {
-          buffer += chunk;
-          const parsed = parseOpencodeStream(buffer);
-          const delta = diffOpencodeProgress(prevTextLen, prevToolCount, parsed);
-          prevTextLen = parsed.finalText.length;
-          prevToolCount = parsed.toolCalls.length;
-          if (delta && input.onLifecycle && input.version !== undefined) {
-            input.onLifecycle({
-              type: 'message',
-              agent: 'opencode',
-              version: input.version,
-              text: delta.textDelta,
-              toolCalls: delta.toolCallDelta,
-              atMs: Date.now()
-            });
-          }
+  const onStdoutChunk = input.onLifecycle && input.version !== undefined
+    ? (chunk: string) => {
+        buffer += chunk;
+        const parsed = parseOpencodeStream(buffer);
+        const delta = diffOpencodeProgress(prevTextLen, prevToolCount, parsed);
+        prevTextLen = parsed.finalText.length;
+        prevToolCount = parsed.toolCalls.length;
+        if (delta && input.onLifecycle && input.version !== undefined) {
+          input.onLifecycle({
+            type: 'message',
+            agent: 'opencode',
+            version: input.version,
+            text: delta.textDelta,
+            toolCalls: delta.toolCallDelta,
+            atMs: Date.now()
+          });
         }
-      : undefined
-  }).then((raw) => {
+      }
+    : undefined;
+
+  let resultPromise: Promise<RawProcessResult>;
+  if (input.spawnRuntime) {
+    const spawnRes = input.spawnRuntime.spawn({
+      command: 'opencode',
+      args,
+      env: input.ownership?.env,
+      cwd: input.cwd,
+      onStdoutChunk
+    });
+    // Production owned path: await the bootstrap registration barrier (`ready`)
+    // before `result`, matching the codex/claude/agy shared path.
+    resultPromise = awaitReadyThenResult(spawnRes);
+  } else {
+    resultPromise = runner({
+      command: 'opencode',
+      args,
+      cwd: input.cwd,
+      timeoutMs,
+      onStdoutChunk
+    });
+  }
+
+  return resultPromise.then((raw) => {
     return buildOpencodeRunResult(raw, input, timeoutMs);
   });
 }
@@ -407,6 +509,26 @@ function buildOpencodeRunResult(
   input: RunInput,
   timeoutMs: number
 ): RunResult {
+  if (raw.ownershipFailure) {
+    if (input.onLifecycle && input.version !== undefined) {
+      input.onLifecycle({
+        type: 'failed',
+        agent: 'opencode',
+        version: input.version,
+        errorKind: 'ownership',
+        atMs: Date.now()
+      });
+    }
+    return {
+      stdout: '',
+      stderr: raw.stderr,
+      exitCode: -1,
+      error: {
+        kind: 'ownership',
+        message: raw.ownershipFailure.message
+      }
+    };
+  }
   if (raw.spawnErrorMessage) {
     if (input.onLifecycle && input.version !== undefined) {
       input.onLifecycle({

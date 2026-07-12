@@ -1,5 +1,5 @@
 ---
-status: draft
+status: ready
 confidence: 0.97
 owners: harness-runtime
 ---
@@ -26,7 +26,8 @@ boundary:
   **completion-side ownership fence** that together guarantee an expired run never advances workflow
   provenance/state (and its raw output is quarantined, not left resumable); a **bootstrap
   spawn-registration barrier** so every exec'd provider is durably tracked before it runs; a durable
-  **run lifecycle** with terminal transitions for *every* outcome (`completeRun`/`failRun`/`stopRun`);
+  **run lifecycle** with terminal transitions for every CLI-observed completion
+  (`completeRun`/`failRun`/`stopRun`) and later reconciliation for an abrupt CLI crash;
   group-aware termination; fail-closed behavior for malformed/expired/stale records; and start-time
   reconciliation of a verifiably-owned stale group. All verified in-repo using a **test-fixture
   process as the lease issuer** (a small script that writes/refreshes the issuer record and then
@@ -47,8 +48,9 @@ provenance/state (its raw output is quarantined to `docs/dev/archived/`, never l
 `docs/dev/`); (b) no further loop step ever starts after expiry; (c) every exec'd provider is durably
 registered before it runs, so a CLI crash mid-spawn leaves no untracked provider; (d) a
 verifiably-owned stale group is terminated at the next CLI start; (e) malformed/stale/tampered records
-fail closed and block new spawns; (f) every terminal outcome (success, failure, user-stop, crash)
-releases project admission safely; (g) ordinary terminal use is unchanged.
+fail closed and block new spawns; (f) normal terminal outcomes (success, failure, user-stop) release
+project admission only after finalization, while a CLI crash leaves admission retained for later,
+fail-closed `reconcileOnStart()`; (g) ordinary terminal use is unchanged.
 
 ## Goal
 
@@ -185,9 +187,11 @@ The only fail-closed case is a cgroup whose membership cannot be read/killed (e.
 `D`-state member or a lost cgroup file) — then retain admission and surface a terminal ownership
 failure (with the documented operator recovery procedure).
 
-**Durable run lifecycle — one state machine, terminal in every outcome.** All transitions are
+**Durable run lifecycle — one state machine for CLI-observed completion.** All transitions are
 revisioned `active.json` writes; `project.json` is cleared and `project.lock` released on terminal
-states. States: `starting → running → stopping → { completed | failed | stopped }`.
+states. An abrupt CLI crash cannot perform that transition or release admission; it leaves the
+non-terminal record and lock for `reconcileOnStart()`. States: `starting → running → stopping → {
+completed | failed | stopped }`.
 - `registerGroup(handle)` — at the bootstrap ACK (§2): add the group identity to `active.json`, set
   `state: 'running'`, bump `cliRevision`.
 - `confirmGroupClosed(handle)` — a **verified group-retirement**, not a mere child-close callback.
@@ -221,6 +225,16 @@ token reaches the CLI out-of-band via `ORC_RUN_TOKEN` (Phase 1) or an inherited 
 target). The CLI computes `sha256(token)` and compares; `argv` transport is rejected (world-readable
 via `ps`).
 
+**Provider environment boundary.** `openOwnedRun()` captures and validates `ORC_RUN_TOKEN` before it
+constructs `OwnershipContext`; the plaintext remains only in that context's in-memory live-authority
+field and is never passed to a provider. `OwnershipContext` also constructs the owned child environment
+once: copy the CLI environment, then remove `ORC_RUN_TOKEN`, `ORC_RUN_ID`, and `ORC_RUN_STATE_DIR`.
+`ORC_RUN_ID` and `ORC_RUN_STATE_DIR` are non-secret, but are deliberately withheld as ownership-control
+inputs so a provider cannot discover or accidentally activate/nest an ownership run. Every owned
+`SpawnRequest` must use this exact scrubbed environment for the wrapper and therefore for its `exec`'d
+provider and descendants. The legacy terminal `SpawnRuntime` continues to inherit the caller environment
+unchanged. No adapter may reconstruct an environment from `process.env` in owned mode.
+
 ### File impact
 
 - **Add `src/run-ownership.ts`** (new): `projectDir()`/`runDir()` (`sha256(realpath)` / `runId`),
@@ -238,7 +252,8 @@ via `ps`).
 - **Update `src/commands/smash.ts::smashAction()` / `resolveSmashRunSetup()`**: build
   `OwnershipContext` (or `null` for terminal mode); run `openOwnedRun()` (acquires the project lock) +
   `reconcileOnStart()` before any scan/spawn; wrap `runLoop()` in the `finalizeOwnedRun()` layer so
-  every terminal outcome releases admission; map ownership outcomes to the distinct exit code.
+  every CLI-observed terminal outcome releases admission; an abrupt CLI crash is reconciled on the next
+  start; map ownership outcomes to the distinct exit code.
 - **Update `src/loops/execution.ts::executeLoopStep()`**: double lease gate (pre-`stepStarted`,
   pre-spawn); start `watchLease()` around the adapter run; race expiry against `adapter.run()`; run the
   **completion-side `ownershipFence()`** after `adapter.run()` resolves (§3).
@@ -274,7 +289,8 @@ Activation rules (all enforced in `openOwnedRun()`):
 schema + `sha256(token) === ownerTokenHash` + `runId` + canonical root (fail closed on any issue);
 compute `projectDir`; `acquireProjectLock(projectDir)` (reject on live holder, reclaim on dead);
 write `project.json` index; return an `OwnershipContext` (live token in memory only, read-only control
-record, writable active/project handles).
+record, writable active/project handles, and the scrubbed provider environment). The original process
+environment is not mutated: only owned child spawns receive the scrubbed copy.
 
 ### Verification
 
@@ -284,6 +300,9 @@ record, writable active/project handles).
 - Unit `verifyIdentity` per platform (Linux `/proc`, macOS `ps`, unknown) including PID-reuse
   (live PID, wrong command → reject) and ambiguous `ps` output → fail closed.
 - Unit `tokenMatches`: plaintext token matches hash; wrong token rejected; record stores no plaintext.
+- Unit `openOwnedRun()` environment construction: it retains the live token only in `OwnershipContext`
+  and produces an owned child environment without `ORC_RUN_TOKEN`, `ORC_RUN_ID`, or
+  `ORC_RUN_STATE_DIR`; terminal-mode environment inheritance is unchanged.
 - Unit issuer-heartbeat: rewriting `control.json` while `project.lock` is held succeeds without the
   lock.
 - Unit lifecycle: `registerGroup`→`confirmGroupClosed`→`{completeRun|failRun|stopRun}` revision bumps
@@ -323,21 +342,39 @@ root and the filesystem identity needed by `validateRunCgroup()`. If any step fa
 absent/not delegated (macOS, Windows, non-delegated Linux), app-owned mode is **rejected before spawn**
 with a clear operator message; ordinary terminal mode is unaffected.
 
-**Bootstrap spawn-registration barrier (cgroup + wrapper).** In app-owned mode the CLI does not spawn
-the provider directly. `ProcessGroupRuntime.createGroup()`:
-1. validates `runId` as an opaque non-path identifier, creates the per-run cgroup at the deterministic
-   `<canonicalDelegatedRoot>/orc-smash/<runId>/` path, and records its creation identity in the handle;
-2. spawns the POSIX-shell wrapper `detached:true` (new session/group, `pgid === sid === wrapper.pid`)
-   with a 5-fd `stdio` (fd 3 = child→parent identity, fd 4 = parent→child ACK), passing the cgroup path
-   as `argv[1]`;
-3. the wrapper **moves itself into the cgroup** (`echo $$ > "<cgroupPath>/cgroup.procs"`, permitted as
-   self-membership), reports `{pid, pgid, sid, cgroupPath}` on fd 3, and blocks on ACK from fd 4;
-4. on ACK the wrapper POSIX-`exec`s the provider into the same pid/pgid/session **and cgroup** — so
-   every forked descendant inherits cgroup membership. If **fd 4 closes (parent died) before ACK**, the
-   wrapper exits without exec'ing (no provider started);
-5. `registerGroup(handle)` — **durably** writes `{cgroupPath, pgid, leaderPid, leaderStartMs, command}`
-   to `active.json` (fsync+rename) and bumps `cliRevision`; the ACK is written only after the rename is
-   durable.
+**Bootstrap spawn-registration barrier (one normative cgroup + wrapper protocol).** In app-owned mode
+the CLI does not spawn the provider directly. `ProcessGroupRuntime.createGroup(command, providerArgs,
+ownedEnv)` performs this exact sequence:
+1. validate `runId` as an opaque non-path identifier, create the per-run cgroup at deterministic
+   `<canonicalDelegatedRoot>/orc-smash/<runId>/`, and record its creation identity in the handle;
+2. spawn exactly `spawn('sh', [wrapperPath, cgroupPath, command, ...providerArgs], { detached: true,
+   env: ownedEnv, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] })`. This is the only owned spawn
+   call; its `env` is the scrubbed `OwnershipContext` environment from §1. The detached wrapper starts
+   a new session/group (`pgid === sid === wrapper.pid`), fd 3 is child→parent readiness, and fd 4 is
+   parent→child acknowledgement;
+3. `src/adapters/process-group-wrapper.sh` has this positional-argument contract:
+   ```sh
+   #!/bin/sh
+   [ "$#" -ge 2 ] || exit 64
+   cgroup_path=$1
+   shift
+   printf '%s\n' "$$" > "$cgroup_path/cgroup.procs" || exit 65
+   printf 'READY\t%s\t%s\t%s\t%s\n' "$$" "$$" "$$" "$cgroup_path" >&3
+   IFS= read -r ack <&4 || exit 66
+   [ "$ack" = ACK ] || exit 66
+   exec "$@"
+   ```
+   Thus `$1` is consumed solely as the canonical cgroup path, `shift` leaves **exactly** the original
+   provider command and arguments for `exec "$@"`, the wrapper self-joins before readiness, and an
+   fd-4 close/non-`ACK` exits without provider execution;
+4. read one bounded, newline-framed fd-3 `READY` record. Before registration or ACK, the parent rejects
+   malformed/extra readiness data and verifies: reported `pid`, `pgid`, and `sid` equal `child.pid`;
+   reported `cgroupPath` exactly equals the deterministic validated path; and `readCgroupProcs()` shows
+   that `child.pid` is already a member. Any mismatch kills the validated cgroup and fails closed;
+5. only then `registerGroup(handle)` durably writes `{ cgroupPath, pgid, leaderPid, leaderStartMs,
+   command }` to `active.json` (fsync+rename) and bumps `cliRevision`; only after that rename is durable
+   does the parent write the exact `ACK\n` on fd 4. The wrapper then execs the original provider argv in
+   the same pid/pgid/session and cgroup, so every forked descendant inherits cgroup membership.
 
 Because the wrapper is contained **before** it execs, no descendant can escape the per-run cgroup. Thus
 the provider cannot run until `{runId, cgroupPath, pgid, leaderPid, leaderStartMs, command, revision}`
@@ -348,16 +385,16 @@ wrapper has not exec'd, so only the wrapper is present). `createGroup()` returns
 `SpawnRuntime` close path **awaits** `confirmGroupClosed(handle)` (§1), which kills any descendant that
 outlived the leader via the durable cgroup before returning.
 
-**Wrapper asset + resolution.** The wrapper is a small POSIX `sh` script
-`src/adapters/process-group-wrapper.sh` (shebang `#!/bin/sh`; uses only POSIX `exec`, `read`, `echo`).
+**Wrapper asset + resolution.** The wrapper is the small POSIX `sh` script whose complete argument,
+framing, self-join, ACK, and `exec` protocol is normative above; it uses only POSIX `exec`, `read`,
+`printf`, and `shift`.
 The current package ships **source** — `bin/orc.js` runs `src/cli.ts` via `tsx` and `package.json` has
 no build/`prepack` step — so there is no separate packaged location: `resolveWrapperPath()` in
 `src/adapters/process-group.ts` resolves the **source asset** co-located with the module via
 `fileURLToPath(import.meta.url)` (the same source-relative resolution `bin/orc.js` uses to find
 `src/cli.ts`), and a unit test asserts the resolved path exists and is readable. If a future build/
-pack step is added it must carry the wrapper alongside (out of scope for Phase 1). It is launched as
-`spawn('sh', [wrapperPath, providerCommand, ...providerArgs], { detached:true, stdio:
-['ignore','pipe','pipe','pipe','pipe'] })` — invoking `sh` explicitly avoids executable-bit issues.
+pack step is added it must carry the wrapper alongside (out of scope for Phase 1). It is invoked through
+the exact `spawn()` call above; invoking `sh` explicitly avoids executable-bit issues.
 **No `process.execve` and no Node-engine constraint** is required: the in-place handoff is POSIX
 `exec`, not a Node API.
 
@@ -396,6 +433,9 @@ interface SpawnRuntime {
   spawn(req: SpawnRequest): { result: Promise<RawProcessResult>; handle?: ProcessGroupHandle; ready?: Promise<void> };
 }
 ```
+- `SpawnRequest` carries `{ command, args, env }`. In owned mode `env` is mandatory and must be the
+  scrubbed `OwnershipContext` child environment; `ProcessGroupRuntime` passes it unchanged to the
+  wrapper spawn. In terminal mode the legacy runtime preserves current inherited-environment behavior.
 - **Legacy `SpawnRuntime`** wraps `runProcess` (no group) — terminal mode.
 - **Owned `SpawnRuntime`** uses `ProcessGroupRuntime` + the shell wrapper — app-owned mode.
 
@@ -413,18 +453,21 @@ with no real processes.
 
 - **Add `src/adapters/process-group.ts`** (new): `ProcessGroupRuntime`, `ProcessGroupHandle`,
   `SpawnRuntime`, `resolveWrapperPath()`, `createCgroup()`/`readCgroupProcs()`/`killCgroup()` (cgroup v2;
-  `cgroup.procs` census + `cgroup.kill` finisher), the owned spawn/cgroup-self-join/`registerGroup`/ACK
-  path, the two-phase termination (SIGTERM `-pgid` → grace → `killCgroup`), and the close path that
+  `cgroup.procs` census + `cgroup.kill` finisher), the exact owned spawn/cgroup-self-join/framed-readiness
+  validation/`registerGroup`/ACK path (including scrubbed `env`), the two-phase termination (SIGTERM
+  `-pgid` → grace → `killCgroup`), and the close path that
   **awaits cgroup-empty `confirmGroupClosed()`**; plus an `unsupported` path (no cgroup v2) whose
   `createGroup` throws → reject app-owned before spawn.
-- **Add `src/adapters/process-group-wrapper.sh`** (new): POSIX `sh` wrapper (report `{pid,pgid,sid}`
-  on fd 3 → block on ACK from fd 4 → `exec "$@"`; fd-4 close before ACK → exit). Uses real POSIX
-  `exec` (process replacement); no Node API.
+- **Add `src/adapters/process-group-wrapper.sh`** (new): POSIX `sh` wrapper with the exact
+  `cgroup_path=$1; shift; self-join; framed READY on fd 3; ACK on fd 4; exec "$@"` contract above.
+  Uses real POSIX `exec` (process replacement); no Node API.
 - **Refactor `src/adapters/utils.ts`**: `runProcess()`/`spawnAgentProcess()`/`spawnOpencode()` route
-  through the `SpawnRuntime` selected by `RunInput` (legacy default unchanged); the owned close path
+  `SpawnRequest { command, args, env }` through the `SpawnRuntime` selected by `RunInput`; owned paths
+  must use `OwnershipContext`'s scrubbed env and terminal default behavior is unchanged; the owned close path
   awaits `confirmGroupClosed()`; `terminateActiveChildren()` delegates to two-phase cgroup termination
   for registered handles.
-- **Extend `src/adapters/types.ts::RunInput`** with optional `ownership?`/`spawnRuntime?`.
+- **Extend `src/adapters/types.ts::RunInput`** with optional `ownership?`/`spawnRuntime?`, and extend
+  the `SpawnRequest` contract with `env`.
 - **Extend `src/loops/execution.ts::LoopExecutionDeps`** and `src/loop.ts::LoopOptions` with
   `ownership?: OwnershipContext`; `runLoop` threads it to `executeLoopStep`.
 - **Extend `src/adapters/registry.ts`** factories with the `groupRuntime?` seam; extend
@@ -432,17 +475,19 @@ with no real processes.
 
 ### Verification
 
-- Deterministic (fake-adapter) tests: owned spawn calls `createGroup` (creates cgroup + spawns wrapper
-  + ACKs after `registerGroup`), waits on `ready`, and `terminateActiveChildren` runs two-phase
+- Deterministic (fake-adapter) tests: owned spawn calls `createGroup` with the exact scrubbed child env
+  (creates cgroup + spawns wrapper + validates framed readiness + ACKs after `registerGroup`), waits on
+  `ready`, and `terminateActiveChildren` runs two-phase
   termination (SIGTERM then `killCgroup`); the close path awaits cgroup-empty `confirmGroupClosed`;
   terminal spawn uses the legacy runner unchanged.
 - Per-adapter tests (`tests/adapters/<agent>-ownership.test.ts` for codex, claude, agy, opencode): in
   owned mode the adapter's `run()` uses the owned `SpawnRuntime`; in terminal mode the legacy runner;
   verified via the existing `*ProcessRunner`/`opencodeSpawn` injection seams.
-- **`tests/process-group.bootstrap.test.ts`** (Linux + cgroup-v2-gated): asserts (a) the wrapper's
-  session/pgid equal its pid **before ACK**; (b) **the pid reporting readiness before ACK is the same
-  pid executing the provider after ACK** (POSIX `exec`); (c) the provider and a forked grandchild are
-  members of the per-run cgroup (`cgroup.procs`); and (d) cancellation leaves neither alive.
+- **`tests/process-group.bootstrap.test.ts`** (Linux + cgroup-v2-gated): assert the exact wrapper argv
+  is `[wrapperPath, expectedCgroupPath, providerCommand, ...originalProviderArgs]`; before ACK, its
+  session/pgid equal its pid and `cgroup.procs` already contains that pid; after ACK, the same pid
+  executes with **exactly** the original provider argv (the cgroup path is not passed to it); the provider
+  and a forked grandchild are members of the expected per-run cgroup; cancellation leaves neither alive.
 - **`tests/process-group.descendant-stopped.test.ts`** (Linux + cgroup-v2-gated): the provider leader
   exits **before lease expiry** while a forked grandchild closes inherited stdio and remains alive in
   the per-run cgroup; the lease then expires. Assert `confirmGroupClosed()`/`handleOwnershipLoss()`
@@ -450,10 +495,15 @@ with no real processes.
   and the grandchild is dead **before** admission is released. (A clean leader exit with no survivor
   retires normally; an unkillable `D`-state member fails closed.)
 - **`tests/process-group.fault-injection.test.ts`** (Linux + cgroup-v2-gated): controlled parent death
-  at (1) after wrapper spawn / before `active.json` write, (2) after write / before ACK, (3) after ACK
-  / during provider exec; assert in **every** case no provider/grandchild survives and none is left
-  untracked (pre-registration cases rely on the wrapper's fd-4-close self-termination; post-registration
-  cases leave a cgroup the next start reconciles).
+  at (1) after wrapper spawn and verified pre-ACK cgroup membership / before `active.json` write,
+  (2) after write / before ACK, (3) after ACK / during provider exec; assert in **every** case no
+  provider/grandchild survives and none is left untracked (pre-registration cases rely on the fd-4-close
+  self-termination; post-registration cases leave a cgroup the next start reconciles). Also inject bad
+  readiness framing/path/identity and assert no ACK or provider exec occurs.
+- **`tests/adapters/ownership-environment.test.ts`** — deterministic capture coverage for codex, claude,
+  agy, opencode, and fake: an owned provider receives none of `ORC_RUN_TOKEN`, `ORC_RUN_ID`, or
+  `ORC_RUN_STATE_DIR`, while the CLI successfully performs live-token authorization; terminal-mode
+  capture retains the existing inherited environment.
 - Stale-record reconciliation test: a verifiably-owned recorded group is killed; an unrelated process
   with a reused PID is **not** killed.
 - Windows/other: app-owned mode rejected before spawn (`process.platform`-gated unit test).
@@ -543,7 +593,7 @@ immediately with `{ success: false, verdict: 'ownership-lost', message, lastAudi
 **skipping** artifact verification, `writeArtifactWithMeta()`, provenance write, and next-step
 resolution. `cli.ts` maps that verdict to the distinct ownership-loss exit code.
 
-**Terminal finalization for every outcome.** `smashAction()` wraps `runLoop()` in a single
+**Terminal finalization for every CLI-observed outcome.** `smashAction()` wraps `runLoop()` in a single
 `finalizeOwnedRun()` layer (try/finally, active for the whole duration after `openOwnedRun()`). It
 selects the terminal transition for **every** non-ownership return/throw: `completeRun()` on success,
 `stopRun('user-stop')` on interactive stop, `failRun(reason)` on terminal `unknown`/missing
@@ -711,14 +761,18 @@ Two tiers so structural plumbing cannot pass it:
   **finishes at/after expiry** is fenced (`ownershipFence`) so there is **no provenance/state
   advancement**; in both cases the **raw output is quarantined** (absent from `docs/dev/`, present in
   `docs/dev/archived/`) — verified for audit, follow-up, and implement paths.
-- The bootstrap barrier proves every exec'd provider is registered before run; the **POSIX-shell
-  wrapper performs a real `exec` handoff** (the pid reported before ACK is the pid running the provider
-  after ACK) and shares SID/PGID; fault-injection crashes at spawn/persist/release leave **no**
-  surviving or untracked provider/grandchild.
-- The durable lifecycle reaches a terminal state for **every** outcome (`completeRun`/`failRun`/
+- The bootstrap barrier proves every exec'd provider is registered and is a member of the expected
+  cgroup before run. Its exact wrapper argv is `[wrapperPath, cgroupPath, providerCommand,
+  ...providerArgs]`; the wrapper consumes and validates the cgroup argument before emitting framed
+  readiness, then performs a real `exec` with **exactly** the original provider argv. The pid reported
+  before ACK is the pid running the provider after ACK and shares SID/PGID; malformed readiness and
+  fault-injection crashes at spawn/persist/release leave **no** surviving or untracked
+  provider/grandchild.
+- The durable lifecycle reaches a terminal state for normal loop outcomes (`completeRun`/`failRun`/
   `stopRun`) via the finalization layer, releasing admission safely; terminal-path matrix (REJECTED
   ceiling, unknown, missing artifact, interactive stop, exception) followed by a distinct-run-ID
-  relaunch succeeds; lifecycle crash points reconcile safely.
+  relaunch succeeds. A CLI crash retains admission and requires fail-closed reconciliation before any
+  relaunch; lifecycle crash points reconcile safely.
 - **The whole provider tree — including a descendant that outlives the leader — is stopped on lease
   loss**, via durable per-run cgroup-v2 containment (`cgroup.kill`), which is leader-independent,
   race-free, and reuse-immune; `confirmGroupClosed`/`handleOwnershipLoss`/finalization/reconcile all
@@ -731,7 +785,10 @@ Two tiers so structural plumbing cannot pass it:
   isolation by `tests/ownership-recovery.containment-isolation.test.ts`.
 - Only an authenticated, selected record (`runId` + `sha256(token)===ownerTokenHash` + canonical root)
   enables app-owned mode; partial/mismatched/ambiguous launches fail closed (no silent terminal
-  fallback); the plaintext token is never stored.
+  fallback); the plaintext token is never stored **or exposed to providers**. Every owned adapter
+  receives the single scrubbed child environment without `ORC_RUN_TOKEN`, `ORC_RUN_ID`, or
+  `ORC_RUN_STATE_DIR`; adapter-wide environment-capture tests prove this while terminal inheritance
+  remains unchanged.
 - Tampered/stale/loosened-permission/PID-reuse records fail closed and issue no signal.
 - Every cgroup read/kill validates the deterministic `<delegatedRoot>/orc-smash/<runId>` path and its
   recorded creation identity. Outside-root, sibling, malformed, missing, or recreated paths fail closed

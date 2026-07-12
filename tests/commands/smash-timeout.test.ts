@@ -3,6 +3,7 @@ import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { createTempDir, removeTempDir } from '../helpers/fs.js';
+import { createTestConfig } from '../helpers/test-config.js';
 import { smashAction, buildDefaultAdapterRegistry } from '../../src/commands/smash.js';
 import { createProductionAdapterRegistry } from '../../src/adapters/registry.js';
 import { loadConfig } from '../../src/config.js';
@@ -20,7 +21,12 @@ let mockTimeouts: any = undefined;
 
 vi.mock('../../src/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/config.js')>();
-  const { createTestConfig } = await import('../helpers/test-config.js');
+  // NOTE: do NOT `await import('../helpers/test-config.js')` here. test-config.ts
+  // imports config.js, so importing it inside this mock factory forms a mock-
+  // factory import cycle that deadlocks vitest's loader once the real smash.ts
+  // import graph is loaded. createTestConfig is captured by the loadConfig closure
+  // (top-level import below the hoisted vi.mock) and only invoked during tests,
+  // after the module graph has fully settled — which breaks the cycle.
   return {
     ...actual,
     loadConfig: (projectRoot?: string) => createTestConfig({

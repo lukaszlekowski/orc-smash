@@ -6,6 +6,7 @@ import { createCodexAdapter } from './codex.js';
 import { createClaudeAdapter } from './claude.js';
 import { createAgyAdapter } from './agy.js';
 import type { ProcessRunner } from './utils.js';
+import type { SpawnRuntime } from './process-group.js';
 
 export interface AgentRegistry {
   adapters: Map<string, AgentAdapter>;
@@ -37,6 +38,7 @@ export interface CreateProductionRegistryOptions {
    * the real `agy` binary. Production code never passes this.
    */
   agyProcessRunner?: ProcessRunner;
+  groupRuntime?: SpawnRuntime;
 }
 
 export function createProductionAdapterRegistry(
@@ -48,28 +50,32 @@ export function createProductionAdapterRegistry(
   const opencodeDefaultTimeout = registry ? registryTimeoutFor(registry, 'opencode') : undefined;
   const opencode = createOpencodeAdapter({
     defaultTimeoutMs: opencodeDefaultTimeout,
-    spawn: options.opencodeSpawn
+    spawn: options.opencodeSpawn,
+    groupRuntime: options.groupRuntime
   });
   adapters.set(opencode.name, opencode);
 
   const codexDefaultTimeout = registry ? registryTimeoutFor(registry, 'codex') : undefined;
   const codex = createCodexAdapter({
     defaultTimeoutMs: codexDefaultTimeout,
-    processRunner: options.codexProcessRunner
+    processRunner: options.codexProcessRunner,
+    groupRuntime: options.groupRuntime
   });
   adapters.set(codex.name, codex);
 
   const claudeDefaultTimeout = registry ? registryTimeoutFor(registry, 'claude') : undefined;
   const claude = createClaudeAdapter({
     defaultTimeoutMs: claudeDefaultTimeout,
-    processRunner: options.claudeProcessRunner
+    processRunner: options.claudeProcessRunner,
+    groupRuntime: options.groupRuntime
   });
   adapters.set(claude.name, claude);
 
   const agyDefaultTimeout = registry ? registryTimeoutFor(registry, 'agy') : undefined;
   const agy = createAgyAdapter({
     defaultTimeoutMs: agyDefaultTimeout,
-    processRunner: options.agyProcessRunner
+    processRunner: options.agyProcessRunner,
+    groupRuntime: options.groupRuntime
   });
   adapters.set(agy.name, agy);
 

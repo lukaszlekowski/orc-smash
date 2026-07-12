@@ -219,32 +219,70 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
   });
 
   const projectRoot = resolve(options.project);
+  
+  let ownership: any = null;
+  try {
+    const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
+    ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
+  } catch (err: any) {
+    const msg = `Ownership setup failed: ${err.message}`;
+    options.output.error(msg);
+    return { exitCode: 2, message: msg };
+  }
+
   try {
     const setupResult = await resolveSmashRunSetup(projectRoot, options);
     if ('errorResult' in setupResult) {
+      if (ownership) {
+        const { failRun } = await import('../run-ownership.js');
+        try {
+          failRun(ownership.runDir, ownership.projectDir, ownership.runId, setupResult.errorResult.message || 'Setup failed');
+        } catch {}
+      }
       return setupResult.errorResult;
     }
 
     const { setup } = setupResult;
 
+    let runResult: any;
+    let thrownError: any = null;
     try {
-      const result = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
+      runResult = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
         maxIterations: setup.maxIterations,
         globalOverrides: setup.globalOverrides,
         interactive: setup.isInteractive,
         registry: setup.registry,
-        output: options.output
+        output: options.output,
+        ownership
       });
-
-      if (result.success) {
-        return { exitCode: 0, message: result.message };
-      } else {
-        return { exitCode: result.verdict === 'unknown' ? 1 : 0, message: result.message };
-      }
     } catch (err: any) {
+      thrownError = err;
       const msg = `Error running loop: ${err.message}`;
       options.output.error(msg);
-      return { exitCode: 1, message: msg };
+      runResult = { success: false, verdict: 'unknown', message: msg };
+    }
+
+    if (ownership) {
+      const { finalizeOwnedRun } = await import('../run-ownership.js');
+      try {
+        await finalizeOwnedRun(ownership, runResult);
+      } catch (err: any) {
+        options.output.error(`Finalize owned run failed: ${err.message}`);
+        return { exitCode: 2, message: err.message };
+      }
+    }
+
+    if (thrownError) {
+      return { exitCode: 1, message: thrownError.message };
+    }
+
+    if (runResult.success) {
+      return { exitCode: 0, message: runResult.message };
+    } else {
+      if (runResult.verdict === 'ownership-lost') {
+        return { exitCode: 2, message: runResult.message };
+      }
+      return { exitCode: runResult.verdict === 'unknown' ? 1 : 0, message: runResult.message };
     }
   } finally {
     // §3: clear the active project root on completion (normal or error) so a
