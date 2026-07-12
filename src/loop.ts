@@ -26,6 +26,7 @@ import { executeLoopStep } from './loops/execution.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
 import { resolveRecordedRunner } from './loops/runner-selection.js';
 import { missingRequiredArtifact } from './required-artifact.js';
+import { debugHarnessEvent } from './debug-spawn.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -52,6 +53,7 @@ export async function runLoop(
   // resolution. No-op when no marker exists. Composite helper also covers the
   // recursive plan→implement→review transitions (marker cleared after first run).
   quarantineInterruptedResume(projectRoot, config.manifest.loops);
+  debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'quarantine-interrupted-resume', result: 'info' });
 
   const steps: Step[] = [];
   const upfrontResolved = new Set<string>();
@@ -356,10 +358,12 @@ export async function runLoop(
       if (!chosen) {
         throw new Error(`Chosen action ID ${chosenId} not found`);
       }
+      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'stage-action-chosen', detail: `${chosen.id} (phase: ${phase})`, result: 'pass' });
       return { action: chosen, phase };
     } else {
       const recommended = actions.find(a => a.id === recommendedId);
       if (!recommended) throw new Error(`Recommended action ID ${recommendedId} not found`);
+      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'stage-action-chosen', detail: `${recommended.id} (autoRecommended, phase: ${phase})`, result: 'pass' });
       return { action: recommended, phase };
     }
   };
@@ -593,6 +597,13 @@ export async function runLoop(
 
     const projectPlanPath = resolve(projectRoot, 'docs/dev/plan.md');
     const metadataPreflight = initializePlanMetadata(projectPlanPath);
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'preflight',
+      event: 'plan-metadata-preflight',
+      result: metadataPreflight.ok ? 'pass' : 'fail',
+      detail: metadataPreflight.ok ? 'canonical' : metadataPreflight.error
+    });
     if (!metadataPreflight.ok) {
       const message = `Implementation preflight failed: ${metadataPreflight.error}`;
       options.output.stepFailed({
@@ -604,6 +615,7 @@ export async function runLoop(
 
     const rawLedger = findHighestRawImplementLedger(projectRoot, loopSpec.implementPattern ?? '');
     if (rawLedger) {
+      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'raw-ledger-recovery-scan', detail: `found v${rawLedger.version} at ${relative(projectRoot, rawLedger.artifactPath)}`, result: 'info' });
       const approvedRel = priorAuditRel(projectRoot, approvedPlanAuditPath);
       if (!options.interactive) {
         const message = `Found valid raw implementation ledger v${rawLedger.version}-${rawLedger.agent} at ${relative(projectRoot, rawLedger.artifactPath)}. Rerun interactively to recover it against approved audit ${approvedRel}; no provider was started.`;
@@ -739,6 +751,13 @@ export async function runLoop(
       outputPath: relOutputPath,
       artifactName: 'implementation ledger'
     });
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'artifact-existence:implement',
+      result: missingArtifact ? 'fail' : 'pass',
+      detail: missingArtifact ? missingArtifact.message : `exists at ${relOutputPath}`
+    });
     if (missingArtifact) {
       options.output.stepFailed({
         kind: 'implement',
@@ -750,7 +769,15 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', missingArtifact.message, null);
     }
     const ledgerContent = readFileSync(absOutputPath, 'utf-8');
-    if (!isCompleteImplementLedger(ledgerContent)) {
+    const isComplete = isCompleteImplementLedger(ledgerContent);
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'implement-ledger-validation',
+      result: isComplete ? 'pass' : 'fail',
+      detail: isComplete ? 'valid' : 'invalid/incomplete structure'
+    });
+    if (!isComplete) {
       const reason = !ledgerContent.trim()
         ? 'empty'
         : 'missing the required evidence table, requirement coverage table, and/or confidence declaration (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")';
@@ -765,6 +792,13 @@ export async function runLoop(
     }
 
     const closeoutSignal = deriveCloseoutSignal(ledgerContent);
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'closeout-signal',
+      detail: `status=${closeoutSignal.status} deviationsCount=${closeoutSignal.deviations.length}`,
+      result: closeoutSignal.status === 'blocked' ? 'fail' : 'pass'
+    });
     const closeoutOutcome = writePlanCloseout({
       planPath: projectPlanPath,
       version: nextVersion,
@@ -1067,7 +1101,15 @@ export async function runLoop(
       const { result, durationMs } = runResult;
 
       // Thread ID mismatch check
-      if (followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity.sessionId) {
+      const threadIdMismatch = followUpContinuity?.mode === 'resumed' && result.sessionId && result.sessionId !== followUpContinuity.sessionId;
+      debugHarnessEvent({
+        cwd: projectRoot,
+        category: 'check',
+        event: 'session-mismatch:follow-up',
+        result: threadIdMismatch ? 'fail' : 'pass',
+        detail: threadIdMismatch ? `expected ${followUpContinuity.sessionId}, got ${result.sessionId}` : 'matched/fresh'
+      });
+      if (threadIdMismatch) {
         const mismatchMsg = `Resumed thread ID mismatch: expected ${followUpContinuity.sessionId}, got ${result.sessionId}`;
         options.output.stepFailed({
           kind: 'follow-up',
@@ -1110,6 +1152,13 @@ export async function runLoop(
         kind: 'follow-up',
         outputPath: relFollowUpPath
       });
+      debugHarnessEvent({
+        cwd: projectRoot,
+        category: 'check',
+        event: 'artifact-existence:follow-up',
+        result: missingArtifact ? 'fail' : 'pass',
+        detail: missingArtifact ? missingArtifact.message : `exists at ${relFollowUpPath}`
+      });
       if (missingArtifact) {
         options.output.stepFailed({
           kind: 'follow-up',
@@ -1125,6 +1174,13 @@ export async function runLoop(
       const sid = followUpContinuity ? (result.sessionId ?? 'none') : 'none';
       const body = readFileSync(absFollowUpPath, 'utf-8');
       const followUpOutcome: FollowUpOutcome = parseFollowUpOutcome(body);
+      debugHarnessEvent({
+        cwd: projectRoot,
+        category: 'check',
+        event: 'follow-up-outcome-parse',
+        detail: `outcome=${followUpOutcome}`,
+        result: followUpOutcome === 'blocked' ? 'fail' : 'pass'
+      });
       writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs, mode, sid));
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
@@ -1278,7 +1334,15 @@ export async function runLoop(
     const { result, durationMs } = runResult;
 
     // Thread ID mismatch check
-    if (continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity.sessionId) {
+    const threadIdMismatch = continuity?.mode === 'resumed' && result.sessionId && result.sessionId !== continuity.sessionId;
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'session-mismatch:audit',
+      result: threadIdMismatch ? 'fail' : 'pass',
+      detail: threadIdMismatch ? `expected ${continuity.sessionId}, got ${result.sessionId}` : 'matched/fresh'
+    });
+    if (threadIdMismatch) {
       const mismatchMsg = `Resumed thread ID mismatch: expected ${continuity.sessionId}, got ${result.sessionId}`;
       options.output.stepFailed({
         kind: 'audit',
@@ -1321,6 +1385,13 @@ export async function runLoop(
       kind: 'audit',
       outputPath: relOutputPath
     });
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'artifact-existence:audit',
+      result: missingArtifact ? 'fail' : 'pass',
+      detail: missingArtifact ? missingArtifact.message : `exists at ${relOutputPath}`
+    });
     if (missingArtifact) {
       options.output.stepFailed({
         kind: 'audit',
@@ -1335,6 +1406,13 @@ export async function runLoop(
     const fileContent = readFileSync(absOutputPath, 'utf-8');
 
     const verdict = parseVerdict(fileContent);
+    debugHarnessEvent({
+      cwd: projectRoot,
+      category: 'check',
+      event: 'verdict-parse',
+      detail: `verdict=${verdict}`,
+      result: verdict === 'unknown' ? 'fail' : 'pass'
+    });
     iteration++;
 
     if (verdict === 'unknown') {
