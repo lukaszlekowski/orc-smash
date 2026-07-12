@@ -4,6 +4,7 @@ import { renderPlainPanel } from './plain-render.js';
 import ora, { Ora } from 'ora';
 import chalk from 'chalk';
 import type { StepKind } from './provenance.js';
+import { debugHarnessEvent } from './debug-spawn.js';
 
 const ENTER_ALT_SCREEN = '\u001B[?1049h';
 const EXIT_ALT_SCREEN = '\u001B[?1049l';
@@ -58,7 +59,8 @@ export interface CliOutput {
   detachLiveRegion?(): void;
 }
 
-export function createPanelCliOutput(): CliOutput {
+export function createPanelCliOutput(projectRoot?: string): CliOutput {
+  const cwd = projectRoot ?? process.cwd();
   let spinner: Ora | null = null;
   let altScreenActive = false;
   let liveInterval: ReturnType<typeof setInterval> | null = null;
@@ -68,6 +70,7 @@ export function createPanelCliOutput(): CliOutput {
   // screen and lost on teardown. Buffer them here and flush to the main screen in
   // finalSummary so every error is visible with a timestamp.
   const pendingFailures: string[] = [];
+  const eventLog: string[] = [];
 
   const ensureAltScreen = () => {
     if (altScreenActive) {
@@ -104,13 +107,19 @@ export function createPanelCliOutput(): CliOutput {
 
   return {
     note(message: string) {
+      debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
+      eventLog.push(`${timestamp()} [NOTE] ${message}`);
       console.log(chalk.gray(message));
     },
     warn(message: string) {
+      debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
+      eventLog.push(`${timestamp()} [WARN] ${message}`);
       console.warn(chalk.yellow(`Warning: ${message}`));
     },
     error(message: string) {
       const line = `Error: ${message}`;
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
+      eventLog.push(`${timestamp()} [ERROR] ${message}`);
       if (liveActive) {
         pendingFailures.push(line);
       } else {
@@ -118,9 +127,12 @@ export function createPanelCliOutput(): CliOutput {
       }
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
-      // iteration started hook
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
+      eventLog.push(`${timestamp()} [ITERATION] ${ctx.iteration}/${ctx.maxIterations}`);
     },
     stepStarted(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
+      eventLog.push(`${timestamp()} [STARTED] ${ctx.kind} v${ctx.version} → ${ctx.agent} (${ctx.model})`);
       if (liveActive) {
         return;
       }
@@ -130,6 +142,8 @@ export function createPanelCliOutput(): CliOutput {
       spinner = ora(chalk.blue(ctx.message)).start();
     },
     stepSucceeded(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
+      eventLog.push(`${timestamp()} [OK] ${ctx.kind} v${ctx.version}: ${ctx.message}`);
       if (liveActive) {
         console.log(chalk.green(ctx.message));
         return;
@@ -142,6 +156,8 @@ export function createPanelCliOutput(): CliOutput {
       }
     },
     stepFailed(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-failed:${ctx.kind}`, detail: `v${ctx.version} errorKind=${ctx.errorKind ?? 'unknown'} ${ctx.message}`, result: 'fail' });
+      eventLog.push(`${timestamp()} [FAIL] ${ctx.kind} v${ctx.version}: ${ctx.message} (${ctx.errorKind ?? 'unknown'})`);
       if (liveActive) {
         // alt screen is discarded on teardown — buffer for a main-screen flush.
         pendingFailures.push(ctx.message);
@@ -160,12 +176,23 @@ export function createPanelCliOutput(): CliOutput {
     finalSummary(ctx) {
       detach();
       restoreMainScreen();
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
       // Flush errors that were raised during the live region (alt screen) so they
       // survive on the main screen with a timestamp instead of being discarded.
       for (const failure of pendingFailures) {
         console.error(chalk.red(`${timestamp()} ${failure}`));
       }
       pendingFailures.length = 0;
+
+      // Flush the full chronological event log to the main screen
+      if (eventLog.length > 0) {
+        console.log(chalk.cyan('\n── Harness Event Log ──'));
+        for (const line of eventLog) {
+          console.log(chalk.gray(line));
+        }
+        eventLog.length = 0;
+      }
+
       if (ctx.success) {
         console.log(chalk.bold.green(`\n${timestamp()} Success: ${ctx.message}`));
       } else {
@@ -183,8 +210,8 @@ export function createPanelCliOutput(): CliOutput {
       }
       if (spinner) {
         spinner.stop();
-        spinner = null;
       }
+      spinner = null;
       liveSupplier = supplier;
       liveActive = true;
       ensureAltScreen();
@@ -198,29 +225,37 @@ export function createPanelCliOutput(): CliOutput {
   };
 }
 
-export function createPlainCliOutput(): CliOutput {
+export function createPlainCliOutput(projectRoot?: string): CliOutput {
+  const cwd = projectRoot ?? process.cwd();
   let lastPanelContextJson = '';
 
   return {
     note(message: string) {
+      debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
       console.log(`Note: ${message}`);
     },
     warn(message: string) {
+      debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
       console.warn(`Warning: ${message}`);
     },
     error(message: string) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
       console.error(`${timestamp()} Error: ${message}`);
     },
     iterationStarted(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
       console.log(`Iteration ${ctx.iteration}/${ctx.maxIterations} started`);
     },
     stepStarted(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
       console.log(`Step ${ctx.kind} version ${ctx.version} using ${ctx.agent} (${ctx.model}): running...`);
     },
     stepSucceeded(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
       console.log(`Step ${ctx.kind} version ${ctx.version}: succeeded`);
     },
     stepFailed(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-failed:${ctx.kind}`, detail: `v${ctx.version} errorKind=${ctx.errorKind ?? 'unknown'} ${ctx.message}`, result: 'fail' });
       console.log(`${timestamp()} Step ${ctx.kind} version ${ctx.version}: failed (error: ${ctx.errorKind ?? 'unknown'})`);
     },
     renderPanel(context: PanelContext) {
@@ -250,6 +285,7 @@ export function createPlainCliOutput(): CliOutput {
       }
     },
     finalSummary(ctx) {
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
       if (ctx.success) {
         console.log(`${timestamp()} Success: ${ctx.message} (Verdict: ${ctx.verdict}, Path: ${ctx.lastAuditPath})`);
       } else {

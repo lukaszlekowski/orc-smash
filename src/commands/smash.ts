@@ -13,7 +13,7 @@ import { setActiveProjectRoot, quarantineInterruptedResume } from '../interrupte
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import type { LoopSpec } from '../manifest.js';
-import { configureSpawnDebug } from '../debug-spawn.js';
+import { configureSpawnDebug, debugHarnessEvent } from '../debug-spawn.js';
 
 import { resolveDefaultLoop } from '../loop-selector.js';
 
@@ -58,8 +58,10 @@ async function resolveSmashRunSetup(
   let config: Config;
   try {
     config = loadConfig(projectRoot);
+    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', result: 'pass' });
   } catch (err: any) {
     const msg = `Error: failed to load config or manifest: ${err.message}`;
+    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', detail: err.message, result: 'fail' });
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
@@ -96,6 +98,7 @@ async function resolveSmashRunSetup(
   }
 
   const loopSpec = config.manifest.loops[loopName]!;
+  debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'loop-selected', detail: loopName, result: 'pass' });
 
   // Defensive check for obsolete options passed programmatically (e.g. in tests)
   if (options.auditContinuity || options.codexAuditContinuity) {
@@ -115,8 +118,10 @@ async function resolveSmashRunSetup(
         auditPattern: planSpec.auditPattern ?? '',
         followUpPattern: planSpec.followUpPattern ?? ''
       });
+      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'approved-plan-requirement', result: 'pass' });
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
+      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'approved-plan-requirement', detail: err.message, result: 'fail' });
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
@@ -124,9 +129,11 @@ async function resolveSmashRunSetup(
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
     if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
       const msg = 'latest audit is unparseable; resolve or delete it before smashing';
+      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: 'latest audit unparseable', result: 'fail' });
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
+    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: `latestVerdict=${stateScan.latestVerdict}`, result: 'pass' });
   }
 
   // 4. Runners selection & validation
@@ -151,8 +158,10 @@ async function resolveSmashRunSetup(
     if (deferImplementToPrompt) break;
     try {
       runners[skillId] = resolveRunner(skillId, config, globalOverrides);
+      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${runners[skillId].agent} (${runners[skillId].model})`, result: 'pass' });
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
+      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} error: ${err.message}`, result: 'fail' });
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
@@ -176,6 +185,7 @@ async function resolveSmashRunSetup(
   const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
   if (auditRunner) {
     const agentSupportsContinuity = deriveContinuity(auditRunner.agent);
+    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'continuity-support-check', detail: `${auditRunner.agent} supportsContinuity=${agentSupportsContinuity}`, result: agentSupportsContinuity ? 'pass' : 'info' });
     if (!agentSupportsContinuity) {
       options.output.warn(`agent ${auditRunner.agent} does not support session resume.`);
     }

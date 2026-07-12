@@ -40,7 +40,8 @@ export function buildProgram(): Command {
     .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
     .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
     .action(async (options) => {
-      const output = options.plain ? createPlainCliOutput() : createPanelCliOutput();
+      const projectRoot = options.project ? resolve(options.project) : process.cwd();
+      const output = options.plain ? createPlainCliOutput(projectRoot) : createPanelCliOutput(projectRoot);
       const result = await smashAction({ ...options, output });
       process.exitCode = result.exitCode;
     });
@@ -51,7 +52,8 @@ export function buildProgram(): Command {
     .option('-p, --project <path>', 'Path to the target project')
     .option('-a, --all', 'Show artifacts across all loops')
     .action(async (options) => {
-      const output = createPanelCliOutput();
+      const projectRoot = options.project ? resolve(options.project) : process.cwd();
+      const output = createPanelCliOutput(projectRoot);
       const result = await statusAction({ ...options, output });
       process.exitCode = result.exitCode;
     });

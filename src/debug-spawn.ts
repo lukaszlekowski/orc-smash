@@ -153,3 +153,43 @@ export function debugProcessLifecycle(ctx: {
 
   writeDebugLog(ctx.cwd, lines);
 }
+
+/**
+ * Log a harness-level validation, check, or decision event to the spawn debug
+ * log. These complement the process-level events (spawn/completed/spawn-error)
+ * with the orchestration-layer checks that happen before, between, and after
+ * agent runs.
+ *
+ * Categories:
+ *   'preflight'   — validation gate before a step starts
+ *   'check'       — post-run artifact/content verification
+ *   'decision'    — interactive or automatic routing choice
+ *   'lifecycle'   — step started/succeeded/failed transitions
+ *   'info'        — informational note or warning
+ */
+export type HarnessEventCategory =
+  | 'preflight'
+  | 'check'
+  | 'decision'
+  | 'lifecycle'
+  | 'info';
+
+export function debugHarnessEvent(ctx: {
+  cwd: string;
+  category: HarnessEventCategory;
+  event: string;
+  detail?: string;
+  result?: 'pass' | 'fail' | 'info';
+}): void {
+  if (!isSpawnDebugEnabled()) return;
+
+  const lines = [
+    `[ORC_DEBUG_HARNESS] ${ctx.category}`,
+    `event=${ctx.event}`,
+  ];
+  if (ctx.detail) lines.push(`detail=${ctx.detail}`);
+  if (ctx.result) lines.push(`result=${ctx.result}`);
+
+  writeDebugLog(ctx.cwd, lines);
+}
+
