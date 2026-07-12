@@ -79,6 +79,89 @@ export const fakeAdapter: AgentAdapter = {
       }
     };
 
+    if (input.spawnRuntime) {
+      const spawnRes = input.spawnRuntime.spawn({
+        command: 'fake',
+        args: [],
+        env: input.ownership?.env,
+        cwd: input.cwd
+      });
+      emitStart();
+      emitMessages();
+      if (spawnRes.ready) {
+        await spawnRes.ready;
+      }
+      if (fakeAdapterState.delayMs) {
+        await new Promise(r => setTimeout(r, fakeAdapterState.delayMs));
+      }
+      const rawRes = await spawnRes.result;
+      const err = isFollowUp ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
+      if (err) {
+        emitEnd(err);
+        return {
+          stdout: rawRes.stdout || fakeAdapterState.stdout || '',
+          exitCode: rawRes.exitCode,
+          stderr: rawRes.stderr || fakeAdapterState.stderr,
+          error: err
+        };
+      }
+      if (isImplement) {
+        if (relativePath && fakeAdapterState.writeVerdictFile) {
+          const absolutePath = resolve(input.cwd, relativePath);
+          mkdirSync(dirname(absolutePath), { recursive: true });
+          writeFileSync(absolutePath,
+            `# Implementation Evidence Ledger\n\n` +
+            `## Implementation Evidence Ledger\n\n` +
+            `| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n` +
+            `| --- | --- | --- | --- | --- |\n` +
+            `| Step 1 | src/config.ts | pnpm test | pass | none |\n\n` +
+            `## Requirement Coverage\n\n` +
+            `| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n` +
+            `| --- | --- | --- | --- |\n` +
+            `| Config-driven timeouts | src/config.ts | tests/config.test.ts | pass |\n\n` +
+            `State overall confidence: 1.00\n`
+          );
+        }
+        emitEnd();
+        return {
+          stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake implementation completed`,
+          exitCode: rawRes.exitCode
+        };
+      }
+      if (!isFollowUp) {
+        const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';
+        if (relativePath && fakeAdapterState.writeVerdictFile) {
+          const absolutePath = resolve(input.cwd, relativePath);
+          mkdirSync(dirname(absolutePath), { recursive: true });
+          const heading = verdict === 'unknown' ? 'MALFORMED_OR_MISSING' : verdict;
+          writeFileSync(absolutePath, `# Plan Audit\n\n## Verdict\n\n${heading}\n`);
+        }
+        emitEnd();
+        return {
+          stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake run completed with verdict ${verdict}`,
+          exitCode: rawRes.exitCode
+        };
+      }
+      if (relativePath && fakeAdapterState.writeVerdictFile) {
+        const absolutePath = resolve(input.cwd, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        writeFileSync(absolutePath,
+          `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n\nFiles patched: docs/dev/plan.md\n`);
+      }
+      const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
+      if (targetMatch?.[1]) {
+        const relTarget = targetMatch[1].trim();
+        if (relTarget !== '.' && relTarget !== 'none') {
+          writeFileSync(resolve(input.cwd, relTarget), `\n# Patched by follow-up\n`, { flag: 'a' });
+        }
+      }
+      emitEnd();
+      return {
+        stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake follow-up completed`,
+        exitCode: rawRes.exitCode
+      };
+    }
+
     emitStart();
 
     if (fakeAdapterState.delayMs) {

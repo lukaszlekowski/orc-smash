@@ -2,6 +2,7 @@ import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess, resolveClaudeTimeoutMs, type ProcessRunner } from './utils.js';
 import { debugCommandBuild } from '../debug-spawn.js';
 import { parseClaudeResult } from './claude-result.js';
+import type { SpawnRuntime } from './process-group.js';
 
 export interface CreateClaudeAdapterOptions {
   /** Config-tier watchdog deadline in ms (0 / unset disables). */
@@ -11,11 +12,13 @@ export interface CreateClaudeAdapterOptions {
    * independent of real-binary runs. Production code never passes this.
    */
   processRunner?: ProcessRunner;
+  groupRuntime?: SpawnRuntime;
 }
 
 export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): AgentAdapter {
   const defaultTimeoutMs = opts.defaultTimeoutMs;
   const processRunner = opts.processRunner;
+  const groupRuntime = opts.groupRuntime;
   return {
     name: 'claude',
 
@@ -57,7 +60,9 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
         skillId: input.skillId,
         version: input.version,
         onLifecycle: input.onLifecycle,
-        timeoutMs: resolveClaudeTimeoutMs({ defaultTimeoutMs })
+        timeoutMs: resolveClaudeTimeoutMs({ defaultTimeoutMs }),
+        spawnRuntime: groupRuntime ?? input.spawnRuntime,
+        ownership: input.ownership
       }, processRunner);
 
       if (!result.error && result.exitCode === 0) {

@@ -349,7 +349,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
       if (outputPathMatch?.[1]) {
         const absOut = resolve(tempDir, outputPathMatch[1]);
         mkdirSync(dirname(absOut), { recursive: true });
-        if (outputPathMatch[1].includes('followup')) {
+        if (outputPathMatch[1].replace(/\\/g, '/').split('/').pop()?.includes('followup')) {
           writeFileSync(absOut, `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`);
         } else {
           writeFileSync(absOut, `# Plan Audit\n\n## Verdict\nAPPROVED\n`);
@@ -612,7 +612,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
       if (outputPathMatch?.[1]) {
         const absOut = resolve(tempDir, outputPathMatch[1]);
         mkdirSync(dirname(absOut), { recursive: true });
-        if (outputPathMatch[1].includes('followup')) {
+        if (outputPathMatch[1].replace(/\\/g, '/').split('/').pop()?.includes('followup')) {
           writeFileSync(absOut, `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`);
         } else {
           auditCallCount++;
@@ -680,7 +680,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
       if (outputPathMatch?.[1]) {
         const absOut = resolve(tempDir, outputPathMatch[1]);
         mkdirSync(dirname(absOut), { recursive: true });
-        if (outputPathMatch[1].includes('followup')) {
+        if (outputPathMatch[1].replace(/\\/g, '/').split('/').pop()?.includes('followup')) {
           writeFileSync(absOut, `# Plan Follow-up\n\n## Follow-up Outcome\npatched\n`);
         } else {
           auditCallCount++;
@@ -1025,7 +1025,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
       
       const prompt = options.args[options.args.length - 1] || '';
       const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
-      const isFollowUp = outputPathMatch?.[1]?.includes('followup');
+      const isFollowUp = outputPathMatch?.[1]?.replace(/\\/g, '/').split('/').pop()?.includes('followup');
       
       if (outputPathMatch?.[1]) {
         const absOut = resolve(tempDir, outputPathMatch[1]);
@@ -1125,7 +1125,7 @@ describe('Follow-up Runner interactive resolution & inheritance', () => {
 
       const prompt = options.args[options.args.length - 1] || '';
       const outputPathMatch = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i);
-      const isFollowUp = outputPathMatch?.[1]?.includes('followup');
+      const isFollowUp = outputPathMatch?.[1]?.replace(/\\/g, '/').split('/').pop()?.includes('followup');
 
       if (outputPathMatch?.[1]) {
         const absOut = resolve(tempDir, outputPathMatch[1]);

@@ -1,5 +1,6 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnOpencode, type ProcessRunner } from './utils.js';
+import type { SpawnRuntime } from './process-group.js';
 
 export interface OpencodeSpawn {
   (input: RunInput, args: string[], options?: { defaultTimeoutMs?: number; processRunner?: ProcessRunner }): Promise<RunResult>;
@@ -18,12 +19,14 @@ export interface CreateOpencodeAdapterOptions {
    * independent of the spawn seam. Production code never passes this.
    */
   processRunner?: ProcessRunner;
+  groupRuntime?: SpawnRuntime;
 }
 
 export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): AgentAdapter {
   const defaultTimeoutMs = opts.defaultTimeoutMs;
   const spawn: OpencodeSpawn = opts.spawn ?? spawnOpencode;
   const processRunner = opts.processRunner;
+  const groupRuntime = opts.groupRuntime;
   return {
     name: 'opencode',
 
@@ -50,7 +53,11 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
 
     async run(input: RunInput): Promise<RunResult> {
       const { args } = this.buildRun(input);
-      return spawn(input, args, { defaultTimeoutMs, processRunner });
+      let runInput = input;
+      if (groupRuntime) {
+        runInput = { ...input, spawnRuntime: groupRuntime };
+      }
+      return spawn(runInput, args, { defaultTimeoutMs, processRunner });
     }
   };
 }

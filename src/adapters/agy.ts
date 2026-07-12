@@ -1,5 +1,6 @@
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
 import { spawnAgentProcess, resolveAgyTimeoutMs, type ProcessRunner } from './utils.js';
+import type { SpawnRuntime } from './process-group.js';
 
 /**
  * Bounded auth-failure detection for the Antigravity `agy` CLI.
@@ -79,11 +80,13 @@ export interface CreateAgyAdapterOptions {
    * independent of real-binary runs. Production code never passes this.
    */
   processRunner?: ProcessRunner;
+  groupRuntime?: SpawnRuntime;
 }
 
 export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapter {
   const defaultTimeoutMs = opts.defaultTimeoutMs;
   const processRunner = opts.processRunner;
+  const groupRuntime = opts.groupRuntime;
   return {
     name: 'agy',
 
@@ -110,7 +113,9 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
         skillId: input.skillId,
         version: input.version,
         onLifecycle: input.onLifecycle,
-        timeoutMs: resolveAgyTimeoutMs({ defaultTimeoutMs })
+        timeoutMs: resolveAgyTimeoutMs({ defaultTimeoutMs }),
+        spawnRuntime: groupRuntime ?? input.spawnRuntime,
+        ownership: input.ownership
       }, processRunner);
 
       // Post-process auth-fallback detection. This runs only when no other error
