@@ -778,28 +778,23 @@ export async function finalizeOwnedRun(
     }
   }
 
-  // 2. Clear groups
+  // 2. Persist the cleared group set so the checked lifecycle boundary below
+  // sees no active groups (completeRun/failRun/stopRun assert groups is empty).
   record.groups = [];
+  writeActive(ctx.runDir, record);
 
-  // 3. Transition state based on outcome
+  // 3. Route the terminal transition through the single checked lifecycle
+  // boundary — completeRun()/failRun()/stopRun() re-read active.json, assert no
+  // active group remains, set the terminal state, and release admission. This
+  // keeps one ownership lifecycle transition path instead of mutating
+  // ActiveRecord directly here.
   if (runOutcome.verdict === 'ownership-lost') {
-    record.state = 'stopped';
-    record.reason = 'ownership-lost';
-    writeActive(ctx.runDir, record);
-    releaseProjectLock(ctx.projectDir, ctx.runId);
+    stopRun(ctx.runDir, ctx.projectDir, ctx.runId, 'ownership-lost');
   } else if (runOutcome.success) {
-    record.state = 'completed';
-    writeActive(ctx.runDir, record);
-    releaseProjectLock(ctx.projectDir, ctx.runId);
+    completeRun(ctx.runDir, ctx.projectDir, ctx.runId);
   } else if (runOutcome.verdict === 'user-stop') {
-    record.state = 'stopped';
-    record.reason = 'user-stop';
-    writeActive(ctx.runDir, record);
-    releaseProjectLock(ctx.projectDir, ctx.runId);
+    stopRun(ctx.runDir, ctx.projectDir, ctx.runId, 'user-stop');
   } else {
-    record.state = 'failed';
-    record.reason = runOutcome.message || 'run-failed';
-    writeActive(ctx.runDir, record);
-    releaseProjectLock(ctx.projectDir, ctx.runId);
+    failRun(ctx.runDir, ctx.projectDir, ctx.runId, runOutcome.message || 'run-failed');
   }
 }
