@@ -6,6 +6,7 @@ import { smashAction } from './commands/smash.js';
 import { statusAction } from './commands/status.js';
 import { createPanelCliOutput, createPlainCliOutput } from './cli-output.js';
 import { handleInterruptSignal } from './interrupted-artifact.js';
+import { ownershipStatusAction, ownershipReleaseAction } from './commands/ownership-recovery.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -55,6 +56,33 @@ export function buildProgram(): Command {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
       const output = createPanelCliOutput(projectRoot);
       const result = await statusAction({ ...options, output });
+      process.exitCode = result.exitCode;
+    });
+
+  const ownership = program
+    .command('ownership')
+    .description('Inspect or explicitly release retained owned-run admission');
+
+  ownership
+    .command('status')
+    .description('Read-only ownership diagnostics; never signals or mutates state')
+    .requiredOption('-p, --project <path>', 'Path to the target project')
+    .action(async (options) => {
+      const projectRoot = resolve(options.project);
+      const output = createPlainCliOutput(projectRoot);
+      const result = await ownershipStatusAction({ project: projectRoot, output });
+      process.exitCode = result.exitCode;
+    });
+
+  ownership
+    .command('release')
+    .description('Release retained admission after operator verification; never kills processes')
+    .requiredOption('-p, --project <path>', 'Path to the target project')
+    .option('--yes', 'Assert that separate inspection found no owned process remaining')
+    .action(async (options) => {
+      const projectRoot = resolve(options.project);
+      const output = createPlainCliOutput(projectRoot);
+      const result = await ownershipReleaseAction({ project: projectRoot, output, yes: options.yes });
       process.exitCode = result.exitCode;
     });
 

@@ -70,7 +70,7 @@ export function structuredMessage(result: RunResult, ctx: MessageContext): strin
       case 'spawn':
         return `${agent} failed to start: ${msg}`;
       case 'ownership':
-        return `Run ownership error: ${msg}${refStr}. Inspect the run state directory (${process.env['ORC_RUN_STATE_DIR'] ?? '$XDG_RUNTIME_DIR'}/orc-smash/projects/<hash>/) and clear project.lock only after revalidating that no owned cgroup/processes remain; then relaunch the run.`;
+        return `Run ownership error: ${msg}${refStr}. Inspect project.lock with \`orc ownership status --project <path>\`, inspect the recorded process-group evidence, and use \`orc ownership release --project <path> --yes\` only after confirming that no owned processes remain.`;
       case 'nonzero-exit':
         return `${label} exited with code ${exitCode}. stderr: ${stderrTail}`;
       default:

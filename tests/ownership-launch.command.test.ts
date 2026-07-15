@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import * as crypto from 'node:crypto';
 import { openOwnedRun, type OwnershipLaunchInput } from '../src/commands/ownership-launch.js';
@@ -9,24 +9,11 @@ import { createTempDir, removeTempDir } from './helpers/fs.js';
  * v5-M1 plan-mandated coverage (§1 verification: `tests/ownership-launch.command.test.ts`).
  * Exercises the `openOwnedRun()` command boundary: app-owned activation, child-env
  * scrubbing, plaintext-token retention, and fail-closed partial / mismatched /
- * missing-control launches. `checkCgroupV2Capability` is mocked so the app-owned
- * happy path is deterministic on non-Linux (the capability gate is exercised
- * separately by the process-group tests); the admission lock + control-record
- * validation are the real implementations.
+ * missing-control launches.
  */
 
 let tmpBase = '';
 let savedEnv: NodeJS.ProcessEnv;
-
-vi.mock('../src/adapters/process-group.js', async (importOriginal) => {
-  const actual = await importOriginal() as Record<string, unknown>;
-  return {
-    ...actual,
-    // Pretend cgroup-v2 is available + delegated so openOwnedRun proceeds past
-    // the capability gate. (No cgroup is actually created on the happy path.)
-    checkCgroupV2Capability: () => ({ supported: true, delegatedRoot: tmpBase || '/tmp' })
-  };
-});
 
 describe('openOwnedRun — command-level activation + env scrubbing', () => {
   const projectRoot = join(process.cwd(), 'temp-ownership-launch');
@@ -39,6 +26,7 @@ describe('openOwnedRun — command-level activation + env scrubbing', () => {
     tmpBase = join(projectRoot, 'runstate');
     runDir = join(tmpBase, 'orc-smash', 'runs', runId);
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     savedEnv = { ...process.env };
     delete process.env.ORC_RUN_ID;
     delete process.env.ORC_RUN_TOKEN;
@@ -55,15 +43,16 @@ describe('openOwnedRun — command-level activation + env scrubbing', () => {
     writeFileSync(join(runDir, 'control.json'), JSON.stringify({ ...baseControl(), ...overrides }), { mode: 0o600 });
   }
   function baseControl() {
+    const leaseIssuedMs = Date.now();
     return {
       schemaVersion: 1,
       runId,
       ownerTokenHash: crypto.createHash('sha256').update(token).digest('hex'),
       projectRoot,
       hostInstanceId: 'host-1',
-      leaseIssuedMs: 0,
+      leaseIssuedMs,
       leaseTtlMs: 60_000,
-      leaseExpiresMs: Date.now() + 60_000,
+      leaseExpiresMs: leaseIssuedMs + 60_000,
       issuerRevision: 1
     };
   }

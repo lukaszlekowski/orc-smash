@@ -30,7 +30,10 @@ cli.ts ──▶ commands/{smash,status}.ts
                 ├─ status.ts        pure next-step-message & PanelContext builders
                 ├─ status-panel.ts  pure ASCII boxen/table dashboard string renderer
                 ├─ cli-output.ts    event-driven terminal output seam (panel/plain modes)
-                └─ adapters/        registry: explicit production registry (registry.ts) vs testing registry (testing.ts)
+                ├─ run-ownership.ts  schema-versioned admission, lease clock, lifecycle
+                ├─ process-identity.ts + kill-gate.ts  typed identity and signal authority
+                ├─ owned-runtime-registry.ts  fresh live group capabilities
+                └─ adapters/        registry plus process-group bootstrap/runtime
 ```
 
 Pure, I/O-free logic (`verdict`, `state`, `follow-up-outcome`, `prompt-composer`, `runner`, status context, adapter arg builders) is
@@ -142,6 +145,63 @@ never advances state incorrectly. `orc status` selects the loop **marker-first**
 interrupted stage via the display-only `scanForStatus` helper in `src/state.ts`. Normal
 decision-path `scan()` never includes synthetic interrupted steps.
 
+### App-owned run supervision (portable PGID termination)
+
+When launched with out-of-band `ORC_RUN_ID` + `ORC_RUN_TOKEN` (and optional
+`ORC_RUN_STATE_DIR`), the CLI enters **app-owned mode**: an external owner holds
+a lease and the CLI self-terminates the provider when ownership is lost, so a run
+cannot continue unattended after the owning app exits. `src/commands/ownership-launch.ts`
+parses the input; `src/run-ownership.ts` is the single ownership boundary (control
+records, project admission lock, lease clock, lifecycle). Partial/missing/mismatched
+launch inputs fail closed — there is no silent fallback to terminal mode, and the
+plaintext token is never stored or exposed to providers (the owned child environment
+scrubs `ORC_RUN_TOKEN`/`ORC_RUN_ID`/`ORC_RUN_STATE_DIR`).
+
+Ownership state lives **outside the target project**, under
+`${ORC_RUN_STATE_DIR ?? ${XDG_RUNTIME_DIR ?? os.tmpdir()}}/orc-smash/`:
+`projects/<sha256(realpath(root))>/` (one project-keyed admission lock — at most one
+app-owned run per canonical project, regardless of `runId`) and `runs/<runId>/`
+(`control.json` issuer-written, `active.json` CLI-written). All files are `0600` on
+`0700` dirs, atomically written (temp→fsync→rename), and a loosened/tampered file
+fails closed.
+
+Providers run beneath the source-shipped
+`src/adapters/process-group-bootstrap.mjs` in a detached session. The bootstrap
+passes fd 0/1/2 to the provider unchanged and uses a private, versioned Node IPC
+channel for readiness, ACK, provider-started, provider-exited, and failure frames.
+The parent independently verifies `{pid, pgid, sessionId}` and writes the
+provisional group record before ACK; `src/owned-runtime-registry.ts` retains the
+fresh capability used for lease-loss and interrupt cleanup. **Every**
+`process.kill(-pgid, …)` routes through the authorized kill gate in
+`src/kill-gate.ts`, which:
+
+- structurally rejects `pgid <= 1`, the CLI's own pid, and the CLI's own + ancestor
+  process groups (resolved via `ps`, never via `kill(0, …)`);
+- identity-authorizes fresh signals by re-resolving the recorded leader and requiring
+  matching `pgid` + `sessionId` + start evidence and executable identity;
+- allows durable cleanup only on Linux with collision-resistant, exact identity evidence;
+  durable macOS records never authorize unattended signalling;
+- **fail-closes** when the leader is gone, ambiguous, or its identity has drifted — a
+  recycled or foreign PGID is never signalled.
+
+A lease watcher (`watchLease`) terminates a still-running provider on expiry; a
+completion-side fence (`ownershipFence`) prevents any provenance/state advancement
+after expiry and quarantines the raw output to `docs/dev/archived/`.
+
+**Residual risk (portable design):** a descendant that deliberately creates another
+session or process group is **not** automatically discovered or stopped. If a live
+capability becomes unverifiable, the CLI retains admission and records a terminal
+ownership failure rather than risking a recycled PGID. This design does not claim
+kernel containment or independent cleanup after the CLI dies.
+
+**Operator recovery** is explicit and never signals processes. Run
+`orc ownership status --project <path>` to print recorded and observed evidence plus
+safe `ps` inspection commands. After separately confirming that no owned processes
+remain, run `orc ownership release --project <path> --yes`; the command marks the
+retained run `failed: operator-released` before removing only its matching admission
+lock and project pointer. Without `--yes`, an interactive release requires an explicit
+confirmation; non-interactive release refuses to mutate state.
+
 ## Key invariants
 
 - **Four real adapters; per-skill runners:** opencode, codex, claude, and agy all run for real; each
@@ -169,5 +229,9 @@ decision-path `scan()` never includes synthetic interrupted steps.
 - **Stateless; isolated per target:** the tool holds only config; all per-run target state is
   derived from filenames. One runner per target; different targets never interfere (dual-target
   e2e proves it).
+- **Every group kill is authorized:** the only negative-PID signal in the CLI is reached through
+  `src/kill-gate.ts`, behind structural + identity guards. App-owned mode uses portable POSIX
+  process groups; an unverifiable, forbidden, or recycled PGID is never signalled — the run
+  fail-closes instead.
 - **Audit continuity (opt-in):** As an explicit architectural exception to pure statelessness, the `--audit-continuity` option allows audit runs in the `plan` or `review` loops to resume the same session ID for the `codex`, `opencode`, and `claude` providers. The session ID is captured from the live provider streams and persisted explicitly in artifact metadata (`sessionMode`, `sessionId`). Resuming is strictly artifact-driven (re-read from front matter) rather than hidden-session-driven or history-driven, and second opinions remain fresh. The legacy `--codex-audit-continuity` flag is kept as a temporary Codex-only alias. both flags are mutually exclusive.
 - **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths for opencode, codex, and claude remain covered by env-gated contract tests; agy stays a real adapter but is verified manually from an already-authenticated shell because its browser login flow is not suitable for an automated contract gate.

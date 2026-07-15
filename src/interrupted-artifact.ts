@@ -23,6 +23,7 @@ import type { StepKind } from './provenance.js';
 import type { LoopSpec } from './manifest.js';
 import { renderPattern, patternToRegex } from './patterns.js';
 import { terminateActiveChildren } from './adapters/utils.js';
+import { terminateOwnedRuntimes } from './owned-runtime-registry.js';
 
 /** Directory (under the project root) holding the durable marker. */
 export const INTERRUPTED_MARKER_DIR = '.orc-smash';
@@ -323,7 +324,7 @@ export async function handleInterruptSignal(signal: NodeJS.Signals): Promise<voi
   process.exit(128 + signo);
 }
 
-let isHandlingOwnershipLoss = false;
+const ownershipLosses = new Map<string, Promise<OwnershipLossResult>>();
 
 /**
  * Structured ownership-loss cleanup result. The lease-expiry race must always
@@ -350,6 +351,8 @@ async function recordTerminalOwnershipFailure(ctx: any, reason: string): Promise
     const record = readActive(ctx.runDir);
     record.state = 'failed';
     record.reason = reason;
+    record.recoveryAtMs = Date.now();
+    record.cliRevision += 1;
     writeActive(ctx.runDir, record);
     try {
       const projectIndex = readProjectIndex(ctx.projectDir);
@@ -363,13 +366,11 @@ async function recordTerminalOwnershipFailure(ctx: any, reason: string): Promise
   }
 }
 
-export async function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
-  if (isHandlingOwnershipLoss) return { kind: 'ownership-stopped' };
-  isHandlingOwnershipLoss = true;
-
+async function performOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
   try {
     const stepCtx = activeStepCtx;
     const root = activeProjectRoot;
+    const interruptedAtMs = Date.now();
 
     // 1. Write the interrupted marker
     if (stepCtx && root) {
@@ -380,44 +381,36 @@ export async function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise
         agent: stepCtx.agent,
         model: stepCtx.model,
         skillId: stepCtx.skillId,
-        interruptedAtMs: Date.now()
+        interruptedAtMs
       });
     }
 
-    // 2. Two-phase terminate each registered group
-    const { readActive, writeActive, authorizeLiveRunSignal } = await import('./run-ownership.js');
-    const { terminateProcessGroup, readCgroupProcs } = await import('./adapters/process-group.js');
+    // 2. Terminate only fresh capabilities created by this CLI. In particular,
+    // do not reconstruct a kill target from active.json while this process is
+    // alive: that would route the live lease-loss path through durable authority
+    // and is refused on macOS.
+    const { readActive, writeActive, stopRun } = await import('./run-ownership.js');
 
     const activeRecord = readActive(ctx.runDir);
 
-    // Set active.json state to stopping
     activeRecord.state = 'stopping';
+    activeRecord.cliRevision += 1;
     writeActive(ctx.runDir, activeRecord);
 
-    const groupTerminationPromises = activeRecord.groups.map(async (group) => {
-      const handle = {
-        cgroupPath: group.cgroupPath,
-        pgid: group.pgid,
-        leaderPid: group.leaderPid,
-        leaderStartMs: group.leaderStartMs,
-        command: group.command,
-        cgroupIno: group.cgroupIno,
-        cgroupDev: group.cgroupDev
-      };
+    const terminationResults = await terminateOwnedRuntimes(
+      2000,
+      (capability) => capability.runId === ctx.runId && capability.runDir === ctx.runDir
+    );
+    const registeredGroups = new Set(activeRecord.groups.map((group: any) => `${group.pgid}:${group.leaderPid}`));
+    const terminatedGroups = new Set(
+      terminationResults.map((entry) => `${entry.capability.handle.pgid}:${entry.capability.handle.leaderPid}`)
+    );
+    const unverified = terminationResults.filter(
+      (entry) => entry.result.outcome === 'rejected' || !entry.retired
+    );
+    const missingFreshCapability = [...registeredGroups].filter((key) => !terminatedGroups.has(key));
 
-      const authorized = await authorizeLiveRunSignal(handle, { liveToken: ctx.token }, ctx.control);
-      if (!authorized) {
-        throw new Error(`Signal not authorized for live group: ${group.cgroupPath}`);
-      }
-
-      await terminateProcessGroup(handle);
-    });
-
-    await Promise.all(groupTerminationPromises);
-
-    // 3. Quarantine raw provider output
     if (root && stepCtx) {
-      // Resolve the in-flight artifact path
       const inFlight = resolveInterruptedArtifactPath(root, {
         loop: stepCtx.loop,
         kind: stepCtx.kind,
@@ -431,50 +424,51 @@ export async function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise
       if (inFlight) {
         quarantineArtifact(root, inFlight, { reason: 'interrupted' });
       }
-      quarantineLateArtifactsForLoop(root, loopSpec, Date.now() - 5000);
+      quarantineLateArtifactsForLoop(root, loopSpec, interruptedAtMs);
     }
 
-    // 4. Survivor gate
+    if (unverified.length > 0 || missingFreshCapability.length > 0) {
+      // At least one registered group could not be safely terminated (leader
+      // gone or identity drift). Retain admission and surface a terminal
+      // ownership-failure for operator recovery rather than risk a recycled-PGID
+      // kill.
+      const reasons = [
+        ...unverified.map((entry) => entry.result.outcome === 'rejected' || entry.result.outcome === 'already-gone'
+          ? entry.result.reason
+          : 'runtime capability was not retired'),
+        ...(missingFreshCapability.length > 0 ? [`no fresh runtime capability for ${missingFreshCapability.join(', ')}`] : [])
+      ];
+      await recordTerminalOwnershipFailure(
+        ctx,
+        `ownership-loss-unkillable-groups: ${reasons.join('; ')}`
+      );
+      return {
+        kind: 'ownership-blocked',
+        reason: reasons.join('; ')
+      };
+    }
+
     const recordAfterKill = readActive(ctx.runDir);
-    let allEmpty = true;
-    for (const group of recordAfterKill.groups) {
-      const procs = readCgroupProcs(group.cgroupPath, group.cgroupIno, group.cgroupDev);
-      if (procs.length > 0) {
-        allEmpty = false;
-        break;
-      }
+    if (recordAfterKill.groups.length > 0) {
+      await recordTerminalOwnershipFailure(ctx, 'ownership-loss-cleanup left active group records');
+      return { kind: 'ownership-blocked', reason: 'active group records remain after fresh termination' };
     }
-
-    if (allEmpty) {
-      recordAfterKill.state = 'stopped';
-      recordAfterKill.reason = 'ownership-lost';
-      recordAfterKill.groups = [];
-      writeActive(ctx.runDir, recordAfterKill);
-
-      const { releaseProjectLock } = await import('./run-ownership.js');
-      releaseProjectLock(ctx.projectDir, ctx.runId);
-      return { kind: 'ownership-stopped' };
-    }
-
-    // Survivors remain (unkillable/unreadable cgroup). Record a terminal
-    // ownership-failure state and RETAIN admission — but RESOLVE as a blocked
-    // ownership outcome rather than throwing, so the lease-expiry race cannot
-    // escape as a generic transport failure.
-    await recordTerminalOwnershipFailure(ctx, 'ownership-lost-with-survivors');
-    return {
-      kind: 'ownership-blocked',
-      reason: 'cgroup contains unkillable survivors or is unreadable; admission retained for operator recovery'
-    };
+    stopRun(ctx.runDir, ctx.projectDir, ctx.runId, 'ownership-lost');
+    return { kind: 'ownership-stopped' };
   } catch (err: any) {
-    // Any unexpected cleanup failure (e.g. live-signal authorization rejected for
-    // a registered group) is a terminal ownership failure: record it, retain
-    // admission, and resolve as blocked. It must never escape the lease watcher's
-    // race as an untyped exception.
     const message = (err as Error)?.message ?? 'unknown ownership-loss cleanup error';
     await recordTerminalOwnershipFailure(ctx, `ownership-loss-cleanup-error: ${message}`);
     return { kind: 'ownership-blocked', reason: message };
-  } finally {
-    isHandlingOwnershipLoss = false;
   }
 }
 
+export function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
+  const key = String(ctx?.runDir ?? ctx?.runId ?? 'unknown');
+  const existing = ownershipLosses.get(key);
+  if (existing) return existing;
+  const operation = performOwnershipLoss(loopSpec, ctx).finally(() => {
+    if (ownershipLosses.get(key) === operation) ownershipLosses.delete(key);
+  });
+  ownershipLosses.set(key, operation);
+  return operation;
+}
