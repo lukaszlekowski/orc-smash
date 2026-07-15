@@ -12,7 +12,7 @@ import { makeRunResult, makeRunError } from '../helpers/results.js';
 
 /**
  * M2 coverage: ownership-control failures from the owned spawn path (group
- * close verification / cgroup cleanup) must surface as `error.kind ===
+ * close verification / ownership cleanup) must surface as `error.kind ===
  * 'ownership'`, NOT 'spawn', so structuredMessage() renders the operator
  * recovery procedure instead of "CLI missing from PATH". Genuine spawn failures
  * (ENOENT) stay 'spawn'.
@@ -85,7 +85,7 @@ describe('spawnAgentProcess — ownership failure classification', () => {
       signal: null,
       durationMs: 1,
       spawnErrorMessage: 'ENOENT',
-      ownershipFailure: { message: 'Ownership verification failed: cgroup unreadable' }
+      ownershipFailure: { message: 'Ownership verification failed: process group unreadable' }
     });
     const result = await spawnAgentProcess(
       'agy',
@@ -194,13 +194,13 @@ describe('spawnAgentProcess / spawnOpencode — owned bootstrap `ready` barrier 
 
   it('spawnOpencode surfaces a `ready` rejection as an ownership failure', async () => {
     const runtime: SpawnRuntime = {
-      spawn: () => ({ result: Promise.resolve(okRaw()), ready: Promise.reject(new Error('wrapper exited before ACK')) })
+      spawn: () => ({ result: Promise.resolve(okRaw()), ready: Promise.reject(new Error('bootstrap exited before ACK')) })
     };
     const res = await spawnOpencode(
       { prompt: '', model: 'm', cwd: '/tmp', skillId: 'plan-audit', version: 1, spawnRuntime: runtime },
       []
     );
     expect(res.error?.kind).toBe('ownership');
-    expect(res.error?.message).toContain('wrapper exited before ACK');
+    expect(res.error?.message).toContain('bootstrap exited before ACK');
   });
 });

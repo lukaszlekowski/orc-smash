@@ -28,6 +28,8 @@ orc smash --project <path> \        # run-wide runner override, non-interactive
   --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
 orc smash --project <path> --audit-continuity # run in audit continuity mode (plan/review loops)
 orc status --project <path>         # read-only: detect where we are, render the status panel
+orc ownership status --project <path> # read-only diagnostics for retained owned-run state
+orc ownership release --project <path> --yes # explicit, no-signal recovery release
 ```
 
 ### Execution Modes
@@ -70,6 +72,16 @@ Current development is steering the harness toward a cleaner runtime architectur
   is the only provider with a verified completion signal (`stopReason`). `codex` and `claude`
   still rely on exit code + structured error handling until equivalent support is explicitly
   proven and implemented. A clean OpenCode exit without a recognized terminal stream event is a distinct missing-completion failure, not an inferred interruption.
+- **App-owned run supervision:** out-of-band `ORC_RUN_ID` + `ORC_RUN_TOKEN` enables a lease-backed
+  run. Providers execute beneath the source-shipped detached
+  `src/adapters/process-group-bootstrap.mjs`; the CLI registers a fresh runtime capability
+  before provider spawn. Lease loss uses the same authorized `src/kill-gate.ts` boundary for
+  fresh capabilities, while stale macOS records never authorize unattended signalling.
+  Ambiguous cleanup retains admission for `orc ownership status` and the explicit,
+  no-signal `orc ownership release` workflow. A deliberately detached descendant remains
+  outside the portable process-group guarantee. See
+  [docs/architecture/overview.md](./docs/architecture/overview.md#app-owned-run-supervision-portable-pgid-termination)
+  and [docs/dev/plan.md](./docs/dev/plan.md).
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and

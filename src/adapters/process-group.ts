@@ -1,19 +1,37 @@
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import type { RawProcessResult } from './utils.js';
 import type { SpawnRequest } from './types.js';
-import { getProcessStartTime, registerGroup, confirmGroupClosed } from '../run-ownership.js';
+import { registerGroup, confirmGroupClosed } from '../run-ownership.js';
+import {
+  resolveProcessIdentity,
+  resolveExecutablePath,
+  START_TOLERANCE_MS,
+  type VerifiedIdentity
+} from '../process-identity.js';
+import {
+  killProcessGroupGated,
+  resolveForbiddenPgids,
+  type KillGateResult,
+  type KillTarget
+} from '../kill-gate.js';
+import {
+  registerOwnedRuntime,
+  unregisterOwnedRuntime,
+  type OwnedRuntimeCapability
+} from '../owned-runtime-registry.js';
 
 export interface ProcessGroupHandle {
-  cgroupPath: string;
   pgid: number;
   leaderPid: number;
+  sessionId: number;
   leaderStartMs: number;
-  command: string;
-  cgroupIno?: number;
-  cgroupDev?: number;
+  /** The bootstrap leader's executable, used by the kill gate. */
+  bootstrapExecutablePath: string;
+  /** The requested provider executable, retained for diagnostics/start checks. */
+  executablePath: string;
+  argvFingerprint?: string;
 }
 
 export interface SpawnRuntime {
@@ -24,212 +42,147 @@ export interface SpawnRuntime {
   };
 }
 
-export interface CgroupV2Capability {
-  supported: boolean;
-  reason?: string;
-  delegatedRoot?: string;
+export function resolveBootstrapPath(): string {
+  return fileURLToPath(new URL('./process-group-bootstrap.mjs', import.meta.url));
 }
 
-export function checkCgroupV2Capability(): CgroupV2Capability {
-  if (process.platform !== 'linux') {
-    return { supported: false, reason: 'cgroup-v2 is only supported on Linux' };
-  }
-  try {
-    if (!fs.existsSync('/proc/self/cgroup')) {
-      return { supported: false, reason: '/proc/self/cgroup does not exist' };
-    }
-    const cgroupContent = fs.readFileSync('/proc/self/cgroup', 'utf-8');
-    const v2Line = cgroupContent.split('\n').find(line => line.startsWith('0::'));
-    if (!v2Line) {
-      return { supported: false, reason: 'cgroup v2 (0::) line not found in /proc/self/cgroup' };
-    }
-    const relativePath = v2Line.substring(3).trim();
-    const delegatedRoot = path.join('/sys/fs/cgroup', relativePath);
-    
-    // Test creating a sub-cgroup
-    const testCgroup = path.join(delegatedRoot, 'orc-smash-test-cap');
-    fs.mkdirSync(testCgroup, { recursive: true });
-    
-    let helperProcess: ChildProcess | null = null;
-    try {
-      helperProcess = spawn('sleep', ['10'], { stdio: 'ignore' });
-      const helperPid = helperProcess.pid;
-      if (!helperPid) throw new Error('Failed to get PID of helper process');
-      
-      // Write PID to cgroup.procs
-      fs.writeFileSync(path.join(testCgroup, 'cgroup.procs'), String(helperPid));
-      
-      // Verify membership
-      const procs = fs.readFileSync(path.join(testCgroup, 'cgroup.procs'), 'utf-8')
-        .split('\n')
-        .map(l => l.trim())
-        .filter(Boolean);
-      if (!procs.includes(String(helperPid))) {
-        throw new Error('Helper process not found in cgroup.procs after move-in');
-      }
-      
-      const killFile = path.join(testCgroup, 'cgroup.kill');
-      if (!fs.existsSync(killFile)) {
-        throw new Error('cgroup.kill file is missing');
-      }
-      
-      // Write 1 to cgroup.kill
-      fs.writeFileSync(killFile, '1');
-      
-      // Wait for helper process to die
-      let isDead = false;
-      const start = Date.now();
-      while (Date.now() - start < 1000) {
-        try {
-          process.kill(helperPid, 0);
-          // Block/Wait 10ms
-          const loopStart = Date.now();
-          while (Date.now() - loopStart < 10) {}
-        } catch {
-          isDead = true;
-          break;
-        }
-      }
-      if (!isDead) {
-        throw new Error('Helper process did not die after cgroup.kill');
-      }
-      
-      try {
-        helperProcess.kill('SIGKILL');
-      } catch {}
-    } finally {
-      if (helperProcess) {
-        try { helperProcess.unref(); } catch {}
-      }
-      fs.rmdirSync(testCgroup);
-    }
-    
-    return { supported: true, delegatedRoot };
-  } catch (err: any) {
-    return { supported: false, reason: `Cgroup capability check failed: ${err.message}` };
-  }
-}
-
-export function validateRunCgroupPath(cgroupPath: string): string {
-  const cap = checkCgroupV2Capability();
-  if (!cap.supported || !cap.delegatedRoot) {
-    throw new Error('cgroup-v2 is not supported or delegated root is not resolved');
-  }
-  const resolvedPath = path.resolve(cgroupPath);
-  const canonicalDelegatedRoot = path.resolve(cap.delegatedRoot);
-  
-  if (!resolvedPath.startsWith(canonicalDelegatedRoot)) {
-    throw new Error(`Cgroup path traversal violation: ${cgroupPath} is outside delegated root ${canonicalDelegatedRoot}`);
-  }
-  
-  // Deterministic check: must be <delegatedRoot>/orc-smash/<runId>
-  const relative = path.relative(canonicalDelegatedRoot, resolvedPath);
-  const parts = relative.split(path.sep);
-  if (parts.length !== 2 || parts[0] !== 'orc-smash') {
-    throw new Error(`Cgroup path structure violation: expected <delegatedRoot>/orc-smash/<runId>, got ${cgroupPath}`);
-  }
-  
-  return resolvedPath;
-}
-
-export function validateRunCgroup(
-  cgroupPath: string,
-  expectedIno?: number,
-  expectedDev?: number
-): string {
-  const validated = validateRunCgroupPath(cgroupPath);
-  if (!fs.existsSync(validated)) {
-    throw new Error(`Cgroup directory does not exist: ${validated}`);
-  }
-  const stat = fs.statSync(validated);
-  if (expectedIno !== undefined && stat.ino !== expectedIno) {
-    throw new Error(`Cgroup directory inode mismatch: expected ${expectedIno}, got ${stat.ino}`);
-  }
-  if (expectedDev !== undefined && stat.dev !== expectedDev) {
-    throw new Error(`Cgroup directory device mismatch: expected ${expectedDev}, got ${stat.dev}`);
-  }
-  return validated;
-}
-
+/** Compatibility export for older callers; it now resolves the Node bootstrap. */
 export function resolveWrapperPath(): string {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(currentDir, 'process-group-wrapper.sh');
+  return resolveBootstrapPath();
 }
 
-export function createCgroup(runId: string): string {
-  const cap = checkCgroupV2Capability();
-  if (!cap.supported || !cap.delegatedRoot) {
-    throw new Error('cgroup-v2 capability check failed before creating cgroup');
+export type TerminationResult =
+  | Extract<KillGateResult, { outcome: 'sent' }>
+  | Extract<KillGateResult, { outcome: 'already-gone' }>
+  | Extract<KillGateResult, { outcome: 'rejected' }>;
+
+function handleToTarget(handle: ProcessGroupHandle, source: 'durable' | 'fresh'): KillTarget {
+  return {
+    pgid: handle.pgid,
+    leaderPid: handle.leaderPid,
+    leaderStartMs: handle.leaderStartMs,
+    sessionId: handle.sessionId,
+    executablePath: handle.bootstrapExecutablePath,
+    argvFingerprint: handle.argvFingerprint,
+    source
+  };
+}
+
+function sameExecutable(expected: string, observed: string): boolean {
+  return expected === observed || path.basename(expected) === path.basename(observed);
+}
+
+function isFreshHandleIdentity(handle: ProcessGroupHandle, identity: VerifiedIdentity): boolean {
+  const forbidden = resolveForbiddenPgids();
+  if (!forbidden) return false;
+  return (
+    identity.pid === handle.leaderPid &&
+    identity.pgid === handle.pgid &&
+    identity.sessionId === handle.sessionId &&
+    !forbidden.has(identity.pgid) &&
+    Math.abs(identity.startEvidence.value - handle.leaderStartMs) <= START_TOLERANCE_MS &&
+    sameExecutable(handle.bootstrapExecutablePath, identity.executablePath)
+  );
+}
+
+/** Signal 0 remains inside the kill gate and is only used to prove absence. */
+export async function isProcessGroupAbsent(
+  handle: ProcessGroupHandle,
+  source: 'durable' | 'fresh' = 'fresh'
+): Promise<boolean> {
+  const result = killProcessGroupGated(handleToTarget(handle, source), 0);
+  return result.outcome === 'already-gone';
+}
+
+async function waitForGroupAbsent(handle: ProcessGroupHandle, timeoutMs: number, source: 'durable' | 'fresh'): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isProcessGroupAbsent(handle, source)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  const cgroupPath = path.join(cap.delegatedRoot, 'orc-smash', runId);
-  fs.mkdirSync(cgroupPath, { recursive: true });
-  return cgroupPath;
+  return isProcessGroupAbsent(handle, source);
 }
 
-export function readCgroupProcs(
-  cgroupPath: string,
-  expectedIno?: number,
-  expectedDev?: number
-): string[] {
-  const validated = validateRunCgroup(cgroupPath, expectedIno, expectedDev);
-  const procsFile = path.join(validated, 'cgroup.procs');
-  if (!fs.existsSync(procsFile)) return [];
-  const content = fs.readFileSync(procsFile, 'utf-8');
-  return content.split('\n').map(l => l.trim()).filter(Boolean);
+/**
+ * Fresh/durable group termination. A record is retired only after this caller
+ * separately verifies group absence; a merely attempted signal is not success.
+ */
+export async function terminateProcessGroup(
+  handle: ProcessGroupHandle,
+  graceMs = 2000,
+  source: 'durable' | 'fresh' = 'fresh'
+): Promise<TerminationResult> {
+  // Durable macOS cleanup must not even perform a negative-PID existence probe;
+  // the durable authority decision is made before any group signal.
+  if (source === 'fresh' && await isProcessGroupAbsent(handle, source)) {
+    return {
+      outcome: 'already-gone',
+      sent: false,
+      signal: 'SIGTERM',
+      target: { pgid: handle.pgid, leaderPid: handle.leaderPid, source },
+      reason: 'process group is already absent'
+    };
+  }
+
+  // On Linux, signal 0 can prove that a durable group is already absent even
+  // when its leader has gone. macOS deliberately skips this observation: no
+  // unattended durable group probe is allowed there.
+  if (source === 'durable' && process.platform === 'linux' && await isProcessGroupAbsent(handle, source)) {
+    return {
+      outcome: 'already-gone',
+      sent: false,
+      signal: 'SIGTERM',
+      target: { pgid: handle.pgid, leaderPid: handle.leaderPid, source },
+      reason: 'process group is already absent'
+    };
+  }
+
+  const term = killProcessGroupGated(handleToTarget(handle, source), 'SIGTERM');
+  if (term.outcome !== 'sent') return term;
+  if (await waitForGroupAbsent(handle, graceMs, source)) return term;
+
+  const kill = killProcessGroupGated(handleToTarget(handle, source), 'SIGKILL');
+  if (kill.outcome === 'rejected' && await isProcessGroupAbsent(handle, source)) {
+    return {
+      outcome: 'already-gone',
+      sent: false,
+      signal: 'SIGKILL',
+      target: { pgid: handle.pgid, leaderPid: handle.leaderPid, source },
+      reason: 'process group disappeared during termination'
+    };
+  }
+  return kill;
 }
 
-export function killCgroup(
-  cgroupPath: string,
-  expectedIno?: number,
-  expectedDev?: number
-): { survivors: string[]; unverifiable: boolean } {
-  try {
-    const validated = validateRunCgroup(cgroupPath, expectedIno, expectedDev);
-    const killFile = path.join(validated, 'cgroup.kill');
-    if (fs.existsSync(killFile)) {
-      fs.writeFileSync(killFile, '1');
+function expectedArgvFingerprint(command: string, args: string[]): string | undefined {
+  return process.platform === 'darwin' ? undefined : [command, ...args].join('\0');
+}
+
+async function pollIdentity(
+  pid: number,
+  predicate: (identity: VerifiedIdentity) => boolean,
+  timeoutMs: number,
+  label: string
+): Promise<VerifiedIdentity> {
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = 'identity not yet available';
+  while (Date.now() < deadline) {
+    const identity = resolveProcessIdentity(pid);
+    if (identity.status === 'verified') {
+      if (predicate(identity)) return identity;
+      lastReason = 'identity fields did not match the expected process group';
+    } else if (identity.status === 'gone') {
+      throw new Error(`OWNERSHIP_SPAWN_IDENTITY: ${label} exited during identity transition`);
     } else {
-      throw new Error('cgroup.kill file is missing, cannot kill cgroup');
+      lastReason = identity.reason;
     }
-    const survivors = readCgroupProcs(validated, expectedIno, expectedDev);
-    return { survivors, unverifiable: false };
-  } catch {
-    return { survivors: [], unverifiable: true };
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  throw new Error(`OWNERSHIP_SPAWN_IDENTITY: ${label} identity timeout: ${lastReason}`);
 }
 
-export async function terminateProcessGroup(handle: ProcessGroupHandle, graceMs = 2000): Promise<void> {
-  let leaderAlive = false;
-  try {
-    process.kill(handle.leaderPid, 0);
-    leaderAlive = true;
-  } catch {}
-
-  if (leaderAlive) {
-    try {
-      process.kill(-handle.pgid, 'SIGTERM');
-    } catch {}
-  }
-
-  const start = Date.now();
-  let empty = false;
-  while (Date.now() - start < graceMs) {
-    try {
-      const procs = readCgroupProcs(handle.cgroupPath, handle.cgroupIno, handle.cgroupDev);
-      if (procs.length === 0) {
-        empty = true;
-        break;
-      }
-    } catch {
-      break;
-    }
-    const loopStart = Date.now();
-    while (Date.now() - loopStart < 50) {}
-  }
-
-  if (!empty) {
-    killCgroup(handle.cgroupPath, handle.cgroupIno, handle.cgroupDev);
-  }
+interface InternalGroup extends ReturnType<typeof ProcessGroupRuntime.createGroup> {
+  cleanup: Promise<void>;
 }
 
 export class ProcessGroupRuntime {
@@ -239,110 +192,284 @@ export class ProcessGroupRuntime {
     command: string,
     providerArgs: string[],
     ownedEnv: Record<string, string>,
-    cwd?: string
+    cwd = process.cwd()
   ): {
     child: ChildProcess;
     handle: ProcessGroupHandle;
     ready: Promise<void>;
+    cleanup: Promise<void>;
   } {
-    const cgroupPath = createCgroup(runId);
-    
-    const cgroupStat = fs.statSync(cgroupPath);
-    const cgroupIno = cgroupStat.ino;
-    const cgroupDev = cgroupStat.dev;
-    
-    const wrapperPath = resolveWrapperPath();
-    
-    const child = spawn(
-      'sh',
-      [wrapperPath, cgroupPath, command, ...providerArgs],
-      {
-        detached: true,
-        env: ownedEnv,
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe']
-      }
-    );
-    
-    const handle: ProcessGroupHandle = {
-      cgroupPath,
-      pgid: child.pid!,
-      leaderPid: child.pid!,
-      leaderStartMs: 0,
+    const bootstrapPath = resolveBootstrapPath();
+    const providerPath = resolveExecutablePath(command, ownedEnv, cwd);
+    const providerArgv = expectedArgvFingerprint(command, providerArgs);
+    const spec = {
       command,
-      cgroupIno,
-      cgroupDev
+      args: providerArgs,
+      cwd,
+      env: ownedEnv,
+      expectedProviderExecutablePath: providerPath,
+      expectedProviderArgvFingerprint: providerArgv
     };
 
-    const ready = new Promise<void>((resolveReady, rejectReady) => {
-      const stream = child.stdio[3] as any;
-      if (!stream) {
-        rejectReady(new Error('Child stdio[3] is not set up'));
-        return;
+    const child = fork(bootstrapPath, [JSON.stringify(spec)], {
+      execPath: process.execPath,
+      execArgv: [],
+      detached: true,
+      cwd,
+      env: ownedEnv,
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc']
+    });
+
+    const handle: ProcessGroupHandle = {
+      pgid: child.pid ?? -1,
+      leaderPid: child.pid ?? -1,
+      sessionId: child.pid ?? -1,
+      leaderStartMs: 0,
+      bootstrapExecutablePath: process.execPath,
+      executablePath: providerPath,
+      argvFingerprint: undefined
+    };
+
+    let capability: OwnedRuntimeCapability | null = null;
+    let cleanupStarted = false;
+    let cleanupResolve!: () => void;
+    let cleanupReject!: (error: unknown) => void;
+    const cleanup = new Promise<void>((resolve, reject) => {
+      cleanupResolve = resolve;
+      cleanupReject = reject;
+    });
+
+    // Registry-driven ownership loss and the bootstrap close event can reach
+    // cleanup concurrently. Keep both operations idempotent on the one fresh
+    // capability so teardown never re-resolves a disappearing zombie as a new
+    // identity and never races two active-record retirements.
+    let terminationPromise: Promise<TerminationResult> | null = null;
+    const terminateFresh = (graceMs: number): Promise<TerminationResult> => {
+      if (!terminationPromise) {
+        terminationPromise = terminateProcessGroup(handle, graceMs, 'fresh');
       }
-      let data = '';
-      const onData = (chunk: Buffer) => {
-        data += chunk.toString();
-        if (data.includes('\n')) {
-          stream.off('data', onData);
-          const line = data.split('\n')[0]!.trim();
+      return terminationPromise;
+    };
+
+    let retirementPromise: Promise<boolean> | null = null;
+    const retireIfClosed = (): Promise<boolean> => {
+      if (!retirementPromise) {
+        retirementPromise = (async () => {
+          // SIGKILL is asynchronous and the bootstrap may remain a zombie
+          // until the parent observes its close event. Allow that bounded
+          // transition to settle before treating a fresh capability as
+          // unretirable.
+          if (!(await waitForGroupAbsent(handle, 1000, 'fresh'))) return false;
           try {
-            const parts = line.split('\t');
-            if (parts[0] !== 'READY' || parts.length < 5) {
-              throw new Error(`Malformed readiness record: ${line}`);
+            await confirmGroupClosed(runDir, {
+              pgid: handle.pgid,
+              leaderPid: handle.leaderPid,
+              sessionId: handle.sessionId,
+              leaderStartMs: handle.leaderStartMs,
+              command,
+              bootstrapExecutablePath: handle.bootstrapExecutablePath,
+              executablePath: handle.executablePath,
+              argvFingerprint: handle.argvFingerprint
+            });
+          } catch (error) {
+            return false;
+          }
+          return true;
+        })();
+      }
+      return retirementPromise;
+    };
+
+    const cleanupGroup = async () => {
+      if (cleanupStarted) return cleanup;
+      cleanupStarted = true;
+      try {
+        if (capability) {
+          const termination = await capability.terminate(2000);
+          if (termination.outcome === 'rejected') throw new Error(termination.reason);
+          const retired = await capability.retireIfClosed();
+          if (!retired) throw new Error(`ownership-failure: group ${handle.pgid} did not retire after provider exit`);
+          unregisterOwnedRuntime(capability);
+        }
+        try {
+          if (child.connected) child.send({ protocolVersion: 1, type: 'retire' });
+        } catch { /* group is already closed */ }
+        cleanupResolve();
+      } catch (error) {
+        cleanupReject(error);
+      }
+      return cleanup;
+    };
+
+    let readySettled = false;
+    let providerStarted = false;
+    let readyResolve!: () => void;
+    let readyReject!: (error: unknown) => void;
+    const ready = new Promise<void>((resolve, reject) => {
+      readyResolve = resolve;
+      readyReject = reject;
+    });
+    const readyTimeout = setTimeout(() => {
+      if (!readySettled) failReady(new Error('OWNERSHIP_SPAWN_IDENTITY: bootstrap protocol timeout'));
+    }, 7000);
+    readyTimeout.unref();
+
+    const failReady = (error: Error) => {
+      if (readySettled) return;
+      readySettled = true;
+      clearTimeout(readyTimeout);
+      readyReject(error);
+      void (async () => {
+        try {
+          if (capability) {
+            const termination = await capability.terminate(500);
+            if (termination.outcome !== 'rejected' && await capability.retireIfClosed()) {
+              unregisterOwnedRuntime(capability);
             }
-            const reportedPid = parseInt(parts[1]!, 10);
-            const reportedPgid = parseInt(parts[2]!, 10);
-            const reportedSid = parseInt(parts[3]!, 10);
-            const reportedCgroup = parts[4]!;
-            
-            if (reportedPid !== child.pid || reportedPgid !== child.pid || reportedSid !== child.pid) {
-              throw new Error(`Identity mismatch in readiness record: child.pid ${child.pid}, reported ${reportedPid}/${reportedPgid}/${reportedSid}`);
+          }
+          else if (child.pid) {
+            try {
+              // Before ACK the bootstrap has not spawned a provider. Closing
+              // IPC is the bounded, no-provider cleanup path; it also prevents
+              // a malformed/mismatched readiness frame from leaving a waiter.
+              if (child.connected) child.disconnect();
+            } catch { /* child may already be exiting */ }
+            const identity = resolveProcessIdentity(child.pid);
+            if (identity.status === 'verified') {
+              handle.pgid = identity.pgid;
+              handle.sessionId = identity.sessionId;
+              handle.leaderStartMs = identity.startEvidence.value;
+              await terminateProcessGroup(handle, 500, 'fresh');
             }
-            if (reportedCgroup !== cgroupPath) {
-              throw new Error(`Cgroup path mismatch: expected ${cgroupPath}, got ${reportedCgroup}`);
-            }
-            
-            // Verify membership
-            const procs = readCgroupProcs(cgroupPath, cgroupIno, cgroupDev);
-            if (!procs.includes(String(child.pid))) {
-              throw new Error(`Child pid ${child.pid} is not a member of cgroup ${cgroupPath}`);
-            }
-            
-            handle.leaderStartMs = getProcessStartTime(child.pid!);
-            registerGroup(runDir, handle);
-            
-            // Write ACK
-            const ackStream = child.stdio[4] as any;
-            ackStream.write('ACK\n');
-            resolveReady();
-          } catch (err: any) {
-            killCgroup(cgroupPath, cgroupIno, cgroupDev);
-            rejectReady(err);
+          }
+        } catch { /* ready failure is the primary error */ }
+        finally {
+          if (!cleanupStarted) {
+            cleanupStarted = true;
+            cleanupReject(error);
           }
         }
-      };
-      stream.on('data', onData);
-      
-      child.on('error', (err) => {
-        killCgroup(cgroupPath, cgroupIno, cgroupDev);
-        rejectReady(err);
-      });
-      child.on('exit', (code, signal) => {
-        killCgroup(cgroupPath, cgroupIno, cgroupDev);
-        rejectReady(new Error(`Child exited early before registration with code ${code}, signal ${signal}`));
-      });
+      })();
+    };
+
+    const onMessage = (frame: any) => {
+      if (!frame || frame.protocolVersion !== 1 || typeof frame.type !== 'string') {
+        failReady(new Error('Malformed bootstrap control frame'));
+        return;
+      }
+      if (frame.type === 'failure') {
+        failReady(new Error(`${frame.stage ?? 'bootstrap'}: ${frame.message ?? 'unknown bootstrap failure'}`));
+        return;
+      }
+      if (frame.type === 'ready') {
+        try {
+          if (
+            frame.bootstrapPid !== child.pid ||
+            frame.pgid !== child.pid ||
+            frame.sessionId !== child.pid ||
+            typeof frame.leaderStartEvidence?.value !== 'number' ||
+            frame.expectedProviderExecutablePath !== providerPath
+          ) {
+            throw new Error(
+              `OWNERSHIP_SPAWN_IDENTITY: readiness identity mismatch ` +
+              `(expected pid=${child.pid}, provider=${providerPath}; ` +
+              `received pid=${frame.bootstrapPid}, pgid=${frame.pgid}, session=${frame.sessionId}, ` +
+              `provider=${frame.expectedProviderExecutablePath})`
+            );
+          }
+          handle.pgid = frame.pgid;
+          handle.sessionId = frame.sessionId;
+          handle.leaderStartMs = frame.leaderStartEvidence.value;
+          const bootstrapIdentityPromise = pollIdentity(
+            child.pid!,
+            (identity) => isFreshHandleIdentity(handle, identity),
+            5000,
+            'bootstrap'
+          );
+          void bootstrapIdentityPromise.then((identity) => {
+            handle.argvFingerprint = identity.argvFingerprint;
+            registerGroup(runDir, {
+              pgid: handle.pgid,
+              leaderPid: handle.leaderPid,
+              sessionId: handle.sessionId,
+              leaderStartMs: handle.leaderStartMs,
+              command,
+              bootstrapExecutablePath: handle.bootstrapExecutablePath,
+              executablePath: handle.executablePath,
+              argvFingerprint: handle.argvFingerprint
+            });
+            capability = {
+              epoch: Symbol(`owned-runtime:${runId}:${handle.pgid}`),
+              runId,
+              runDir,
+              bootstrap: child,
+              handle,
+              terminate: terminateFresh,
+              retireIfClosed
+            };
+            registerOwnedRuntime(capability);
+            child.send({ protocolVersion: 1, type: 'ack' }, (error) => {
+              if (error) failReady(new Error(`bootstrap ACK failed: ${error.message}`));
+            });
+          }).catch((error) => failReady(error instanceof Error ? error : new Error(String(error))));
+        } catch (error) {
+          failReady(error instanceof Error ? error : new Error(String(error)));
+        }
+        return;
+      }
+      if (frame.type === 'provider-started') {
+        if (!capability) {
+          failReady(new Error('OWNERSHIP_SPAWN_IDENTITY: provider started before capability registration'));
+          return;
+        }
+        const providerPid = frame.providerPid;
+        if (!Number.isInteger(providerPid) || providerPid <= 0) {
+          failReady(new Error('Malformed provider-started frame'));
+          return;
+        }
+        void pollIdentity(
+          providerPid,
+          (identity) =>
+            identity.pgid === handle.pgid &&
+            identity.sessionId === handle.sessionId &&
+            sameExecutable(handle.executablePath, identity.executablePath) &&
+            (providerArgv === undefined || identity.argvFingerprint === providerArgv),
+          5000,
+          'provider'
+        ).then(() => {
+          providerStarted = true;
+          if (!readySettled) {
+            readySettled = true;
+            clearTimeout(readyTimeout);
+            readyResolve();
+          }
+        }).catch((error) => failReady(error instanceof Error ? error : new Error(String(error))));
+        return;
+      }
+      if (frame.type === 'provider-exited') {
+        void cleanupGroup();
+      }
+    };
+
+    child.on('message', onMessage);
+    child.on('error', (error) => failReady(error));
+    child.on('close', (code, signal) => {
+      if (!readySettled && !providerStarted) {
+        failReady(new Error(`bootstrap exited before readiness/provider start (code ${code}, signal ${signal})`));
+      }
+      if (!cleanupStarted && providerStarted) void cleanupGroup();
+      if (!cleanupStarted && !providerStarted) {
+        cleanupStarted = true;
+        cleanupResolve();
+      }
     });
-    
-    return { child, handle, ready };
+
+    return { child, handle, ready, cleanup };
   }
 }
 
 export class OwnedSpawnRuntime implements SpawnRuntime {
-  constructor(
-    private runId: string,
-    private runDir: string
-  ) {}
+  constructor(private readonly runId: string, private readonly runDir: string) {}
 
   spawn(req: SpawnRequest): {
     result: Promise<RawProcessResult>;
@@ -350,104 +477,83 @@ export class OwnedSpawnRuntime implements SpawnRuntime {
     ready?: Promise<void>;
   } {
     const startedAt = Date.now();
-    let resolveResult: (res: RawProcessResult) => void;
-    const resultPromise = new Promise<RawProcessResult>((resolve) => {
-      resolveResult = resolve;
-    });
-
-    const { child, handle, ready } = ProcessGroupRuntime.createGroup(
+    let resolveResult!: (result: RawProcessResult) => void;
+    const result = new Promise<RawProcessResult>((resolve) => { resolveResult = resolve; });
+    const group = ProcessGroupRuntime.createGroup(
       this.runId,
       this.runDir,
       req.command,
-      req.args || [],
-      req.env || {},
-      req.cwd
-    );
-
-    // Register active child for cleanup
-    const registerPromise = (async () => {
-      const { registerActiveChild } = await import('./utils.js');
-      registerActiveChild(child, handle);
-    })();
-
+      req.args ?? [],
+      req.env ?? {},
+      req.cwd ?? process.cwd()
+    ) as InternalGroup;
     let stdout = '';
     let stderr = '';
-
-    child.stdout?.on('data', (data) => {
+    let settled = false;
+    let providerExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    group.child.stdout?.on('data', (data: Buffer) => {
       const chunk = data.toString();
       stdout += chunk;
       req.onStdoutChunk?.(chunk);
     });
-    child.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', async (code, signal) => {
-      await registerPromise;
-      const durationMs = Date.now() - startedAt;
-      let confirmError: Error | null = null;
+    group.child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+    const finishResult = async (code: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      let ownershipFailure: { message: string } | undefined;
       try {
-        await confirmGroupClosed(this.runDir, handle);
-      } catch (err: any) {
-        confirmError = err;
+        await group.cleanup;
+      } catch (error: any) {
+        ownershipFailure = { message: error?.message ?? String(error) };
       }
-      
-      if (confirmError) {
-        // Ownership-control failure (cgroup close verification), NOT a spawn
-        // failure: the provider actually ran. Surface it as an ownership failure
-        // so the result builders classify `error.kind === 'ownership'` and the
-        // operator gets the recovery procedure instead of "CLI missing from PATH".
-        resolveResult({
-          stdout,
-          stderr,
-          exitCode: -1,
-          timedOut: false,
-          signal,
-          durationMs,
-          ownershipFailure: { message: `Ownership verification failed: ${confirmError.message}` }
-        });
-      } else {
-        resolveResult({
-          stdout,
-          stderr,
-          exitCode: code !== null ? code : (signal ? -1 : 0),
-          timedOut: false,
-          signal,
-          durationMs
-        });
+      resolveResult({
+        stdout,
+        stderr,
+        // The parent deliberately SIGKILLs the idle bootstrap after a normal
+        // provider exit to close the owned group. Preserve the provider's
+        // protocol-reported outcome instead of exposing that control signal as
+        // the agent's result.
+        exitCode: providerExit?.code ?? code ?? (providerExit?.signal || signal ? -1 : 0),
+        timedOut: false,
+        signal: providerExit ? providerExit.signal : signal,
+        durationMs: Date.now() - startedAt,
+        ownershipFailure
+      });
+    };
+    group.child.on('message', (frame: any) => {
+      if (frame?.protocolVersion === 1 && frame.type === 'provider-exited') {
+        providerExit = {
+          code: typeof frame.code === 'number' ? frame.code : null,
+          signal: frame.signal ?? null
+        };
       }
     });
-
-    child.on('error', async (err) => {
-      await registerPromise;
-      const durationMs = Date.now() - startedAt;
-      let confirmError: Error | null = null;
-      try {
-        await confirmGroupClosed(this.runDir, handle);
-      } catch (e: any) {
-        confirmError = e;
-      }
+    let closeSeen = false;
+    group.child.on('exit', (code, signal) => {
+      // In restricted sandboxes `close` can be delayed when an inherited
+      // stdio stream remains open. Give close the normal path, but settle an
+      // early-exit result if it never arrives.
+      setTimeout(() => {
+        if (!closeSeen) void finishResult(code, signal);
+      }, 100).unref();
+    });
+    group.child.on('close', (code, signal) => {
+      closeSeen = true;
+      void finishResult(code, signal);
+    });
+    group.child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
       resolveResult({
         stdout,
         stderr,
         exitCode: -1,
         timedOut: false,
         signal: null,
-        durationMs,
-        // If ownership verification also failed, that ownership-control failure
-        // is the actionable signal — classify as ownership, not spawn. Otherwise
-        // this is a genuine spawn failure (e.g. ENOENT).
-        ownershipFailure: confirmError
-          ? { message: `spawn error: ${err.message}. Ownership verification also failed: ${confirmError.message}` }
-          : undefined,
-        spawnErrorMessage: confirmError ? undefined : err.message
+        durationMs: Date.now() - startedAt,
+        spawnErrorMessage: error.message
       });
     });
-
-    return {
-      result: resultPromise,
-      handle,
-      ready
-    };
+    return { result, handle: group.handle, ready: group.ready };
   }
 }

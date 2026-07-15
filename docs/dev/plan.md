@@ -1,6 +1,6 @@
 ---
-status: ready-for-audit
-confidence: 0.98
+status: in-progress
+confidence: 0.88
 owners: harness-runtime
 platform: macos-primary
 ---
@@ -459,6 +459,72 @@ fail-closed rules. Provider adapters remain black boxes behind the common
   CLI behavior.
 - Independent host/CLI crash supervision; that belongs to the separate
   supervisor project.
+
+## Implementation phase checklist
+
+- [x] Approved plan audit v2 is present and governs this implementation.
+- [x] Portable ownership records, bootstrap runtime, kill gate, lease clock,
+  fresh-capability registry, stale reconciliation, and recovery commands are
+  implemented and covered by deterministic tests.
+- [x] README, AGENTS.md, and the architecture overview describe the same
+  fresh-versus-durable authority boundary and detached-descendant limitation.
+- [ ] Implementation review is approved; the latest review
+  (`docs/dev/review-v4-claude.md`) is rejected and its repair is recorded below.
+- [x] The v2/v3/v4 safety and watcher-driven lease-loss findings have been
+  repaired; supervisor integration has not started.
+
+## Change Log
+
+### v1 — implementation pass — 2026-07-14
+
+- Replaced the superseded wrapper path with a source-shipped Node
+  process-group bootstrap and one authorized negative-signal gate.
+- Added schema-versioned ownership records, monotonic lease transitions,
+  fresh runtime capabilities, fail-closed stale reconciliation, and explicit
+  `orc ownership status|release` recovery commands.
+- Added deterministic bootstrap, runtime, lease, kill-gate, ownership-loss,
+  recovery, and boundary-scan verification. Review remains the next gate.
+
+### v2 — implementation review — 2026-07-14
+
+- `docs/dev/review-v2-claude.md` rejected the implementation at confidence 0.88
+  because the real-process lease-loss workflow was not proven and the live-signal
+  test weakened the self/ancestor-group safety boundary.
+- The plan remains open until the constrained review follow-up is re-reviewed.
+
+### v3 — review follow-up implementation — 2026-07-14
+
+- Moved real negative-signal delivery into a detached helper with production
+  forbidden-group resolution, independent bootstrap identity verification, and
+  a one-PGID sender allowlist plus positive-PID failure cleanup.
+- Added the real long-lived provider/cooperative-child lease-loss integration
+  test, serialized fresh-capability termination/retirement, and macOS `ps`
+  session-evidence handling for detached groups.
+- Fixed the review's minor terminology, label, and syntax findings. The plan
+  remains `in-progress` pending the next `40-simple-review` run.
+
+### v4 — review follow-up implementation — 2026-07-14
+
+- Replaced unverified positive-PID failure cleanup and repeated `afterEach`
+  signals with incarnation snapshots and immediate PID/PGID/session/start/
+  executable/argv revalidation; fixtures now self-expire and helper cleanup
+  prefers the fresh runtime registry.
+- Started the integration fixture with a future-valid lease and routed
+  production `watchLease()` expiry to `handleOwnershipLoss()` while the real
+  provider and cooperative child remained alive.
+- The plan remains `in-progress` pending the next `40-simple-review` run.
+
+### v5 — review follow-up implementation — 2026-07-14
+
+- Installed a reject-all signal sender before watcher activation, armed only
+  the independently verified fixture PGID, and advanced the lease through a
+  sequential future-valid revision so expiry remains watcher-driven.
+- Removed parent-side positive-PID descendant cleanup; timeout recovery now
+  uses only the direct helper `ChildProcess`, while the live helper uses fresh
+  runtime authority and bounded fixture watchdogs.
+- Added non-signalling expiry-before-allowlist and parent-cleanup boundary
+  tests. The plan remains `in-progress` pending the next `40-simple-review`
+  run.
 
 ## Required order
 

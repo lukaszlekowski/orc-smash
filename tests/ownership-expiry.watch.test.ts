@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, unlinkSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { watchLease, type OwnershipContext, type ControlRecord } from '../src/run-ownership.js';
+import {
+  __resetForbiddenPgidCacheForTests,
+  __setSignalSenderForTests,
+  killProcessGroupGated
+} from '../src/kill-gate.js';
+import type { VerifiedIdentity } from '../src/process-identity.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 
 /**
@@ -25,6 +31,7 @@ describe('watchLease — in-flight lease watcher', () => {
 
   function writeControl(runDir: string, control: ControlRecord): void {
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     writeFileSync(join(runDir, 'control.json'), JSON.stringify(control), { mode: 0o600 });
   }
 
@@ -43,13 +50,14 @@ describe('watchLease — in-flight lease watcher', () => {
   }
 
   function controlRecord(leaseExpiresMs: number): ControlRecord {
+    const leaseIssuedMs = leaseExpiresMs - 60_000;
     return {
       schemaVersion: 1,
       runId: 'run-a',
       ownerTokenHash: 'hash',
       projectRoot: '/proj',
       hostInstanceId: 'host-1',
-      leaseIssuedMs: 0,
+      leaseIssuedMs,
       leaseTtlMs: 60_000,
       leaseExpiresMs,
       issuerRevision: 1
@@ -116,5 +124,64 @@ describe('watchLease — in-flight lease watcher', () => {
 
     await expect(watcher.expired).resolves.toBeUndefined();
     watcher.cancel();
+  });
+
+  it('rejects cleanup when expiry wins before the target allowlist is armed', async () => {
+    const control = controlRecord(Date.now() - 1_000);
+    writeControl(runDir, control);
+    const c = ctx({ control });
+    const target: VerifiedIdentity = {
+      status: 'verified',
+      pid: 424_242,
+      pgid: 424_242,
+      sessionId: 424_242,
+      executablePath: process.execPath,
+      startEvidence: { value: 1_000, resolution: 'tick' },
+      collisionResistant: true
+    };
+    let allowlistedPgid: number | undefined;
+    let rejectedByContainment = 0;
+    let realDeliveryCalls = 0;
+    let watcher: ReturnType<typeof watchLease> | undefined;
+
+    __setSignalSenderForTests((pid) => {
+      if (allowlistedPgid === undefined || pid !== -allowlistedPgid) {
+        rejectedByContainment++;
+        throw new Error('target allowlist is not armed');
+      }
+      realDeliveryCalls++;
+    });
+
+    try {
+      // The watcher resolves first, while the sender still rejects every
+      // target. This models the setup race without invoking real process.kill.
+      watcher = watchLease(c, { intervalMs: 10, maxReadErrors: 1 });
+      await expect(watcher.expired).resolves.toBeUndefined();
+
+      const result = killProcessGroupGated(
+        {
+          pgid: target.pgid,
+          leaderPid: target.pid,
+          sessionId: target.sessionId,
+          leaderStartMs: target.startEvidence.value,
+          executablePath: target.executablePath,
+          source: 'fresh'
+        },
+        'SIGTERM',
+        {
+          forbiddenPgids: () => new Set([0, 1]),
+          resolveIdentity: () => target
+        }
+      );
+
+      expect(allowlistedPgid).toBeUndefined();
+      expect(result.outcome).toBe('rejected');
+      expect(rejectedByContainment).toBe(1);
+      expect(realDeliveryCalls).toBe(0);
+    } finally {
+      watcher?.cancel();
+      __setSignalSenderForTests(null);
+      __resetForbiddenPgidCacheForTests();
+    }
   });
 });

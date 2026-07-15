@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { ownershipFence, type OwnershipContext, type ControlRecord } from '../src/run-ownership.js';
 import { clearInterruptState } from '../src/interrupted-artifact.js';
@@ -39,13 +39,14 @@ describe('ownershipFence — completion-side gate', () => {
   });
 
   function controlRecord(leaseExpiresMs: number): ControlRecord {
+    const leaseIssuedMs = leaseExpiresMs - 60_000;
     return {
       schemaVersion: 1,
       runId: 'run-a',
       ownerTokenHash: 'hash',
       projectRoot: '/proj',
       hostInstanceId: 'host-1',
-      leaseIssuedMs: 0,
+      leaseIssuedMs,
       leaseTtlMs: 60_000,
       leaseExpiresMs,
       issuerRevision: 1
@@ -54,14 +55,17 @@ describe('ownershipFence — completion-side gate', () => {
 
   function writeControl(record: ControlRecord): void {
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     writeFileSync(join(runDir, 'control.json'), JSON.stringify(record), { mode: 0o600 });
   }
 
   function writeActive(groups: unknown[], state = 'running'): void {
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     writeFileSync(
       join(runDir, 'active.json'),
       JSON.stringify({
+        schemaVersion: 1,
         cliIdentity: { pid: process.pid, startMs: 0, command: 'orc' },
         groups,
         state,
@@ -94,7 +98,7 @@ describe('ownershipFence — completion-side gate', () => {
   it('fails (routes to ownership loss) when the lease expired before completion', async () => {
     const control = controlRecord(Date.now() - 1000);
     writeControl(control);
-    // handleOwnershipLoss reads active.json; empty groups → clean stop, no cgroup.
+    // handleOwnershipLoss reads active.json; empty groups → clean stop.
     writeActive([]);
 
     const passed = await ownershipFence(ctx(control), loopSpec);
