@@ -1,6 +1,6 @@
 ---
-status: blocked
-confidence: 0.97
+status: done
+confidence: 0.99
 owners: runtime-packaging
 platform: macos-primary
 ---
@@ -162,7 +162,7 @@ No ownership schema, lease, signal-gate, provider-adapter, or cgroup behavior ch
   deterministic tests.
 - [x] READMEs, architecture guidance, compatibility rules, CI, and release status are
   synchronized with the canonical runtime.
-- [ ] The exact documented install/restart command and real macOS LaunchAgent release
+- [x] The exact documented install/restart command and real macOS LaunchAgent release
   gate have been rerun after this production change.
 
 ## Change Log
@@ -199,3 +199,16 @@ No ownership schema, lease, signal-gate, provider-adapter, or cgroup behavior ch
 - Repaired cross-repository commit/pin provenance; deterministic verification remains
   complete and the exact documented install, LaunchAgent restart, and real macOS
   release gate remain pending.
+
+### v4 — verified macOS release closeout — 2026-07-18
+
+- Built both clean committed repositories, installed the stable `bin/orc.js` through
+  the strict compatibility handshake, and restarted the permanent user LaunchAgent.
+- Verified the installed service was running and its authenticated `status` command
+  responded before and after the release gate.
+- Passed all five live macOS scenarios in 171.12 seconds against supervisor commit
+  `d445d375f42d4147a5f9254508a1cc8026690fce` and orc-smash commit
+  `51f7be46e48391abd662980493b2ad500bbbe0e8`.
+- Inspected retained manifests, signal evidence, forced-cleanup timing, canary
+  survival, admission behavior, and teardown. No temporary release LaunchAgent or
+  release fixture process remained. The plan is complete.
