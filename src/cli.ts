@@ -59,6 +59,18 @@ export function buildProgram(): Command {
       process.exitCode = result.exitCode;
     });
 
+  program
+    .command('supervisor-contract')
+    .description('Report the runtime contract consumed by orc-smash-supervisor')
+    .action(() => {
+      process.stdout.write(JSON.stringify({
+        kind: 'orc-smash-supervisor-contract',
+        schemaVersion: 1,
+        ownershipSchemaVersion: 1,
+        pid: process.pid
+      }) + '\n');
+    });
+
   const ownership = program
     .command('ownership')
     .description('Inspect or explicitly release retained owned-run admission');
@@ -89,14 +101,17 @@ export function buildProgram(): Command {
   return program;
 }
 
-const program = buildProgram();
+export async function main(argv: string[] = process.argv): Promise<void> {
+  await buildProgram().parseAsync(argv);
+}
 
-const isMain = process.argv[1] && (
-  resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
-);
+const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  program.parse(process.argv);
+  main().catch((error) => {
+    process.stderr.write(`orc: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
 }
 
 // §3: delegate SIGINT/SIGTERM to the interrupt-context API. cli.ts owns no

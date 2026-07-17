@@ -130,6 +130,10 @@ itself.
   a new pinned `orc-smash` commit, cross-repository contract verification, and a rerun
   of the real macOS supervisor release gate. Durable macOS records must never gain
   unattended signal authority during such a change.
+- The stable production and supervisor entrypoint is `bin/orc.js`. Run `pnpm build`
+  before production execution; it loads `dist/src/cli.js` in the same process and
+  exposes `orc supervisor-contract` for strict cross-repository compatibility checks.
+  `dist/src/cli.js` is an internal artifact and must not replace the public install path.
 
 ## 5c. Authorized kill gate — every group signal is gated
 
