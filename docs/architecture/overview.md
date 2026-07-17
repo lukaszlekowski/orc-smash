@@ -202,6 +202,40 @@ retained run `failed: operator-released` before removing only its matching admis
 lock and project pointer. Without `--yes`, an interactive release requires an explicit
 confirmation; non-interactive release refuses to mutate state.
 
+#### Companion macOS supervisor
+
+`orc-smash-supervisor` is a separate repository and process boundary that consumes
+this owned-run contract. It is a per-user macOS LaunchAgent, not a module imported by
+`orc-smash`. At installation it pins an absolute reviewed `bin/orc.js` path. For each
+launch it creates the run ID and owner token, writes `control.json`, starts
+`node <pinned-orc> smash ...` with the ownership environment, and renews the lease
+only while its authenticated host client remains healthy.
+
+The responsibilities remain deliberately asymmetric:
+
+- The supervisor is the sole writer of `control.json` and retains only its freshly
+  captured CLI capability as macOS signal authority.
+- `orc-smash` remains the sole writer of `active.json`, project admission, interrupted
+  markers, quarantine, provenance, and loop artifacts.
+- Provider groups recorded in `active.json` are diagnostic evidence to the supervisor,
+  never macOS signal authority.
+- After supervisor restart, the lost in-memory capability is not reconstructed from
+  durable PID data; ambiguous cleanup remains `cleanup-blocked`.
+- Ordinary `orc smash` invocations do not use the supervisor. Supervision begins only
+  through the supervisor's authenticated launch protocol.
+
+The current supervisor host CLI maintains heartbeats until interrupted and therefore
+must remain running for the run lifetime. A future desktop host can implement the same
+versioned socket protocol, but the presence of the LaunchAgent alone does not attach
+supervision to unrelated processes.
+
+Compatibility is pinned and cross-repository: the supervisor records the exact
+`orc-smash` commit used by its real macOS release gate, while a contract test compares
+its signal gate with this repository's `kill-gate`. Changes to the ownership schema,
+state layout, lease semantics, launcher arguments, process identity, or kill-gate
+rules require coordinated supervisor review, a new pinned commit, and a rerun of the
+supervisor release gate.
+
 ## Key invariants
 
 - **Four real adapters; per-skill runners:** opencode, codex, claude, and agy all run for real; each

@@ -40,6 +40,44 @@ orc ownership release --project <path> --yes # explicit, no-signal recovery rele
 `orc smash` is restart-aware: it scans the target's `docs/dev/*-audit-v*-*.md` (ignoring
 `docs/dev/archived/`), detects the latest verdict, and proposes the next step.
 
+### Optional macOS supervisor
+
+The companion `orc-smash-supervisor` repository provides the supported independent
+supervision path for app-owned runs on macOS. It installs a per-user LaunchAgent,
+starts the reviewed `orc-smash` launcher through the owned-run protocol, renews its
+lease while the host client is alive, and remains available if that client dies.
+
+Installing the LaunchAgent does **not** intercept ordinary `orc smash` commands. A
+normal command remains unsupervised. From an adjacent supervisor checkout, build and
+install it by pinning this repository's launcher:
+
+```bash
+cd /Volumes/projects/orc-smash-supervisor
+pnpm install --frozen-lockfile
+pnpm build
+node bin/orc-smash-supervisor.js install /Volumes/projects/orc-smash/bin/orc.js
+node bin/orc-smash-supervisor.js status
+```
+
+Start a supervised run through its current host client:
+
+```bash
+node bin/orc-smash-supervisor.js launch /absolute/path/to/project \
+  --loop review --agent codex --max-iterations 3 --plain
+```
+
+The `launch` process must remain running to send heartbeats; `Ctrl-C` requests
+cancellation. This is a real `orc smash` run and can invoke providers and modify the
+target project's workflow artifacts. Provider authentication must be available from
+`HOME`-based configuration, the user keychain, or another non-environment mechanism:
+the supervisor intentionally does not forward inherited credential environment
+variables.
+
+The supervisor's release gate is macOS-specific and independently verifies host loss,
+bounded fresh-capability cleanup, process isolation, canary survival, and fail-closed
+restart behavior. See the companion repository's `README.md` and
+`docs/release-gate-result.md` for installation details and current evidence.
+
 ## How it works
 
 - **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
@@ -81,7 +119,9 @@ Current development is steering the harness toward a cleaner runtime architectur
   no-signal `orc ownership release` workflow. A deliberately detached descendant remains
   outside the portable process-group guarantee. See
   [docs/architecture/overview.md](./docs/architecture/overview.md#app-owned-run-supervision-portable-pgid-termination)
-  and [docs/dev/plan.md](./docs/dev/plan.md).
+  and [docs/dev/plan.md](./docs/dev/plan.md). The separate macOS
+  `orc-smash-supervisor` LaunchAgent is the current operator-facing issuer of this
+  contract; ordinary `orc smash` invocations do not opt into it automatically.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
 [docs/roadmap.md](./docs/roadmap.md) for staged direction, and
