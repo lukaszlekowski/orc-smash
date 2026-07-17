@@ -156,8 +156,9 @@ No ownership schema, lease, signal-gate, provider-adapter, or cgroup behavior ch
   runtime and packaged assets.
 - [x] `supervisor-contract` reports the strict PID/schema handshake and the supervisor
   validates it before installer mutation.
-- [x] Supervisor client framing, sequential heartbeats, cancellation, timeout handling,
-  release-harness build, and stable entrypoint pinning are implemented and covered by
+- [x] Supervisor client framing, sequential heartbeats, explicitly serialized
+  cancellation, timeout handling, exact fixture cleanup, release-harness build, stable
+  entrypoint pinning, and production contract validation are implemented and covered by
   deterministic tests.
 - [x] READMEs, architecture guidance, compatibility rules, CI, and release status are
   synchronized with the canonical runtime.
@@ -176,4 +177,25 @@ No ownership schema, lease, signal-gate, provider-adapter, or cgroup behavior ch
 - Updated cross-repository documentation and marked the release record `NOT RERUN`.
 - The normal approved-audit prerequisite was waived by the user for this implementation;
   no audit artifact was added or rewritten. The live LaunchAgent install/release gate
-  remains pending and is the only incomplete acceptance item.
+  remains pending.
+
+### v2 — rejected-review follow-up repairs — 2026-07-17
+
+- Serialized signal cancellation behind any in-flight heartbeat acknowledgement and
+  added a command-level regression test covering repeated signals and one cancel.
+- Retained the exact spawned fixture child in the restart test, terminated it in
+  `finally`, and added a deterministic suite leak assertion.
+- Added `bin/orc.js` to the release manifest and routed the release preflight through
+  the production contract validator's PID-comparing probe.
+- Deterministic follow-up verification is complete; the exact documented install,
+  LaunchAgent restart, and real macOS release gate remain pending.
+
+### v3 — release-provenance and teardown follow-up repairs — 2026-07-17
+
+- Bound release contract validation to the detached supervisor worktree and added
+  focused probe-path coverage, so the gate cannot depend on ordinary-checkout `dist/`.
+- Made exact fixture termination and leak inspection run even when server teardown
+  fails, while preserving teardown failures for the test result.
+- Repaired cross-repository commit/pin provenance; deterministic verification remains
+  complete and the exact documented install, LaunchAgent restart, and real macOS
+  release gate remain pending.
