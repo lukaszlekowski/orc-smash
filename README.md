@@ -13,7 +13,13 @@ The binary is **`orc`**; the main command is **`orc smash`**.
 
 ```bash
 pnpm install
+pnpm build
 ```
+
+`bin/orc.js` is the stable production entrypoint. Production execution requires
+`pnpm build`, which compiles `src/` to `dist/src/` and packages the provider
+configuration, manifest, roles, skills, package metadata, and process-group
+bootstrap alongside it. Development runs can use `pnpm dev`.
 
 Each provider's complete catalogue lives in `config/providers/<provider>.yaml`, including its `defaultModel`; update that one file to add or remove models. `config/runners.yaml` maps opaque runner-profile names to providers, and `config/registry.yaml` contains only execution timeouts. `orc.config.yaml` and home-directory overrides are not supported.
 
@@ -28,6 +34,7 @@ orc smash --project <path> \        # run-wide runner override, non-interactive
   --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
 orc smash --project <path> --audit-continuity # run in audit continuity mode (plan/review loops)
 orc status --project <path>         # read-only: detect where we are, render the status panel
+orc supervisor-contract             # print the supervisor compatibility handshake
 orc ownership status --project <path> # read-only diagnostics for retained owned-run state
 orc ownership release --project <path> --yes # explicit, no-signal recovery release
 ```
@@ -55,6 +62,9 @@ install it by pinning this repository's launcher:
 cd /Volumes/projects/orc-smash-supervisor
 pnpm install --frozen-lockfile
 pnpm build
+cd /Volumes/projects/orc-smash
+pnpm build
+cd /Volumes/projects/orc-smash-supervisor
 node bin/orc-smash-supervisor.js install /Volumes/projects/orc-smash/bin/orc.js
 node bin/orc-smash-supervisor.js status
 ```
@@ -72,6 +82,11 @@ target project's workflow artifacts. Provider authentication must be available f
 `HOME`-based configuration, the user keychain, or another non-environment mechanism:
 the supervisor intentionally does not forward inherited credential environment
 variables.
+
+The supervisor installer first runs `node /Volumes/projects/orc-smash/bin/orc.js
+supervisor-contract` and validates the same-process PID and ownership schema before
+changing its config or LaunchAgent. The public install path remains `bin/orc.js`;
+`dist/src/cli.js` is an internal build artifact.
 
 The supervisor's release gate is macOS-specific and independently verifies host loss,
 bounded fresh-capability cleanup, process isolation, canary survival, and fail-closed

@@ -36,6 +36,18 @@ cli.ts ──▶ commands/{smash,status}.ts
                 └─ adapters/        registry plus process-group bootstrap/runtime
 ```
 
+`bin/orc.js` is the stable production entrypoint and loads `dist/src/cli.js` in the
+same Node process. `pnpm build` cleans and compiles production `src/` to `dist/src/`
+and copies `config/`, `roles/`, `skills/`, `skills.yaml`, `package.json`, and the
+detached process-group bootstrap into the packaged runtime layout. Missing build
+output is a clear `pnpm build` error; the bin never spawns `tsx` or a second CLI.
+
+`orc supervisor-contract` is the explicit cross-repository handshake. It emits one
+strict JSON object with kind `orc-smash-supervisor-contract`, schema version `1`,
+ownership schema version `1`, and the PID of the process executing `bin/orc.js`.
+The supervisor validates this contract before storing the launcher or changing its
+LaunchAgent.
+
 Pure, I/O-free logic (`verdict`, `state`, `follow-up-outcome`, `prompt-composer`, `runner`, status context, adapter arg builders) is
 isolated so it unit-tests without spawning agents.
 
