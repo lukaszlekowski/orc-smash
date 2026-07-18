@@ -9,6 +9,7 @@ import { panelBorderColor } from '../src/status-accent.js';
 import type { PanelContext, PanelContextSnapshot } from './helpers/panel-context.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 
 const tempWorkspace = join(process.cwd(), 'temp-loop-live-test');
 
@@ -66,15 +67,8 @@ function snapshot(ctx: PanelContext): PanelContextSnapshot {
 function makeCapturingPanelOutput(captured: { snapshots: PanelContextSnapshot[]; events: LifecycleEvent[]; rawContexts: PanelContext[] }) {
   let supplierRef: (() => PanelContext) | null = null;
   return {
-    note: () => {},
-    warn: () => {},
-    error: () => {},
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
+    ...createMockOutput(),
     renderPanel: (ctx: PanelContext) => { captured.snapshots.push(snapshot(ctx)); captured.rawContexts.push(ctx); },
-    finalSummary: () => {},
     attachLiveRegion: (supplier: () => PanelContext) => {
       supplierRef = supplier;
       // Capture the supplier's return value at attach-time. The supplier
@@ -193,15 +187,8 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
     let stepStartedOrder = 0;
     let currentOrder = 0;
     const output = {
-      note: () => {},
-      warn: () => {},
-      error: () => {},
-      iterationStarted: () => {},
+      ...createMockOutput(),
       stepStarted: () => { if (!stepStartedOrder) { stepStartedOrder = ++currentOrder; } },
-      stepSucceeded: () => {},
-      stepFailed: () => {},
-      renderPanel: () => {},
-      finalSummary: () => {},
       attachLiveRegion: () => { if (!attachOrder) { attachOrder = ++currentOrder; } },
       detachLiveRegion: () => { if (!detachOrder) { detachOrder = ++currentOrder; } }
     };

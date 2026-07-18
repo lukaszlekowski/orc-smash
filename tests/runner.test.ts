@@ -32,17 +32,17 @@ const config: Config = {
 
 describe('runner selection', () => {
   it('resolves an arbitrary profile name to its provider default', () => {
-    expect(resolveRunner('audit', config)).toEqual({ agent: 'claude', model: 'claude-x' });
+    expect(resolveRunner('audit', config)).toMatchObject({ agent: 'claude', model: 'claude-x' });
   });
   it('resolves an exceptional profile to its explicit model', () => {
-    expect(resolveRunner('exceptionalAudit', config)).toEqual({ agent: 'claude', model: 'claude-custom' });
+    expect(resolveRunner('exceptionalAudit', config)).toMatchObject({ agent: 'claude', model: 'claude-custom' });
   });
   it('throws when resolving a profile with a foreign model', () => {
     expect(() => resolveRunner('invalidExceptionalAudit', config)).toThrow(/is not a claude model/);
   });
   it('uses CLI agent/model overrides and model-only uses defaultProfile provider', () => {
-    expect(resolveRunner('audit', config, { agent: 'codex' })).toEqual({ agent: 'codex', model: 'gpt-x' });
-    expect(resolveRunner('audit', config, { model: 'opencode-go/y' })).toEqual({ agent: 'opencode', model: 'opencode-go/y' });
+    expect(resolveRunner('audit', config, { agent: 'codex' })).toMatchObject({ agent: 'codex', model: 'gpt-x' });
+    expect(resolveRunner('audit', config, { model: 'opencode-go/y' })).toMatchObject({ agent: 'opencode', model: 'opencode-go/y' });
   });
   it('keeps agy a strict catalogue allow-list', () => {
     expect(isValidModelForAgent('agy', ' Gemini ', config.registry)).toBe(true);

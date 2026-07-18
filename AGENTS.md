@@ -38,10 +38,14 @@ itself.
 - **All four providers — `opencode`, `codex`, `claude`, `agy` (Antigravity) — are real runnable
   adapters** (no stubs); `fake` is a deterministic no-spawn adapter for tests.
 - Agent and model are a **coupled pair** (each CLI has its own model-id namespace). Runner
-  precedence per skill: interactive per-skill pick > `--agent`/`--model` (run-wide) > skill
-  runner profile > provider default model. **Changing an agent re-defaults its model** to that
-  agent's catalogue default (`registry.providers.<agent>.defaultModel`; catalogues and profiles
-  are never mutated). `runner.ts` resolves this; `loop.ts` selects the adapter **per step**
+  precedence per skill: interactive per-skill pick > `--runner`/`--runner-model` per-skill CLI
+  override > `--agent`/`--model` (run-wide) > skill runner profile > provider default model.
+  **Changing an agent re-defaults its model** to that agent's catalogue default
+  (`registry.providers.<agent>.defaultModel`; catalogues and profiles are never mutated).
+  Per-skill overrides (`--runner <skill>=<agent>` and `--runner-model <skill>=<model>`)
+  are repeatable and require an explicit `--loop`. `runner.ts` resolves this with the
+  `ResolvedRunner` type carrying `agentSource`/`modelSource` attribution; `loop.ts` selects
+  the adapter **per step**
   from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
   excludes `fake`, which is only available in the test registry (`testing.ts`).
 - **Audit filenames follow the skill's convention** `docs/dev/<type>-v{n}-{agent}.md`

@@ -1,5 +1,5 @@
 ---
-status: draft
+status: ready
 confidence: 0.96
 owners: cli-runtime
 scope: orc-smash-only

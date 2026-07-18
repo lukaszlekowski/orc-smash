@@ -6,6 +6,7 @@ import { buildFrontMatter } from '../src/provenance.js';
 import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import * as configModule from '../src/config.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { createPanelCliOutput } from '../src/cli-output.js';
 import { renderStatusPanel } from '../src/status-panel.js';
@@ -16,17 +17,10 @@ describe('statusAction command (consumes resolveNextStep)', () => {
   let renderPanelCalledWith: any = null;
   let errorCalledWith: any = null;
 
-  const mockOutput = {
-    note: () => {},
-    warn: () => {},
+  const mockOutput = createMockOutput({
     error: (msg: string) => { errorCalledWith = msg; },
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
-    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; },
-    finalSummary: () => {}
-  };
+    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; }
+  });
 
   beforeEach(() => {
     createTempDir('temp-status-action');
@@ -166,17 +160,9 @@ describe('statusAction — interrupted marker precedence + interrupted display (
   const tempDir = join(process.cwd(), 'temp-status-action-interrupted');
 
   let renderPanelCalledWith: any = null;
-  const mockOutput = {
-    note: () => {},
-    warn: () => {},
-    error: () => {},
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
-    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; },
-    finalSummary: () => {}
-  };
+  const mockOutput = createMockOutput({
+    renderPanel: (ctx: any) => { renderPanelCalledWith = ctx; }
+  });
 
   beforeEach(() => {
     createTempDir('temp-status-action-interrupted');

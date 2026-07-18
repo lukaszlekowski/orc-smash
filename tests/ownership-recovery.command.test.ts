@@ -12,19 +12,19 @@ import { ownershipReleaseAction, ownershipStatusAction } from '../src/commands/o
 import * as processIdentity from '../src/process-identity.js';
 import type { CliOutput } from '../src/cli-output.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 
 function output(): CliOutput {
-  return {
+  return createMockOutput({
     note: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     iterationStarted: vi.fn(),
-    stepStarted: vi.fn(),
     stepSucceeded: vi.fn(),
     stepFailed: vi.fn(),
     renderPanel: vi.fn(),
     finalSummary: vi.fn()
-  };
+  });
 }
 
 describe('ownership recovery commands', () => {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import os from 'node:os';
 import { createTempDir, removeTempDir } from '../helpers/fs.js';
 import { createTestConfig } from '../helpers/test-config.js';
+import { createMockOutput } from '../helpers/mock-output.js';
 import { smashAction, buildDefaultAdapterRegistry } from '../../src/commands/smash.js';
 import { createProductionAdapterRegistry } from '../../src/adapters/registry.js';
 import { loadConfig } from '../../src/config.js';
@@ -41,17 +42,9 @@ vi.mock('../../src/adapters/registry.js', async (importOriginal) => {
   return { ...mod, createProductionAdapterRegistry: vi.fn((...args: any[]) => mod.createProductionAdapterRegistry(...args)) };
 });
 
-const mockOutput = {
-  note: () => {},
-  warn: () => {},
-  error: (msg: string) => { console.error('MOCK ERROR:', msg); },
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+const mockOutput = createMockOutput({
+  error: (msg: string) => { console.error('MOCK ERROR:', msg); }
+});
 
 describe('smashAction forwards the loaded ModelRegistry to the production adapter registry (v3-audit M1)', () => {
   const tempDir = join(process.cwd(), 'temp-smash-timeout');

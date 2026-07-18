@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import { execSync } from 'node:child_process';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
 import { codexAdapter, createCodexAdapter } from '../src/adapters/codex.js';
@@ -303,17 +304,10 @@ describe('Real-provider contract tests', () => {
 
   const REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS = 600000;
 
-  const mockOutput = {
-    note: () => {},
+  const mockOutput = createMockOutput({
     warn: (msg: string) => { console.warn('LOOP WARN:', msg); },
-    error: (msg: string) => { console.error('LOOP ERROR:', msg); },
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
-    renderPanel: () => {},
-    finalSummary: () => {}
-  };
+    error: (msg: string) => { console.error('LOOP ERROR:', msg); }
+  });
 
   async function runRealProviderImplementLoopTest(agent: string, model: string) {
     const outputPath = `docs/dev/impl-v1-${agent}.md`;

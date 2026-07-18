@@ -24,18 +24,9 @@ import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { parseVerdict } from '../src/verdict.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 
-const mockOutput = {
-  note: () => {},
-  warn: () => {},
-  error: () => {},
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+const mockOutput = createMockOutput();
 
 /**
  * Deterministic fake `agy` adapter for the loop-level contract. It mirrors how

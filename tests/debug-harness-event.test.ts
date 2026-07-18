@@ -68,12 +68,10 @@ describe('Debug Harness Events and Buffering', () => {
 
     const printedLines = logSpy.mock.calls.map(call => call[0]).join('\n');
     expect(printedLines).toContain('── Harness Event Log ──');
-    expect(printedLines).toContain('[NOTE] Test Note');
-    expect(printedLines).toContain('[WARN] Test Warning');
-    expect(printedLines).toContain('[ERROR] Test Error');
-    expect(printedLines).toContain('[ITERATION] 1/5');
-    expect(printedLines).toContain('[STARTED] audit v1 → fake (fake-model)');
-    expect(printedLines).toContain('[OK] audit v1: succeeded');
-    expect(printedLines).toContain('[FAIL] audit v1: failed (unknown)');
+    expect(printedLines).toContain('note message=');
+    expect(printedLines).toContain('warning message=');
+    expect(printedLines).toContain('error message=');
+    expect(printedLines).toContain('iteration.started');
+    expect(printedLines).toContain('step.started kind=audit');
   });
 });

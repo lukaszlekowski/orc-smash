@@ -1,7 +1,7 @@
 import { resetFakeAdapterState } from '../../src/adapters/testing.js';
 import { fakeAdapterState } from '../../src/adapters/fake.js';
 import type { CliOutput } from '../../src/cli-output.js';
-import { vi } from 'vitest';
+import { createMockOutput } from './mock-output.js';
 
 export function resetFakeAdapterStateForTests(): void {
   resetFakeAdapterState();
@@ -11,16 +11,6 @@ export function setFakeVerdicts(verdicts: ('APPROVED' | 'REJECTED' | 'unknown')[
   fakeAdapterState.verdicts = [...verdicts];
 }
 
-export function createMockCliOutput(): CliOutput {
-  return {
-    note: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    iterationStarted: vi.fn(),
-    stepStarted: vi.fn(),
-    stepSucceeded: vi.fn(),
-    stepFailed: vi.fn(),
-    renderPanel: vi.fn(),
-    finalSummary: vi.fn(),
-  };
+export function createMockCliOutput(overrides?: Partial<CliOutput>): CliOutput {
+  return createMockOutput(overrides);
 }

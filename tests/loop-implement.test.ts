@@ -9,20 +9,11 @@ import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { buildFrontMatter } from '../src/provenance.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import type { AgentAdapter } from '../src/adapters/types.js';
 
 const testRegistry = createTestAdapterRegistry();
-const mockOutput = {
-  note: () => {},
-  warn: () => {},
-  error: () => {},
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+const mockOutput = createMockOutput();
 
 let mockedSecondOpinionDecision: 'stop' | 'run-second-opinion' | 'implement' = 'stop';
 let mockedContinueToReview: 'stop' | 'review' = 'stop';

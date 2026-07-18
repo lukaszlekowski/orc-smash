@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import { buildFrontMatter } from '../src/provenance.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { fakeAdapterState, fakeAdapter } from '../src/adapters/fake.js';
@@ -72,17 +73,12 @@ function codexStdout(sessionId: string, text: string) {
 }
 
 describe('Follow-up Runner interactive resolution & inheritance', () => {
-  const mockOutput = {
-    note: () => {},
+  const mockOutput = createMockOutput({
     warn: (msg: string) => { mockOutputWarnings.push(msg); },
     error: (msg: string) => { console.error('ERROR:', msg); },
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
     stepFailed: (ctx: any) => { console.error('STEP FAILED:', ctx); },
-    renderPanel: () => {},
     finalSummary: (ctx: any) => { console.log('FINAL SUMMARY:', ctx); }
-  };
+  });
 
   beforeEach(() => {
     createTempDir('temp-loop-followup-runner');
