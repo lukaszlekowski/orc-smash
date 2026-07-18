@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { executeLoopStep, type LoopExecutionDeps } from '../src/loops/execution.js';
 import type { AgentAdapter, RunResult } from '../src/adapters/types.js';
@@ -42,13 +42,14 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
   });
 
   function controlRecord(leaseExpiresMs: number): ControlRecord {
+    const leaseIssuedMs = leaseExpiresMs - 60_000;
     return {
       schemaVersion: 1,
       runId: 'run-a',
       ownerTokenHash: 'hash',
       projectRoot: tmp,
       hostInstanceId: 'host-1',
-      leaseIssuedMs: 0,
+      leaseIssuedMs,
       leaseTtlMs: 60_000,
       leaseExpiresMs,
       issuerRevision: 1
@@ -57,11 +58,13 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
 
   function seedRunDir(leaseExpiresMs: number): OwnershipContext {
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     const control = controlRecord(leaseExpiresMs);
     writeFileSync(join(runDir, 'control.json'), JSON.stringify(control), { mode: 0o600 });
     writeFileSync(
       join(runDir, 'active.json'),
       JSON.stringify({
+        schemaVersion: 1,
         cliIdentity: { pid: process.pid, startMs: 0, command: 'orc' },
         groups: [],
         state: 'running',

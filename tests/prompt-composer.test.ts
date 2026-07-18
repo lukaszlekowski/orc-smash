@@ -165,4 +165,39 @@ describe('Prompt Composer', () => {
     expect(prompt).toContain('Prior review: none');
     expect(prompt).not.toContain(join(tempDir, 'none'));
   });
+
+  it('explicitly authorizes the auditor to create the required audit artifact', () => {
+    const loopSpec: LoopSpec = {
+      kind: 'doc-audit',
+      target: 'docs/dev/plan.md',
+      targetKind: 'file',
+      audit: 'plan-audit',
+      'follow-up': 'plan-follow-up',
+      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
+      inputs: [
+        { label: 'Target document', source: 'target' },
+        { label: 'Write your output to', source: 'outputPath' }
+      ]
+    };
+
+    const prompt = composePrompt(
+      'plan-audit',
+      'roles/auditor.md',
+      'skills/21-simple-plans-audit/SKILL.md',
+      loopSpec,
+      {
+        targetRoot: tempDir,
+        version: 1,
+        priorAuditPath: null,
+        agentName: 'codex',
+        kind: 'audit'
+      }
+    );
+
+    expect(prompt).toContain('Do not modify source code or the target plan document.');
+    expect(prompt).toContain('explicitly authorized and required to create the audit document');
+    expect(prompt).toContain('do not return it only in chat or stdout');
+    expect(prompt).toContain(`Write your output to: ${join(tempDir, 'docs/dev/plan-audit-v1-codex.md')}`);
+  });
 });

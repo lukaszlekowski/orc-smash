@@ -32,6 +32,7 @@ describe('acquireProjectLock — O_EXCL project admission', () => {
   /** A lock record that `verifyIdentity` considers LIVE (the current process). */
   function liveLock(runId: string, runDir: string): LockRecord {
     return {
+      schemaVersion: 1,
       runId,
       pid: process.pid,
       startMs: getProcessStartTime(process.pid),
@@ -72,6 +73,7 @@ describe('acquireProjectLock — O_EXCL project admission', () => {
   it('reclaims a stale (dead-holder) lock and records the new runId via O_EXCL', async () => {
     // Seed a lock whose holder is provably dead (nonexistent PID).
     seedLock(projectDir, {
+      schemaVersion: 1,
       runId: 'dead-run',
       pid: 999_999,
       startMs: 0,
@@ -92,6 +94,7 @@ describe('acquireProjectLock — O_EXCL project admission', () => {
 
   it('after reclaiming a dead holder, still rejects a further live holder (admission preserved)', async () => {
     seedLock(projectDir, {
+      schemaVersion: 1,
       runId: 'dead-run',
       pid: 999_998,
       startMs: 0,
@@ -110,21 +113,24 @@ describe('acquireProjectLock — O_EXCL project admission', () => {
   it('rejects when stale-run reconciliation fails (terminal ownership-failure retains the lock)', async () => {
     // Seed a dead holder whose runDir contains a non-terminal active.json but is
     // unreadable as a group source. reconcileOnStart will attempt tokenless
-    // reconcile and fail (cgroup unsupported on this platform), so reclaim must
+    // reconcile and fail closed on this platform, so reclaim must
     // surface a terminal ownership-failure rather than admitting the new run.
     const deadRunDir = join(tmp, 'dead-with-active');
     mkdirSync(deadRunDir, { recursive: true });
     writeFileSync(
       join(deadRunDir, 'active.json'),
       JSON.stringify({
+        schemaVersion: 1,
         cliIdentity: { pid: 999_997, startMs: 0, command: 'orc' },
         groups: [
           {
-            cgroupPath: '/sys/fs/cgroup/orc-smash/dead',
             pgid: 1,
             leaderPid: 1,
+            sessionId: 1,
             leaderStartMs: 0,
-            command: 'orc'
+            command: 'orc',
+            bootstrapExecutablePath: process.execPath,
+            executablePath: 'orc'
           }
         ],
         state: 'running',
@@ -134,6 +140,7 @@ describe('acquireProjectLock — O_EXCL project admission', () => {
     );
 
     seedLock(projectDir, {
+      schemaVersion: 1,
       runId: 'dead-run',
       pid: 999_997,
       startMs: 0,

@@ -6,6 +6,11 @@ import type { OwnershipContext } from '../run-ownership.js';
 import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress } from './opencode-stream.js';
 import { classifyCompletion } from './completion.js';
 import { debugProcessLifecycle } from '../debug-spawn.js';
+import {
+  listOwnedRuntimes,
+  terminateOwnedRuntimes,
+  resetOwnedRuntimeRegistryForTests
+} from '../owned-runtime-registry.js';
 
 /** Built-in opencode execution timeout (ms) when neither env nor config supplies one. */
 export const OPENCODE_BUILT_IN_TIMEOUT_MS = 600000;
@@ -94,7 +99,7 @@ export interface RawProcessResult {
   spawnErrorMessage?: string;
   /**
    * Present when an owned spawn failed at the ownership boundary (group close
-   * verification, cgroup cleanup) rather than at process spawn. This is an
+   * verification, process-group cleanup) rather than at process spawn. This is an
    * ownership-control failure, not "CLI missing from PATH", so result builders
    * classify it as `error.kind === 'ownership'` ahead of any `spawnErrorMessage`.
    */
@@ -218,24 +223,17 @@ export const realProcessRunner: ProcessRunner = runProcess;
 
 // --- Active child tracking + termination (§3 interrupted-run handling) --------
 //
-// `runProcess` registers every spawned provider child here so that an interrupt
-// signal (SIGINT/SIGTERM) can terminate orphaned provider processes. This is the
-// single registry; `terminateActiveChildren` is the only terminator.
+// `runProcess` registers every terminal-mode provider child here. Owned groups
+// are capabilities in owned-runtime-registry.ts; this set is only the
+// non-group fallback for terminal-mode children.
 
 const activeChildren = new Set<ChildProcess>();
-const activeHandles = new Set<ProcessGroupHandle>();
 
 /** Register a live child for interrupt-time termination. Auto-removes on exit. */
-export function registerActiveChild(proc: ChildProcess, handle?: ProcessGroupHandle): void {
+export function registerActiveChild(proc: ChildProcess, _handle?: ProcessGroupHandle): void {
   activeChildren.add(proc);
-  if (handle) {
-    activeHandles.add(handle);
-  }
   const remove = () => {
     activeChildren.delete(proc);
-    if (handle) {
-      activeHandles.delete(handle);
-    }
   };
   proc.once('exit', remove);
   proc.once('error', remove);
@@ -244,7 +242,7 @@ export function registerActiveChild(proc: ChildProcess, handle?: ProcessGroupHan
 /** Test seam: reset the active-child registry between tests. */
 export function resetActiveChildren(): void {
   activeChildren.clear();
-  activeHandles.clear();
+  resetOwnedRuntimeRegistryForTests();
 }
 
 /**
@@ -253,11 +251,9 @@ export function resetActiveChildren(): void {
  * Resolves once the grace window has elapsed so the caller can exit cleanly.
  */
 export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
-  const handles = [...activeHandles];
-  const procs = [...activeChildren].filter((p) => !p.killed);
-
-  const { terminateProcessGroup } = await import('./process-group.js');
-  const groupPromises = handles.map(h => terminateProcessGroup(h, graceMs));
+  const owned = listOwnedRuntimes();
+  const ownedPids = new Set(owned.map((capability) => capability.bootstrap.pid).filter((pid): pid is number => pid !== undefined));
+  const procs = [...activeChildren].filter((p) => !p.killed && !ownedPids.has(p.pid ?? -1));
 
   for (const p of procs) {
     try {
@@ -267,7 +263,7 @@ export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
     }
   }
   
-  await Promise.all(groupPromises);
+  await terminateOwnedRuntimes(graceMs);
 
   if (procs.length === 0) return;
   await new Promise((r) => setTimeout(r, graceMs));
@@ -284,11 +280,11 @@ export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
 
 /**
  * Owned-spawn bootstrap barrier. The owned runtime's `ready` resolves only after
- * the wrapper handshake, the durable `registerGroup()` write, and the ACK — i.e.
+ * the bootstrap handshake, the durable `registerGroup()` write, and the ACK — i.e.
  * the provider group is durably tracked BEFORE the provider execs. Await it
  * before `result` so the run is not treated as active (and lease-loss cleanup
  * never operates) against an unregistered handle. A `ready` rejection means
- * registration failed (the wrapper was `killCgroup`'d before exec); surface it
+ * registration failed before provider exec; surface it
  * as an ownership failure rather than a transport/spawn error. Runtimes without
  * a `ready` (terminal/legacy) are unaffected.
  */
@@ -367,7 +363,7 @@ export function spawnAgentProcess(
   return resultPromise.then((raw) => {
     // Classification precedence: ownership failure → spawn error → timeout →
     // nonzero exit → completed. An ownership-control failure (owned spawn close
-    // verification / cgroup cleanup) is distinct from a transport spawn failure
+    // verification / ownership cleanup) is distinct from a transport spawn failure
     // and must surface as `ownership` so the operator gets recovery wording, not
     // "CLI missing from PATH". A nonzero exit emits a failed lifecycle event but
     // (by existing contract) does NOT populate RunResult.error; timeout, spawn,

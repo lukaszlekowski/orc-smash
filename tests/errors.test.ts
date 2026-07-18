@@ -58,8 +58,11 @@ describe('structuredMessage — opencode-specific remediation', () => {
       })
     });
     const msg = structuredMessage(result, ctx);
-    expect(msg).toContain('opencode run timed out after 5000ms');
-    expect(msg).toContain('Verify the model/provider with `opencode models`');
+    expect(msg).toContain('opencode exceeded the configured wall-clock timeout after 5000ms');
+    expect(msg).toContain('This does not imply a provider stall');
+    expect(msg).toContain('Increase OPENCODE_RUN_TIMEOUT_MS');
+    expect(msg).toContain('rerun with --debug-spawn');
+    expect(msg).not.toContain('network/gateway stall');
   });
 
   it('formats spawn error correctly', () => {
