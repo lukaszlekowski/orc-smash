@@ -108,7 +108,7 @@ export function resolveRunner(
     return {
       agent,
       model: normalizeModelForAgent(agent, model),
-      agentSource: profile.model ? 'profile' : 'profile',
+      agentSource: 'profile',
       modelSource: profile.model ? 'profile' : 'default'
     };
   }
@@ -136,9 +136,9 @@ function resolveWithPerSkillOverride(
   }
 
   if (perSkillOverride.agent) {
-    validateAgentAndModel(perSkillOverride.agent, perSkillOverride.agent, config.registry);
     const defaultModel = config.registry.providers[perSkillOverride.agent]?.defaultModel;
     if (!defaultModel) throw new Error(`no default model for agent '${perSkillOverride.agent}'`);
+    validateAgentAndModel(perSkillOverride.agent, defaultModel, config.registry);
     return {
       agent: perSkillOverride.agent,
       model: normalizeModelForAgent(perSkillOverride.agent, defaultModel),

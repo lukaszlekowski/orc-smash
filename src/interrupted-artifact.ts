@@ -23,6 +23,7 @@ import type { StepKind } from './provenance.js';
 import type { LoopSpec } from './manifest.js';
 import { renderPattern, patternToRegex } from './patterns.js';
 import { terminateActiveChildren } from './adapters/utils.js';
+import type { RunEventInput } from './run-event.js';
 import { terminateOwnedRuntimes } from './owned-runtime-registry.js';
 
 /** Directory (under the project root) holding the durable marker. */
@@ -62,10 +63,15 @@ export interface StepCtx {
 
 let activeProjectRoot: string | null = null;
 let activeStepCtx: StepCtx | null = null;
+let activeRunEventSink: ((event: RunEventInput) => void) | null = null;
 
 /** Register the active project root immediately after config load succeeds. */
 export function setActiveProjectRoot(root: string | null): void {
   activeProjectRoot = root;
+}
+
+export function setActiveRunEventSink(sink: ((event: RunEventInput) => void) | null): void {
+  activeRunEventSink = sink;
 }
 
 /** @returns the active project root, or `null` before setup / after completion. */
@@ -91,6 +97,7 @@ export function getStepCtx(): StepCtx | null {
 export function clearInterruptState(): void {
   activeProjectRoot = null;
   activeStepCtx = null;
+  activeRunEventSink = null;
 }
 
 // --- Marker path --------------------------------------------------------------
@@ -305,6 +312,7 @@ export function quarantineInterruptedResume(
  * step is in flight (the child termination still runs as a best-effort cleanup).
  */
 export async function handleInterruptSignal(signal: NodeJS.Signals): Promise<void> {
+  activeRunEventSink?.({ type: 'run.interrupted', atMs: Date.now(), reason: signal });
   const ctx = activeStepCtx;
   const root = activeProjectRoot;
   if (ctx && root) {

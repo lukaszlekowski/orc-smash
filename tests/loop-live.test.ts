@@ -10,6 +10,7 @@ import type { PanelContext, PanelContextSnapshot } from './helpers/panel-context
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
+import type { RunEvent } from '../src/run-event.js';
 
 const tempWorkspace = join(process.cwd(), 'temp-loop-live-test');
 
@@ -93,6 +94,37 @@ function makeCapturingPanelOutput(captured: { snapshots: PanelContextSnapshot[];
 }
 
 describe('loop-level live region — runLoop with delayed fake adapter', () => {
+  it('emits bounded provider progress and caps rendered tool-call counts', async () => {
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = Array.from({ length: 20 }, (_, index) => ({
+      text: `provider progress ${index}`,
+      toolCalls: 100
+    }));
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const output = {
+      ...createMockOutput(),
+      emit: (event: RunEvent) => events.push(event)
+    };
+
+    await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' }
+    }, {
+      maxIterations: 5,
+      registry,
+      output,
+      interactive: false
+    });
+
+    const progress = events.filter((event): event is Extract<RunEvent, { type: 'provider.progress' }> => event.type === 'provider.progress');
+    const completed = events.find((event): event is Extract<RunEvent, { type: 'provider.completed' }> => event.type === 'provider.completed');
+    expect(progress.length).toBeLessThanOrEqual(8);
+    expect(progress.at(-1)?.message).toBe('progress suppressed');
+    expect(completed?.toolCalls).toBe('999+');
+  });
+
   it('captures the first pre-spawn renderPanel context with currentIteration === 1 (1-based loop counter, v11 audit Major closure)', async () => {
     fakeAdapterState.verdicts = ['APPROVED'];
     fakeAdapterState.delayMs = 50;

@@ -82,7 +82,6 @@ describe('Plain mode loop-level integration', () => {
     expect(clearSpy).not.toHaveBeenCalled();
     expect(ora).not.toHaveBeenCalled();
 
-    // Duplicate baseline assertions removed. Verify behavior through result.
     expect(clearSpy).not.toHaveBeenCalled();
     expect(ora).not.toHaveBeenCalled();
   });
@@ -141,8 +140,6 @@ describe('Plain mode loop-level integration', () => {
     expect(ora).not.toHaveBeenCalled();
 
     const writes = stdoutWriteSpy.mock.calls.map((c: any) => String(c[0])).join('');
-    console.error('DEBUG writes length:', writes.length, 'calls:', stdoutWriteSpy.mock.calls.length);
-    console.error('DEBUG first write:', stdoutWriteSpy.mock.calls[0]?.[0]);
     expect(writes).toContain('step.started kind=audit');
     expect(writes).toContain('version=1');
     expect(writes).toContain('version=2');

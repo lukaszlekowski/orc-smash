@@ -29,6 +29,7 @@ import { missingRequiredArtifact } from './required-artifact.js';
 import { debugHarnessEvent } from './debug-spawn.js';
 import type { OwnershipContext } from './run-ownership.js';
 import type { RunnerOverrideMap } from './runner-overrides.js';
+import { makeRunEvent, type RunEventInput } from './run-event.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -40,6 +41,8 @@ export interface LoopOptions {
   ownership?: OwnershipContext | null;
   runnerOverrides?: RunnerOverrideMap;
   auditContinuity?: AuditContinuityPolicy;
+  /** smashAction owns terminal emission when false; direct loop callers default to true. */
+  emitTerminal?: boolean;
 }
 
 
@@ -66,7 +69,22 @@ export async function runLoop(
   const runnerResolution = new Map<string, ResolvedRunnerDisplay>();
   let projectSummaryDetails: string[] = [];
   let isFirstAction = true;
-  let lastActionGroup: string | null = null;
+  let auditContinuityArmed = false;
+  let lastAuditVerdict: string | null = null;
+
+  const emitEvent = (event: RunEventInput): void => {
+    options.output.emit(makeRunEvent(event));
+  };
+
+  const recursiveStageOptions = (): LoopOptions => ({
+    ...options,
+    seedResolved: undefined,
+    runnerOverrides: undefined,
+    auditContinuity: { enabled: false }
+  });
+
+  const resolveEffectiveRunner = (skillId: string): Runner =>
+    resolveRunner(skillId, config, options.globalOverrides, undefined, options.runnerOverrides?.[skillId]);
 
   if (options.seedResolved) {
     for (const s of options.seedResolved) {
@@ -131,8 +149,15 @@ export async function runLoop(
             : 'configured for this run';
         return [`runner (${skillId}): ${runner.agent} (${runner.model}) — ${source}`];
       });
+    if (options.emitTerminal !== false) {
+      if (success) {
+        emitEvent({ type: 'run.completed', atMs: Date.now(), verdict: verdict ?? 'unknown', outcome: message });
+      } else {
+        emitEvent({ type: 'run.failed', atMs: Date.now(), reason: message });
+      }
+    }
     options.output.finalSummary({ success, verdict, message, lastAuditPath: lastPath, details: [...buildProjectSummaryDetails(), ...runnerDetails] });
-    return { success, verdict: verdict ?? 'unknown', message, lastAuditPath: lastPath };
+    return { success, verdict: verdict ?? 'unknown', message, lastAuditPath: lastPath, terminalEventEmitted: options.emitTerminal !== false };
   };
 
   function buildProjectSummaryDetails(): string[] {
@@ -221,6 +246,12 @@ export async function runLoop(
 
   const chooseAction = async (decisionPoint: 'startup' | 'in-loop', overridePhase?: MenuPhase, opts?: { autoRecommend?: boolean }): Promise<{ action: StageAction; phase: MenuPhase }> => {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
+    emitEvent({
+      type: 'state.scanned',
+      atMs: Date.now(),
+      latestVerdict: stateScan.latestVerdict ?? 'none',
+      version: stateScan.latestVersion
+    });
 
     let phase: MenuPhase = 'fresh';
     let latestAuditVersionVal = 0;
@@ -296,7 +327,7 @@ export async function runLoop(
 
     // Apply audit-continuity policy if enabled
     if (options.auditContinuity) {
-      const modified = applyAuditContinuityPolicy(actions, { phase }, options.auditContinuity);
+      const modified = applyAuditContinuityPolicy(actions, { phase, armed: auditContinuityArmed, lastVerdict: lastAuditVerdict }, options.auditContinuity);
       actions = modified;
     }
 
@@ -317,9 +348,11 @@ export async function runLoop(
           (act.sessionPolicy.audit === 'resumed' || act.sessionPolicy.followUp === 'resumed'))
       ) {
         const skillId = act.stage === 'follow-up' ? targetLoopSpec['follow-up']! : targetLoopSpec.audit!;
-        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+        let runner = runners[skillId] || resolveEffectiveRunner(skillId);
 
-        const kindsToFind: StepKind[] = act.stage === 'follow-up' ? ['follow-up'] : ['audit'];
+        const kindsToFind: StepKind[] = act.stage === 'follow-up'
+          ? (options.auditContinuity?.enabled ? ['follow-up', 'audit'] : ['follow-up'])
+          : ['audit'];
         const stopAtApproved = act.id !== 'continue' || phase !== 'approved';
 
         const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
@@ -375,11 +408,13 @@ export async function runLoop(
         throw new Error(`Chosen action ID ${chosenId} not found`);
       }
       debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'stage-action-chosen', detail: `${chosen.id} (phase: ${phase})`, result: 'pass' });
+      emitEvent({ type: 'stage.action', atMs: Date.now(), action: chosen.id, phase });
       return { action: chosen, phase };
     } else {
       const recommended = actions.find(a => a.id === recommendedId);
       if (!recommended) throw new Error(`Recommended action ID ${recommendedId} not found`);
       debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'stage-action-chosen', detail: `${recommended.id} (autoRecommended, phase: ${phase})`, result: 'pass' });
+      emitEvent({ type: 'stage.action', atMs: Date.now(), action: recommended.id, phase });
       return { action: recommended, phase };
     }
   };
@@ -389,11 +424,13 @@ export async function runLoop(
     phase: MenuPhase,
     loopSpec: LoopSpec
   ): Promise<void> => {
-    const isNewSegment = lastActionGroup === null || lastActionGroup === 'run-one-step';
-
     if (chosenAction.group === 'start-new' || chosenAction.group === 'run-one-step') {
       upfrontResolved.clear();
       upfrontPolicies.clear();
+      if (chosenAction.group === 'start-new') {
+        auditContinuityArmed = false;
+        lastAuditVerdict = null;
+      }
       if (isFirstAction && options.seedResolved) {
         for (const s of options.seedResolved) {
           upfrontResolved.add(s);
@@ -452,18 +489,20 @@ export async function runLoop(
 
     for (const skillId of skillsToResolve) {
       const policy = getPolicyForSkill(skillId);
-      if (isNewSegment || !upfrontPolicies.has(skillId)) {
-        upfrontPolicies.set(skillId, policy);
-      }
+      // The runner pair remains locked for the active action chain, but the
+      // session policy transitions from fresh seed to resumed after the first
+      // rejected audit. Keep the policy current even when the runner itself
+      // was already selected.
+      upfrontPolicies.set(skillId, policy);
 
-      if (upfrontResolved.has(skillId)) {
+      if (upfrontResolved.has(skillId) && !(options.auditContinuity?.enabled && policy === 'resumed')) {
         continue;
       }
       const kind: StepKind = skillId === followUpSkillId ? 'follow-up' : 'audit';
       let inherited = false;
 
       if (policy === 'resumed') {
-        let runner = runners[skillId] || resolveRunner(skillId, config, options.globalOverrides);
+        let runner = runners[skillId] || resolveEffectiveRunner(skillId);
         const stopAtApproved = chosenAction.id !== 'continue' || phase !== 'approved';
 
         const allowAnyAgent = options.interactive && !options.globalOverrides?.agent;
@@ -489,9 +528,18 @@ export async function runLoop(
         }
 
         if (deriveContinuity(runner.agent)) {
-          const walkSession = findResumableSession(steps, [kind], runner.agent, runner.model, { stopAtApproved });
+          const kindsToFind: StepKind[] = kind === 'follow-up' && options.auditContinuity?.enabled
+            ? ['follow-up', 'audit']
+            : [kind];
+          const walkSession = findResumableSession(steps, kindsToFind, runner.agent, runner.model, { stopAtApproved });
           if (walkSession) {
             runners[skillId] = { agent: walkSession.provider, model: walkSession.model };
+            emitEvent({
+              type: 'runner.resolved', atMs: Date.now(), skillId,
+              agent: walkSession.provider, model: walkSession.model,
+              agentSource: 'session', modelSource: 'session',
+              inheritedSession: { agent: walkSession.provider, model: walkSession.model, sessionId: walkSession.sessionId }
+            });
             runnerResolution.set(skillId, {
               skillId,
               agent: walkSession.provider,
@@ -504,6 +552,12 @@ export async function runLoop(
             upfrontResolved.add(skillId);
             inherited = true;
           }
+        } else if (options.auditContinuity?.enabled) {
+          throw new Error(`Audit continuity cannot resume ${kind} with unsupported agent '${runner.agent}'.`);
+        }
+
+        if (options.auditContinuity?.enabled && !inherited) {
+          throw new Error(`Audit continuity could not resume ${kind}: no matching persisted session metadata for ${runner.agent}/${runner.model}.`);
         }
       }
 
@@ -523,6 +577,11 @@ export async function runLoop(
       for (const skillId of skillsToPrompt) {
         if (prompted[skillId]) {
           runners[skillId] = prompted[skillId];
+          emitEvent({
+            type: 'runner.resolved', atMs: Date.now(), skillId,
+            agent: prompted[skillId].agent, model: prompted[skillId].model,
+            agentSource: 'interactive', modelSource: 'interactive'
+          });
           runnerResolution.set(skillId, {
             skillId,
             agent: prompted[skillId].agent,
@@ -533,7 +592,19 @@ export async function runLoop(
         }
       }
     }
-    lastActionGroup = chosenAction.group;
+
+    if (options.auditContinuity?.enabled && targetLoopSpec.audit && targetLoopSpec['follow-up']) {
+      const auditRunner = runners[targetLoopSpec.audit];
+      const followUpRunner = runners[targetLoopSpec['follow-up']];
+      if (auditRunner && followUpRunner) {
+        if (auditRunner.agent !== followUpRunner.agent || auditRunner.model !== followUpRunner.model) {
+          throw new Error('Audit continuity requires the same agent/model for both audit and follow-up skills.');
+        }
+        if (!deriveContinuity(auditRunner.agent)) {
+          throw new Error(`Audit continuity requires codex, opencode, or claude, but the selected agent is '${auditRunner.agent}'.`);
+        }
+      }
+    }
   };
 
   const preparePrompt = (skillId: string, skill: SkillSpec, version: number, runner: Runner, kind: StepKind): string => {
@@ -689,7 +760,7 @@ export async function runLoop(
       runner = prompted[implementSkillId];
     }
     if (!runner) {
-      runner = resolveRunner(implementSkillId, config, options.globalOverrides);
+      runner = runners[implementSkillId] || resolveEffectiveRunner(implementSkillId);
     }
 
     renderPanel(
@@ -778,6 +849,7 @@ export async function runLoop(
       detail: missingArtifact ? missingArtifact.message : `exists at ${relOutputPath}`
     });
     if (missingArtifact) {
+      emitEvent({ type: 'artifact.missing', atMs: Date.now(), path: relOutputPath, reason: missingArtifact.message });
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,
@@ -790,6 +862,7 @@ export async function runLoop(
     const ledgerContent = readFileSync(absOutputPath, 'utf-8');
     const validation = validateImplementLedger(ledgerContent);
     const isComplete = validation.valid;
+    emitEvent({ type: 'implementation.ledger-validated', atMs: Date.now(), isComplete });
     debugHarnessEvent({
       cwd: projectRoot,
       category: 'check',
@@ -834,6 +907,7 @@ export async function runLoop(
       agent: runner.agent,
       signal: closeoutSignal
     });
+    emitEvent({ type: 'plan.closeout', atMs: Date.now(), status: closeoutOutcome.ok ? closeoutOutcome.status : 'failed' });
     if (!closeoutOutcome.ok) {
       const closeoutError = closeoutOutcome.error.includes('plan file not found')
         ? `${closeoutOutcome.error}. The implement agent may have removed docs/dev/plan.md during the run; harness closeout owns plan status/change-log updates and expects that file to remain in place.`
@@ -880,6 +954,7 @@ export async function runLoop(
       durationMs
     };
     writeArtifactWithMeta(absOutputPath, ledgerContent, meta);
+    emitEvent({ type: 'artifact.verified', atMs: Date.now(), path: relOutputPath, verdict: 'valid' });
 
     steps.push({
       kind: 'implement',
@@ -893,12 +968,10 @@ export async function runLoop(
       durationMs
     });
 
-    const summary = emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
-
     if (options.interactive) {
       const { action: chosenAction, phase: chosenPhase } = await chooseAction('in-loop', 'implement-done');
       if (chosenAction.id === 'stop') {
-        return summary;
+        return emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
       } else {
         const reviewLoopSpec = config.manifest.loops['review'];
         if (!reviewLoopSpec) {
@@ -924,12 +997,12 @@ export async function runLoop(
         }
 
         return runLoop(projectRoot, 'review', reviewLoopSpec, config, reviewRunners, {
-          ...options,
+          ...recursiveStageOptions(),
           seedResolved
         });
       }
     }
-    return summary;
+    return emitFinalSummary(true, null, `Implementation completed successfully: ${relOutputPath}`, absOutputPath);
   }
 
   const noteProjectSummary = (detail: string): void => {
@@ -990,6 +1063,16 @@ export async function runLoop(
   let iteration = 0;
   let lastAuditPath: string | null = steps.filter(s => s.kind === 'audit').pop()?.artifactPath ?? null;
 
+  // A new process invocation reconstructs the continuity state exclusively
+  // from persisted artifact metadata.  A latest rejected audit is the anchor
+  // for an already-running primary chain; a missing session ID remains armed
+  // so the first resumed spawn fails closed with a continuity diagnostic.
+  const persistedLatestAudit = steps.filter(s => s.kind === 'audit').pop();
+  if (options.auditContinuity?.enabled && persistedLatestAudit?.verdict === 'REJECTED') {
+    auditContinuityArmed = true;
+    lastAuditVerdict = 'REJECTED';
+  }
+
   const latestAuditStep = () => steps.filter(s => s.kind === 'audit').pop() ?? null;
 
   const { action: currentAction, phase: startupPhase } = await chooseAction('startup');
@@ -1013,7 +1096,7 @@ export async function runLoop(
     } else {
       implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
     }
-    return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+    return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, recursiveStageOptions());
   }
 
   let pendingAction: StageAction | null = currentAction;
@@ -1083,12 +1166,24 @@ export async function runLoop(
       const prompt = preparePrompt(followUpSkillId, followUpSkill, followUpVersion, runner, 'follow-up');
 
       let followUpContinuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
+      if (followUpPolicy === 'resumed' && !deriveContinuity(runner.agent) && options.auditContinuity?.enabled) {
+        throw new Error(`Audit continuity cannot resume follow-up with unsupported agent '${runner.agent}'.`);
+      }
       if (deriveContinuity(runner.agent)) {
         if (followUpPolicy === 'resumed') {
-          const detail = findResumableSessionDetail(steps, ['follow-up'], runner.agent, runner.model, { stopAtApproved: true });
+          const detail = findResumableSessionDetail(
+            steps,
+            options.auditContinuity?.enabled ? ['follow-up', 'audit'] : ['follow-up'],
+            runner.agent,
+            runner.model,
+            { stopAtApproved: true }
+          );
           if (detail.status === 'found' && detail.session) {
             followUpContinuity = { mode: 'resumed', sessionId: detail.session.sessionId };
           } else {
+            if (options.auditContinuity?.enabled) {
+              throw new Error(`Audit continuity could not resume follow-up: ${detail.status}. Start a new chain or repair the persisted session metadata.`);
+            }
             if (detail.status === 'no_steps_of_kind') {
               options.output.note(`resumed requested for follow-up but no prior follow-up steps found; starting fresh.`);
             } else if (detail.status === 'agent_model_mismatch') {
@@ -1192,6 +1287,7 @@ export async function runLoop(
         detail: missingArtifact ? missingArtifact.message : `exists at ${relFollowUpPath}`
       });
       if (missingArtifact) {
+        emitEvent({ type: 'artifact.missing', atMs: Date.now(), path: relFollowUpPath, reason: missingArtifact.message });
         options.output.stepFailed({
           kind: 'follow-up',
           skillId: followUpSkillId,
@@ -1206,6 +1302,7 @@ export async function runLoop(
       const sid = followUpContinuity ? (result.sessionId ?? 'none') : 'none';
       const body = readFileSync(absFollowUpPath, 'utf-8');
       const followUpOutcome: FollowUpOutcome = parseFollowUpOutcome(body);
+      emitEvent({ type: 'follow-up.outcome', atMs: Date.now(), outcome: followUpOutcome });
       debugHarnessEvent({
         cwd: projectRoot,
         category: 'check',
@@ -1214,6 +1311,7 @@ export async function runLoop(
         result: followUpOutcome === 'blocked' ? 'fail' : 'pass'
       });
       writeArtifactWithMeta(absFollowUpPath, body, buildStepMeta(followUpSkillId, followUpSkill, 'follow-up', followUpVersion, runner, durationMs, mode, sid));
+      emitEvent({ type: 'artifact.verified', atMs: Date.now(), path: relFollowUpPath, verdict: followUpOutcome });
       steps.push({
         kind: 'follow-up', role: followUpSkill.role, agent: runner.agent, model: runner.model,
         version: followUpVersion, status: 'done', outcome: followUpOutcome,
@@ -1252,7 +1350,7 @@ export async function runLoop(
           } else {
             implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
           }
-          return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+          return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, recursiveStageOptions());
         } else {
           pendingAction = nextAction;
           chainMode = nextAction.group !== 'run-one-step';
@@ -1315,6 +1413,10 @@ export async function runLoop(
 
     let continuity: { mode: 'fresh' | 'resumed'; sessionId?: string } | undefined = undefined;
 
+    if (auditPolicy === 'resumed' && !deriveContinuity(runner.agent) && options.auditContinuity?.enabled) {
+      throw new Error(`Audit continuity cannot resume audit with unsupported agent '${runner.agent}'.`);
+    }
+
     if (deriveContinuity(runner.agent)) {
       if (auditPolicy === 'resumed') {
         const planScanForPhase = scan(projectRoot, { auditPattern: loopSpec.auditPattern || '', followUpPattern: loopSpec.followUpPattern || '' });
@@ -1323,6 +1425,9 @@ export async function runLoop(
         if (detail.status === 'found' && detail.session) {
           continuity = { mode: 'resumed', sessionId: detail.session.sessionId };
         } else {
+          if (options.auditContinuity?.enabled) {
+            throw new Error(`Audit continuity could not resume audit: ${detail.status}. Start a new chain or repair the persisted session metadata.`);
+          }
           if (detail.status === 'no_steps_of_kind') {
             options.output.note(`resumed requested for audit but no prior audit steps found; starting fresh.`);
           } else if (detail.status === 'agent_model_mismatch') {
@@ -1428,6 +1533,7 @@ export async function runLoop(
       detail: missingArtifact ? missingArtifact.message : `exists at ${relOutputPath}`
     });
     if (missingArtifact) {
+      emitEvent({ type: 'artifact.missing', atMs: Date.now(), path: relOutputPath, reason: missingArtifact.message });
       options.output.stepFailed({
         kind: 'audit',
         skillId: auditSkillId,
@@ -1441,6 +1547,11 @@ export async function runLoop(
     const fileContent = readFileSync(absOutputPath, 'utf-8');
 
     const verdict = parseVerdict(fileContent);
+    if (verdict === 'unknown') {
+      emitEvent({ type: 'verdict.unknown', atMs: Date.now(), path: relOutputPath });
+    } else {
+      emitEvent({ type: 'verdict.parsed', atMs: Date.now(), verdict });
+    }
     debugHarnessEvent({
       cwd: projectRoot,
       category: 'check',
@@ -1460,6 +1571,7 @@ export async function runLoop(
     const mode = continuity?.mode ?? 'none';
     const sid = continuity ? (result.sessionId ?? 'none') : 'none';
     writeArtifactWithMeta(absOutputPath, fileContent, buildStepMeta(auditSkillId, auditSkill, 'audit', N, runner, durationMs, mode, sid));
+    emitEvent({ type: 'artifact.verified', atMs: Date.now(), path: relOutputPath, verdict });
 
     lastAuditPath = absOutputPath;
     steps.push({
@@ -1476,6 +1588,14 @@ export async function runLoop(
       version: N,
       message: `Audit execution completed`
     });
+
+    lastAuditVerdict = verdict;
+    if (options.auditContinuity?.enabled && verdict === 'REJECTED') {
+      if (sid === 'none') {
+        throw new Error('Audit continuity requires the fresh seed audit to persist a session ID before the rejected chain can resume.');
+      }
+      auditContinuityArmed = true;
+    }
 
     renderPanel(null, iteration, `Completed iteration ${iteration} with verdict: ${verdict}`);
 
@@ -1504,7 +1624,7 @@ export async function runLoop(
       } else {
         implementRunners[implementLoopSpec.implement!] = resolveRunner(implementLoopSpec.implement!, config, options.globalOverrides);
       }
-      return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, options);
+      return runLoop(projectRoot, 'implement', implementLoopSpec, config, implementRunners, recursiveStageOptions());
     } else {
       pendingAction = nextAction;
       chainMode = nextAction.group !== 'run-one-step';

@@ -13,6 +13,7 @@ import type { LoopSpec } from '../manifest.js';
 import type { Runner } from './runtime.js';
 import type { OwnershipContext } from '../run-ownership.js';
 import { OwnedSpawnRuntime } from '../adapters/process-group.js';
+import { makeRunEvent, MAX_PROGRESS_EVENTS, PROGRESS_MAX_LENGTH, TOOL_CALL_DISPLAY_CAP } from '../run-event.js';
 
 export interface LoopExecutionDeps {
   projectRoot: string;
@@ -51,6 +52,49 @@ export async function executeLoopStep(
   const labels = resolveLoopLabels(deps.loopSpec, deps.config.manifest);
   let lastProgressMessage = '';
   let toolCallCount = 0;
+  let distinctProgressCount = 0;
+  let progressEmitted = 0;
+  let progressSuppressed = 0;
+  const progressSeen = new Set<string>();
+
+  const normalizedProgress = (text: string): string => text
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, PROGRESS_MAX_LENGTH);
+
+  const emitProviderCompletion = (result: RunResult, failed: boolean): void => {
+    if (progressSuppressed > 0 && progressEmitted < MAX_PROGRESS_EVENTS) {
+      deps.output.emit(makeRunEvent({
+        type: 'provider.progress',
+        atMs: Date.now(),
+        agent: runner.agent,
+        message: 'progress suppressed'
+      }));
+      progressEmitted += 1;
+    }
+    const toolCalls = toolCallCount > TOOL_CALL_DISPLAY_CAP ? '999+' as const : toolCallCount;
+    if (failed) {
+      deps.output.emit(makeRunEvent({
+        type: 'provider.failed',
+        atMs: Date.now(),
+        agent: runner.agent,
+        errorKind: result.error?.kind ?? (result.exitCode !== 0 ? 'nonzero-exit' : undefined),
+        toolCalls,
+        progressEmitted,
+        progressSuppressed
+      }));
+    } else {
+      deps.output.emit(makeRunEvent({
+        type: 'provider.completed',
+        atMs: Date.now(),
+        agent: runner.agent,
+        toolCalls,
+        progressEmitted,
+        progressSuppressed
+      }));
+    }
+  };
   let liveInFlight: NonNullable<PanelContext['inFlight']> | null = {
     kind,
     role: deps.config.manifest.skills[skillId]?.role ?? roleForKind(kind),
@@ -70,6 +114,18 @@ export async function executeLoopStep(
     if (event.type === 'message') {
       if (event.text) lastProgressMessage = event.text;
       toolCallCount += event.toolCalls ?? 0;
+      const message = normalizedProgress(event.text);
+      if (message && !progressSeen.has(message)) {
+        progressSeen.add(message);
+        distinctProgressCount += 1;
+        const shouldEmit = distinctProgressCount === 1 || (distinctProgressCount - 1) % 4 === 0;
+        if (shouldEmit && progressEmitted < MAX_PROGRESS_EVENTS - 1) {
+          deps.output.emit(makeRunEvent({ type: 'provider.progress', atMs: Date.now(), agent: runner.agent, message }));
+          progressEmitted += 1;
+        } else {
+          progressSuppressed += 1;
+        }
+      }
       if (liveInFlight) {
         liveInFlight.toolCallCount = toolCallCount;
         liveInFlight.progressMessage = lastProgressMessage || null;
@@ -138,11 +194,13 @@ export async function executeLoopStep(
       const active = readActive(deps.ownership.runDir);
       if (!mayStartStep(deps.ownership.control, active, Date.now(), deps.ownership)) {
         if (watcher) watcher.cancel();
+        deps.output.emit(makeRunEvent({ type: 'ownership.lost', atMs: Date.now(), reason: 'ownership fence rejected the step before spawn' }));
         return { kind: 'ownership-lost' };
       }
     }
 
     deps.output.stepStarted({ kind, skillId, agent: runner.agent, model: runner.model, iteration, version, message: spawnLabel });
+    deps.output.emit(makeRunEvent({ type: 'provider.started', atMs: Date.now(), agent: runner.agent }));
     const adapter = getAdapter(deps.registry, runner.agent);
     debugLoopSpawn({ loopName: deps.loopName, skillId, kind, agent: runner.agent, model: runner.model, version, cwd: deps.projectRoot, prompt });
     setStepCtx({ loop: deps.loopName, kind, version, agent: runner.agent, model: runner.model, skillId });
@@ -153,6 +211,7 @@ export async function executeLoopStep(
       const active = readActive(deps.ownership.runDir);
       if (!mayStartStep(deps.ownership.control, active, Date.now(), deps.ownership)) {
         if (watcher) watcher.cancel();
+        deps.output.emit(makeRunEvent({ type: 'ownership.lost', atMs: Date.now(), reason: 'ownership fence rejected the provider spawn' }));
         return { kind: 'ownership-lost' };
       }
     }
@@ -171,12 +230,22 @@ export async function executeLoopStep(
     };
 
     const runPromise = adapter.run(runInput);
-    const raceResult = await Promise.race([
-      runPromise.then((res) => ({ kind: 'ran' as const, result: res })),
-      ownershipLostPromise
-    ]);
+    let raceResult: { kind: 'ran'; result: RunResult } | { kind: 'ownership-lost'; reason?: string };
+    try {
+      raceResult = await Promise.race([
+        runPromise.then((res) => ({ kind: 'ran' as const, result: res })),
+        ownershipLostPromise
+      ]);
+    } catch (error) {
+      const result: RunResult = { stdout: '', stderr: String(error), exitCode: 1, error: { kind: 'spawn', message: String(error) } };
+      emitProviderCompletion(result, true);
+      throw error;
+    }
 
     if (raceResult.kind === 'ownership-lost') {
+      deps.output.emit(makeRunEvent({ type: 'ownership.lost', atMs: Date.now(), reason: raceResult.reason }));
+      const result: RunResult = { stdout: '', exitCode: 1, error: { kind: 'ownership', message: raceResult.reason ?? 'ownership lost' } };
+      emitProviderCompletion(result, true);
       return { kind: 'ownership-lost', reason: raceResult.reason };
     }
 
@@ -185,10 +254,22 @@ export async function executeLoopStep(
       const { ownershipFence } = await import('../run-ownership.js');
       const fencePassed = await ownershipFence(deps.ownership, deps.loopSpec);
       if (!fencePassed) {
+        deps.output.emit(makeRunEvent({ type: 'ownership.lost', atMs: Date.now(), reason: 'ownership fence rejected provider completion' }));
+        emitProviderCompletion({ ...raceResult.result, error: raceResult.result.error ?? { kind: 'ownership', message: 'ownership fence rejected provider completion' } }, true);
         return { kind: 'ownership-lost' };
       }
     }
 
+    emitProviderCompletion(
+      raceResult.result,
+      Boolean(
+        raceResult.result.error ||
+        raceResult.result.exitCode !== 0 ||
+        raceResult.result.completion === 'truncated' ||
+        raceResult.result.completion === 'interrupted' ||
+        raceResult.result.completion === 'missing'
+      )
+    );
     return { kind: 'ran', result: raceResult.result, durationMs: Date.now() - startedAtMs };
   } finally {
     if (watcher) {

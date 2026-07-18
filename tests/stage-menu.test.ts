@@ -3,6 +3,7 @@ import {
   buildStageActions,
   findResumableSession,
   deriveContinuity,
+  applyAuditContinuityPolicy,
   type LoopMenuState
 } from '../src/stage-menu.js';
 import type { Step } from '../src/state.js';
@@ -231,5 +232,27 @@ describe('stage-menu: deriveContinuity', () => {
     expect(deriveContinuity('agy')).toBe(false);
     expect(deriveContinuity('fake')).toBe(false);
     expect(deriveContinuity('unknown')).toBe(false);
+  });
+});
+
+describe('stage-menu: audit-continuity policy state', () => {
+  it('keeps the seed fresh and arms only after a rejected audit', () => {
+    const actions = buildStageActions({
+      phase: 'rejected-no-followup',
+      latestAuditVersion: 1,
+      pendingFollowUpVersion: 1,
+      decisionPoint: 'in-loop',
+      loopName: 'plan'
+    }).actions;
+    const policy = { enabled: true as const, requestedBy: 'audit-continuity' as const };
+
+    const fresh = applyAuditContinuityPolicy(actions, { phase: 'rejected-no-followup', armed: false, lastVerdict: 'REJECTED' }, policy);
+    const freshContinue = fresh.find(action => action.id === 'continue');
+    expect(freshContinue?.sessionPolicy).toEqual({ followUp: 'new', audit: 'new' });
+
+    const armed = applyAuditContinuityPolicy(actions, { phase: 'rejected-no-followup', armed: true, lastVerdict: 'REJECTED' }, policy);
+    const armedContinue = armed.find(action => action.id === 'continue');
+    expect(armedContinue?.sessionPolicy).toEqual({ followUp: 'resumed', audit: 'resumed' });
+    expect(armed.some(action => action.id === 'start-new-same-session')).toBe(false);
   });
 });

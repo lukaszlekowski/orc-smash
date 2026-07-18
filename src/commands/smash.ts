@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scan, requireApprovedPlanAuditPath } from '../state.js';
 import { runLoop } from '../loop.js';
-import { resolveRunner } from '../runner.js';
+import { resolveRunner, type ResolvedRunner } from '../runner.js';
 import {
   promptLoopSelect,
   promptMaxIterations
@@ -10,11 +10,12 @@ import {
 import { deriveContinuity, type AuditContinuityPolicy } from '../stage-menu.js';
 import { collectRunnerOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
-import { setActiveProjectRoot, quarantineInterruptedResume } from '../interrupted-artifact.js';
+import { setActiveProjectRoot, setActiveRunEventSink, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import type { LoopSpec } from '../manifest.js';
 import { configureSpawnDebug, debugHarnessEvent } from '../debug-spawn.js';
+import { makeRunEvent } from '../run-event.js';
 
 import { resolveDefaultLoop } from '../loop-selector.js';
 
@@ -47,7 +48,7 @@ interface SmashRunSetup {
   loopName: string;
   loopSpec: LoopSpec;
   config: Config;
-  runners: Record<string, { agent: string; model: string }>;
+  runners: Record<string, ResolvedRunner>;
   maxIterations: number;
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
@@ -57,9 +58,6 @@ interface SmashRunSetup {
 }
 
 function deriveAuditContinuityPolicy(options: SmashOptions): AuditContinuityPolicy {
-  if (options.auditContinuity && options.codexAuditContinuity) {
-    return { enabled: false };
-  }
   if (options.auditContinuity) {
     return { enabled: true, requestedBy: 'audit-continuity' };
   }
@@ -77,9 +75,11 @@ async function resolveSmashRunSetup(
   try {
     config = loadConfig(projectRoot);
     debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', result: 'pass' });
+    options.output.emit(makeRunEvent({ type: 'config.loaded', atMs: Date.now(), path: resolve(projectRoot, 'skills.yaml') }));
   } catch (err: any) {
     const msg = `Error: failed to load config or manifest: ${err.message}`;
     debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', detail: err.message, result: 'fail' });
+    options.output.emit(makeRunEvent({ type: 'config.failed', atMs: Date.now(), message: msg }));
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
@@ -124,6 +124,7 @@ async function resolveSmashRunSetup(
 
   const loopSpec = config.manifest.loops[loopName]!;
   debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'loop-selected', detail: loopName, result: 'pass' });
+  options.output.emit(makeRunEvent({ type: 'loop.selected', atMs: Date.now(), loopName }));
 
   // 1a. Mutual-exclusion check before policy derivation
   if (options.auditContinuity && options.codexAuditContinuity) {
@@ -160,6 +161,7 @@ async function resolveSmashRunSetup(
     }
   } else {
     const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
+    options.output.emit(makeRunEvent({ type: 'state.scanned', atMs: Date.now(), latestVerdict: stateScan.latestVerdict ?? 'none', version: stateScan.latestVersion }));
     if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
       const msg = 'latest audit is unparseable; resolve or delete it before smashing';
       debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: 'latest audit unparseable', result: 'fail' });
@@ -173,7 +175,7 @@ async function resolveSmashRunSetup(
   const loopSkills = loopSpec.kind === 'implement'
     ? (loopSpec.implement ? [loopSpec.implement] : [])
     : [loopSpec.audit, loopSpec['follow-up']].filter((s): s is string => !!s);
-  const runners: Record<string, { agent: string; model: string }> = {};
+  const runners: Record<string, ResolvedRunner> = {};
 
   const globalOverrides = {
     agent: options.agent,
@@ -194,56 +196,67 @@ async function resolveSmashRunSetup(
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  // Audit-continuity requires same agent/model for audit and follow-up
-  if (auditContinuity.enabled && loopSpec.audit && loopSpec['follow-up']) {
-    const auditOverride = runnerOverrides[loopSpec.audit];
-    const followUpOverride = runnerOverrides[loopSpec['follow-up']];
-    const auditAgent = auditOverride?.agent ?? options.agent;
-    const followUpAgent = followUpOverride?.agent ?? options.agent;
-    const auditModel = auditOverride?.model ?? options.model;
-    const followUpModel = followUpOverride?.model ?? options.model;
-
-    if (auditAgent !== followUpAgent || auditModel !== followUpModel) {
-      const msg = 'Error: --audit-continuity requires the same agent/model for both audit and follow-up skills.';
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-
-    if (auditContinuity.requestedBy === 'codex-audit-continuity' && auditAgent !== 'codex') {
-      const msg = `Error: --codex-audit-continuity requires codex, but the resolved agent is '${auditAgent}'.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-
-    if (auditAgent !== 'codex' && auditAgent !== 'opencode' && auditAgent !== 'claude') {
-      const msg = `Error: --audit-continuity requires codex, opencode, or claude, but the resolved agent is '${auditAgent}'.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-  }
-
   // Interactive implement: defer runner selection to runLoop's implement branch
   // (promptRunners with forceSelect). Pre-seeding the skill default here would
   // silence that prompt and silently use the configured default model.
   // Non-interactive runs and explicit --agent/--model overrides still seed below.
   const deferImplementToPrompt =
     isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent && !globalOverrides.model;
+  const deferInteractiveStageRunners = isInteractive && loopSpec.kind !== 'implement';
 
   for (const skillId of loopSkills) {
-    if (deferImplementToPrompt) break;
+    if (deferImplementToPrompt || deferInteractiveStageRunners) break;
     try {
       const perSkillOverride = runnerOverrides[skillId];
       const resolved = resolveRunner(skillId, config, globalOverrides, undefined, perSkillOverride);
-      // Store only the Runner contract (agent/model) in the runners map
-      runners[skillId] = { agent: resolved.agent, model: resolved.model };
+      runners[skillId] = resolved;
+      options.output.emit(makeRunEvent({
+        type: 'runner.resolved',
+        atMs: Date.now(),
+        skillId,
+        agent: resolved.agent,
+        model: resolved.model,
+        agentSource: resolved.agentSource,
+        modelSource: resolved.modelSource,
+        inheritedSession: resolved.inheritedSession
+      }));
       debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${runners[skillId].agent} (${runners[skillId].model})`, result: 'pass' });
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
+      options.output.emit(makeRunEvent({ type: 'runner.rejected', atMs: Date.now(), skillId, message: msg }));
       debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} error: ${err.message}`, result: 'fail' });
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
 
+  }
+
+  // Validate continuity against the fully resolved coupled runner pair. Raw
+  // overrides do not contain enough information when a profile or agent-only
+  // override supplies the other half of the pair.
+  if (auditContinuity.enabled && loopSpec.audit && loopSpec['follow-up']) {
+    const auditRunner = runners[loopSpec.audit];
+    const followUpRunner = runners[loopSpec['follow-up']];
+    if (!auditRunner || !followUpRunner) {
+      const msg = 'Error: --audit-continuity requires resolved audit and follow-up runners.';
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+    if (auditRunner.agent !== followUpRunner.agent || auditRunner.model !== followUpRunner.model) {
+      const msg = 'Error: --audit-continuity requires the same agent/model for both audit and follow-up skills.';
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+    if (auditContinuity.requestedBy === 'codex-audit-continuity' && auditRunner.agent !== 'codex') {
+      const msg = `Error: --codex-audit-continuity requires codex, but the resolved agent is '${auditRunner.agent}'.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+    if (!deriveContinuity(auditRunner.agent)) {
+      const msg = `Error: --audit-continuity requires codex, opencode, or claude, but the resolved agent is '${auditRunner.agent}'.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
   }
 
   // 5. Max iterations
@@ -287,10 +300,64 @@ async function resolveSmashRunSetup(
 }
 
 export async function smashAction(options: SmashOptions): Promise<CommandResult> {
+  const flushResult = async (result: CommandResult): Promise<CommandResult> => {
+    try {
+      await options.output.flush();
+      return result;
+    } catch (err: any) {
+      const message = `Output flush failed: ${err?.message ?? String(err)}`;
+      process.stderr.write(`${message}\n`);
+      return result.exitCode === 0 ? { exitCode: 1, message } : result;
+    }
+  };
+
+  const emitTerminal = (result: CommandResult, terminal: { success: boolean; verdict: string; errorKind?: string }): void => {
+    if (terminal.success) {
+      options.output.emit(makeRunEvent({ type: 'run.completed', atMs: Date.now(), verdict: terminal.verdict, outcome: result.message ?? 'completed' }));
+    } else {
+      options.output.emit(makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: result.message ?? 'run failed', errorKind: terminal.errorKind }));
+    }
+  };
+
+  let ownership: import('../run-ownership.js').OwnershipContext | null = null;
+  let ownershipFinalized = false;
+
+  const finish = async (
+    result: CommandResult,
+    terminal: { success: boolean; verdict: string; errorKind?: string } = {
+      success: false,
+      verdict: 'unknown',
+      errorKind: 'setup'
+    },
+    ownershipOutcome: { success: boolean; verdict: string; message?: string } = {
+      success: terminal.success,
+      verdict: terminal.verdict,
+      message: result.message
+    }
+  ): Promise<CommandResult> => {
+    let finalResult = result;
+    if (ownership && !ownershipFinalized) {
+      ownershipFinalized = true;
+      try {
+        const { finalizeOwnedRun } = await import('../run-ownership.js');
+        await finalizeOwnedRun(ownership, ownershipOutcome);
+        options.output.emit(makeRunEvent({ type: 'ownership.finalized', atMs: Date.now(), success: true }));
+      } catch (err: any) {
+        const message = `Finalize owned run failed: ${err?.message ?? String(err)}`;
+        options.output.error(message);
+        options.output.emit(makeRunEvent({ type: 'ownership.finalized', atMs: Date.now(), success: false }));
+        finalResult = { exitCode: finalResult.exitCode === 0 ? 2 : finalResult.exitCode, message };
+        terminal = { success: false, verdict: 'ownership-lost', errorKind: 'ownership' };
+      }
+    }
+    emitTerminal(finalResult, terminal);
+    return flushResult(finalResult);
+  };
+
   if (!options.project) {
     const msg = 'Error: project path is required. Use --project <path>';
     options.output.error(msg);
-    return { exitCode: 1, message: msg };
+    return finish({ exitCode: 1, message: msg }, { success: false, verdict: 'unknown', errorKind: 'config' });
   }
 
   configureSpawnDebug({
@@ -299,32 +366,29 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
   });
 
   const projectRoot = resolve(options.project);
-  
-  let ownership: any = null;
-  try {
-    const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
-    ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
-  } catch (err: any) {
-    const msg = `Ownership setup failed: ${err.message}`;
-    options.output.error(msg);
-    return { exitCode: 2, message: msg };
-  }
 
   try {
+    setActiveRunEventSink((event) => options.output.emit(makeRunEvent(event)));
+    options.output.emit(makeRunEvent({ type: 'run.started', atMs: Date.now() }));
     const setupResult = await resolveSmashRunSetup(projectRoot, options);
     if ('errorResult' in setupResult) {
-      if (ownership) {
-        const { failRun } = await import('../run-ownership.js');
-        try {
-          failRun(ownership.runDir, ownership.projectDir, ownership.runId, setupResult.errorResult.message || 'Setup failed');
-        } catch {}
-      }
-      return setupResult.errorResult;
+      return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
     }
 
     const { setup } = setupResult;
+    try {
+      const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
+      ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
+      if (ownership) {
+        options.output.emit(makeRunEvent({ type: 'ownership.opened', atMs: Date.now(), projectRoot }));
+      }
+    } catch (err: any) {
+      const msg = `Ownership setup failed: ${err.message}`;
+      options.output.error(msg);
+      return finish({ exitCode: 2, message: msg }, { success: false, verdict: 'ownership-lost', errorKind: 'ownership' });
+    }
 
-    let runResult: any;
+    let runResult: import('../loops/runtime.js').LoopReturn;
     let thrownError: any = null;
     try {
       runResult = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
@@ -335,41 +399,45 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         output: options.output,
         ownership,
         runnerOverrides: setup.runnerOverrides,
-        auditContinuity: setup.auditContinuity
+        auditContinuity: setup.auditContinuity,
+        emitTerminal: false
       });
     } catch (err: any) {
       thrownError = err;
       const msg = `Error running loop: ${err.message}`;
       options.output.error(msg);
-      runResult = { success: false, verdict: 'unknown', message: msg };
-    }
-
-    if (ownership) {
-      const { finalizeOwnedRun } = await import('../run-ownership.js');
-      try {
-        await finalizeOwnedRun(ownership, runResult);
-      } catch (err: any) {
-        options.output.error(`Finalize owned run failed: ${err.message}`);
-        return { exitCode: 2, message: err.message };
-      }
+      runResult = { success: false, verdict: 'unknown', message: msg, lastAuditPath: null, terminalEventEmitted: false };
     }
 
     if (thrownError) {
-      return { exitCode: 1, message: thrownError.message };
+      const result = { exitCode: 1, message: thrownError.message };
+      return finish(result, { success: false, verdict: 'unknown', errorKind: 'loop' }, runResult);
     }
 
+    let result: CommandResult;
     if (runResult.success) {
-      return { exitCode: 0, message: runResult.message };
+      result = { exitCode: 0, message: runResult.message };
     } else {
       if (runResult.verdict === 'ownership-lost') {
-        return { exitCode: 2, message: runResult.message };
+        result = { exitCode: 2, message: runResult.message };
+      } else {
+        result = { exitCode: runResult.verdict === 'unknown' ? 1 : 0, message: runResult.message };
       }
-      return { exitCode: runResult.verdict === 'unknown' ? 1 : 0, message: runResult.message };
     }
+    return finish(result, {
+      success: runResult.success,
+      verdict: runResult.verdict,
+      errorKind: runResult.verdict === 'ownership-lost' ? 'ownership' : runResult.verdict === 'unknown' ? 'unknown' : undefined
+    }, runResult);
+  } catch (err: any) {
+    const message = `Error running smash setup: ${err?.message ?? String(err)}`;
+    options.output.error(message);
+    return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'setup' });
   } finally {
     // §3: clear the active project root on completion (normal or error) so a
     // later signal in the same process cannot write a stale interrupt marker.
     setActiveProjectRoot(null);
+    setActiveRunEventSink(null);
   }
 }
 
