@@ -1,10 +1,12 @@
 import type { PanelContext } from './status.js';
 import { renderStatusPanel } from './status-panel.js';
-import { renderPlainPanel } from './plain-render.js';
 import ora, { Ora } from 'ora';
 import chalk from 'chalk';
 import type { StepKind } from './provenance.js';
 import { debugHarnessEvent } from './debug-spawn.js';
+import type { RunEvent, RunEventSink } from './run-event.js';
+import { renderRunEvent } from './plain-event-renderer.js';
+import { EventWriter } from './event-writer.js';
 
 const ENTER_ALT_SCREEN = '\u001B[?1049h';
 const EXIT_ALT_SCREEN = '\u001B[?1049l';
@@ -20,7 +22,9 @@ const timestamp = (): string => {
   return `[${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}]`;
 };
 
-export interface CliOutput {
+export interface CliOutput extends RunEventSink {
+  emit(event: RunEvent): void;
+  flush(): Promise<void>;
   note(message: string): void;
   warn(message: string): void;
   error(message: string): void;
@@ -66,24 +70,18 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
   let liveInterval: ReturnType<typeof setInterval> | null = null;
   let liveActive = false;
   let liveSupplier: (() => PanelContext) | null = null;
-  // Errors raised while the alt-screen live region is active are written to the alt
-  // screen and lost on teardown. Buffer them here and flush to the main screen in
-  // finalSummary so every error is visible with a timestamp.
   const pendingFailures: string[] = [];
   const eventLog: string[] = [];
+  let _fatalWriter: Error | null = null;
 
   const ensureAltScreen = () => {
-    if (altScreenActive) {
-      return;
-    }
+    if (altScreenActive) return;
     process.stdout.write(ENTER_ALT_SCREEN);
     altScreenActive = true;
   };
 
   const restoreMainScreen = () => {
-    if (!altScreenActive) {
-      return;
-    }
+    if (!altScreenActive) return;
     process.stdout.write(EXIT_ALT_SCREEN);
     altScreenActive = false;
   };
@@ -105,21 +103,32 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     liveActive = false;
   };
 
+  const emit = (event: RunEvent): void => {
+    if (_fatalWriter) return;
+    eventLog.push(renderRunEvent(event));
+  };
+
+  const flush = async (): Promise<void> => {
+    if (_fatalWriter) throw _fatalWriter;
+  };
+
   return {
+    emit,
+    flush,
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
-      eventLog.push(`${timestamp()} [NOTE] ${message}`);
+      emit({ type: 'note', atMs: Date.now(), message });
       console.log(chalk.gray(message));
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
-      eventLog.push(`${timestamp()} [WARN] ${message}`);
+      emit({ type: 'warning', atMs: Date.now(), message });
       console.warn(chalk.yellow(`Warning: ${message}`));
     },
     error(message: string) {
       const line = `Error: ${message}`;
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
-      eventLog.push(`${timestamp()} [ERROR] ${message}`);
+      emit({ type: 'error', atMs: Date.now(), message });
       if (liveActive) {
         pendingFailures.push(line);
       } else {
@@ -128,22 +137,21 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
-      eventLog.push(`${timestamp()} [ITERATION] ${ctx.iteration}/${ctx.maxIterations}`);
+      emit({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
     },
     stepStarted(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
-      eventLog.push(`${timestamp()} [STARTED] ${ctx.kind} v${ctx.version} → ${ctx.agent} (${ctx.model})`);
-      if (liveActive) {
-        return;
-      }
-      if (spinner) {
-        spinner.stop();
-      }
+      emit({
+        type: 'step.started', atMs: Date.now(),
+        kind: ctx.kind, skillId: ctx.skillId, agent: ctx.agent, model: ctx.model,
+        version: ctx.version, message: ctx.message
+      });
+      if (liveActive) return;
+      if (spinner) spinner.stop();
       spinner = ora(chalk.blue(ctx.message)).start();
     },
     stepSucceeded(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
-      eventLog.push(`${timestamp()} [OK] ${ctx.kind} v${ctx.version}: ${ctx.message}`);
       if (liveActive) {
         console.log(chalk.green(ctx.message));
         return;
@@ -157,9 +165,7 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     },
     stepFailed(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-failed:${ctx.kind}`, detail: `v${ctx.version} errorKind=${ctx.errorKind ?? 'unknown'} ${ctx.message}`, result: 'fail' });
-      eventLog.push(`${timestamp()} [FAIL] ${ctx.kind} v${ctx.version}: ${ctx.message} (${ctx.errorKind ?? 'unknown'})`);
       if (liveActive) {
-        // alt screen is discarded on teardown — buffer for a main-screen flush.
         pendingFailures.push(ctx.message);
         return;
       }
@@ -177,14 +183,11 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       detach();
       restoreMainScreen();
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
-      // Flush errors that were raised during the live region (alt screen) so they
-      // survive on the main screen with a timestamp instead of being discarded.
       for (const failure of pendingFailures) {
         console.error(chalk.red(`${timestamp()} ${failure}`));
       }
       pendingFailures.length = 0;
 
-      // Flush the full chronological event log to the main screen
       if (eventLog.length > 0) {
         console.log(chalk.cyan('\n── Harness Event Log ──'));
         for (const line of eventLog) {
@@ -218,7 +221,6 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       liveInterval = setInterval(() => {
         process.stdout.write(CURSOR_HOME_CLEAR + renderStatusPanel(supplier()) + '\n');
       }, PANEL_RENDER_INTERVAL_MS);
-      // Rendering is auxiliary; it must not keep a completed CLI or test worker alive.
       liveInterval.unref();
     },
     detachLiveRegion() {
@@ -229,71 +231,65 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
 
 export function createPlainCliOutput(projectRoot?: string): CliOutput {
   const cwd = projectRoot ?? process.cwd();
-  let lastPanelContextJson = '';
+  const writer = new EventWriter(process.stdout);
+
+  const emit = (event: RunEvent): void => {
+    const line = renderRunEvent(event);
+    writer.write(event, line);
+  };
+
+  const flush = async (): Promise<void> => {
+    await writer.flush();
+  };
 
   return {
+    emit,
+    flush,
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
-      console.log(`Note: ${message}`);
+      emit({ type: 'note', atMs: Date.now(), message });
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
-      console.warn(`Warning: ${message}`);
+      emit({ type: 'warning', atMs: Date.now(), message });
     },
     error(message: string) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
-      console.error(`${timestamp()} Error: ${message}`);
+      emit({ type: 'error', atMs: Date.now(), message });
     },
-    iterationStarted(ctx) {
+    iterationStarted(ctx: { iteration: number; maxIterations: number }) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
-      console.log(`Iteration ${ctx.iteration}/${ctx.maxIterations} started`);
+      emit({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
     },
     stepStarted(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
-      console.log(`Step ${ctx.kind} version ${ctx.version} using ${ctx.agent} (${ctx.model}): running...`);
+      emit({
+        type: 'step.started', atMs: Date.now(),
+        kind: ctx.kind, skillId: ctx.skillId, agent: ctx.agent, model: ctx.model,
+        version: ctx.version, message: ctx.message
+      });
     },
     stepSucceeded(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
-      console.log(`Step ${ctx.kind} version ${ctx.version}: succeeded`);
+      emit({
+        type: 'artifact.verified', atMs: Date.now(),
+        path: `v${ctx.version}`, verdict: 'pass'
+      });
     },
     stepFailed(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-failed:${ctx.kind}`, detail: `v${ctx.version} errorKind=${ctx.errorKind ?? 'unknown'} ${ctx.message}`, result: 'fail' });
-      console.log(`${timestamp()} Step ${ctx.kind} version ${ctx.version}: failed (error: ${ctx.errorKind ?? 'unknown'})`);
+      emit({ type: 'error', atMs: Date.now(), message: `${ctx.kind} v${ctx.version}: ${ctx.message}` });
     },
-    renderPanel(context: PanelContext) {
-      const simplified = {
-        loopName: context.loopName,
-        currentIteration: context.currentIteration,
-        maxIterations: context.maxIterations,
-        activeSkillRunner: context.activeSkillRunner,
-        nextStepMessage: context.nextStepMessage,
-        inFlight: context.inFlight,
-        latestVersion: context.latestVersion,
-        readOnly: context.readOnly,
-        timeline: context.timeline.map(s => ({
-          version: s.version,
-          role: s.role,
-          agent: s.agent,
-          model: s.model,
-          verdict: s.verdict,
-          outcome: s.outcome,
-          status: s.status
-        }))
-      };
-      const json = JSON.stringify(simplified);
-      if (json !== lastPanelContextJson) {
-        lastPanelContextJson = json;
-        console.log(renderPlainPanel(context));
-      }
+    renderPanel(_context: PanelContext) {
+      // Plain mode: panel snapshots are replaced by chronological events. No-op.
     },
     finalSummary(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
       if (ctx.success) {
-        console.log(`${timestamp()} Success: ${ctx.message} (Verdict: ${ctx.verdict}, Path: ${ctx.lastAuditPath})`);
+        emit({ type: 'run.completed', atMs: Date.now(), verdict: ctx.verdict ?? 'unknown', outcome: ctx.message });
       } else {
-        console.log(`${timestamp()} Loop terminated: ${ctx.message} (Verdict: ${ctx.verdict})`);
+        emit({ type: 'run.failed', atMs: Date.now(), reason: ctx.message });
       }
-      for (const detail of ctx.details ?? []) console.log(`  ${detail}`);
     },
     attachLiveRegion: () => {},
     detachLiveRegion: () => {}

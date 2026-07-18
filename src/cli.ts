@@ -21,6 +21,12 @@ try {
   // Ignore
 }
 
+/** Commander collector for repeatable options (avoids single-value override). */
+function collectOption(value: string, acc: string[]): string[] {
+  acc.push(value);
+  return acc;
+}
+
 export function buildProgram(): Command {
   const program = new Command();
 
@@ -40,6 +46,10 @@ export function buildProgram(): Command {
     .option('--debug-spawn', 'Write spawn/process debug logs to docs/dev/spawn-debug.log')
     .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
     .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
+    .option('--runner <skill-id=agent>', 'Per-skill agent override (repeatable)', collectOption, [])
+    .option('--runner-model <skill-id=model>', 'Per-skill model override (repeatable)', collectOption, [])
+    .option('--audit-continuity', 'Enable audit continuity (resume sessions across rejected audits)')
+    .option('--codex-audit-continuity', 'Enable audit continuity restricted to Codex (legacy alias)')
     .action(async (options) => {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
       const output = options.plain ? createPlainCliOutput(projectRoot) : createPanelCliOutput(projectRoot);

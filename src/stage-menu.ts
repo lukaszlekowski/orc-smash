@@ -2,6 +2,10 @@ import type { Step, StepKind } from './state.js';
 
 export type SessionPolicy = 'new' | 'resumed';
 
+export type AuditContinuityPolicy =
+  | { enabled: false }
+  | { enabled: true; requestedBy: 'audit-continuity' | 'codex-audit-continuity' };
+
 export interface StageAction {
   id: string;
   group: 'start-new' | 'continue' | 'run-one-step';
@@ -368,4 +372,47 @@ export function findResumableSessionDetail(
 
 export function deriveContinuity(agent: string): boolean {
   return ['codex', 'opencode', 'claude'].includes(agent);
+}
+
+export function applyAuditContinuityPolicy(
+  actions: StageAction[],
+  state: { phase: MenuPhase },
+  policy: AuditContinuityPolicy
+): StageAction[] {
+  if (policy.enabled) {
+    return actions.map(a => {
+      if (a.id === 'start-new-same-session') {
+        return { ...a, disabledReason: 'disabled by --audit-continuity: seed audit is always fresh' };
+      }
+      if (a.group === 'continue' && typeof a.sessionPolicy === 'object') {
+        return {
+          ...a,
+          sessionPolicy: {
+            followUp: 'resumed' as const,
+            audit: 'resumed' as const
+          }
+        };
+      }
+      if (a.group === 'continue' && a.sessionPolicy === 'resumed') {
+        return { ...a, sessionPolicy: 'resumed' as SessionPolicy };
+      }
+      return a;
+    }).filter(a => a.id !== 'start-new-same-session');
+  }
+
+  return actions.map(a => {
+    if (typeof a.sessionPolicy === 'object') {
+      return {
+        ...a,
+        sessionPolicy: {
+          followUp: 'new' as const,
+          audit: 'new' as const
+        }
+      };
+    }
+    if (a.sessionPolicy === 'resumed') {
+      return { ...a, sessionPolicy: 'new' as SessionPolicy };
+    }
+    return a;
+  }).filter(a => a.id !== 'start-new-same-session');
 }

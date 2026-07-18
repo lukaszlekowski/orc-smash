@@ -33,6 +33,11 @@ orc smash --project <path> --plain  # run the loop in append-only scrollback-saf
 orc smash --project <path> \        # run-wide runner override, non-interactive
   --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
 orc smash --project <path> --audit-continuity # run in audit continuity mode (plan/review loops)
+orc smash --project <path> --loop plan --plain \  # per-skill runner overrides (headless)
+  --runner plan-audit=codex \
+  --runner-model plan-audit=gpt-5.6-terra \
+  --runner plan-follow-up=claude \
+  --runner-model 'plan-follow-up=glm-5.2[1m]'
 orc status --project <path>         # read-only: detect where we are, render the status panel
 orc supervisor-contract             # print the supervisor compatibility handshake
 orc ownership status --project <path> # read-only diagnostics for retained owned-run state

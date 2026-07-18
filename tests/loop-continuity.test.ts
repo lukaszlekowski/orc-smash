@@ -5,6 +5,7 @@ import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import { scan } from '../src/state.js';
 import type { RawProcessResult, ProcessRunOptions } from '../src/adapters/utils.js';
 import type { RunInput } from '../src/adapters/types.js';
@@ -60,17 +61,10 @@ vi.mock('../src/interactive.js', () => {
 describe('Loop Continuity Orchestration', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-continuity-test');
   
-  const mockOutput = {
+  const mockOutput = createMockOutput({
     note: vi.fn(),
-    warn: vi.fn(),
-    error: () => {},
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
-    renderPanel: () => {},
-    finalSummary: () => {}
-  };
+    warn: vi.fn()
+  });
 
   beforeEach(() => {
     createTempDir('temp-loop-continuity-test');

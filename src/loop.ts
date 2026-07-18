@@ -21,13 +21,14 @@ import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { initializePlanMetadata } from './plan-metadata.js';
 import { quarantineArtifact, quarantineInterruptedResume } from './interrupted-artifact.js';
 import { resolveNextStep } from './next-step.js';
-import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
+import { buildStageActions, findResumableSession, findResumableSessionDetail, deriveContinuity, applyAuditContinuityPolicy, type AuditContinuityPolicy, type MenuPhase, type StageAction, type SessionPolicy, type LoopMenuState } from './stage-menu.js';
 import { executeLoopStep, type ExecuteLoopStepOutcome } from './loops/execution.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
 import { resolveRecordedRunner } from './loops/runner-selection.js';
 import { missingRequiredArtifact } from './required-artifact.js';
 import { debugHarnessEvent } from './debug-spawn.js';
 import type { OwnershipContext } from './run-ownership.js';
+import type { RunnerOverrideMap } from './runner-overrides.js';
 
 export interface LoopOptions {
   maxIterations: number;
@@ -37,6 +38,8 @@ export interface LoopOptions {
   output: CliOutput;
   seedResolved?: Set<string>;
   ownership?: OwnershipContext | null;
+  runnerOverrides?: RunnerOverrideMap;
+  auditContinuity?: AuditContinuityPolicy;
 }
 
 
@@ -289,7 +292,13 @@ export async function runLoop(
       loopName
     };
 
-    const { actions, recommendedId } = buildStageActions(menuState);
+    let { actions, recommendedId } = buildStageActions(menuState);
+
+    // Apply audit-continuity policy if enabled
+    if (options.auditContinuity) {
+      const modified = applyAuditContinuityPolicy(actions, { phase }, options.auditContinuity);
+      actions = modified;
+    }
 
     let targetLoopSpec = loopSpec;
     if (phase === 'implement-done') {

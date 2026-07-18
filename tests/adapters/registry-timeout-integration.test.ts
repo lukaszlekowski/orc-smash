@@ -73,7 +73,7 @@ describe('config-driven opencode timeout reaches the spawn call site through the
       return { stdout: '', stderr: '', exitCode: 0 };
     };
 
-    const config = createTestConfig({ timeouts: undefined });
+    const config = createTestConfig({ timeouts: {} });
     const registry = createProductionAdapterRegistry(config.registry, { opencodeSpawn: spawnSpy });
     const adapter = registry.adapters.get('opencode')!;
 
@@ -81,7 +81,7 @@ describe('config-driven opencode timeout reaches the spawn call site through the
 
     expect(captures).toHaveLength(1);
     expect(captures[0]!.defaultTimeoutMs).toBeUndefined();
-    expect(captures[0]!.resolved).toBe(600000);
+    expect(captures[0]!.resolved).toBe(900000);
   });
 
   it('env OPENCODE_RUN_TIMEOUT_MS overrides the configured defaultTimeoutMs at the spawn call site', async () => {

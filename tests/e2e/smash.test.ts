@@ -7,19 +7,10 @@ import { loadConfig } from '../../src/config.js';
 import { fakeAdapter, fakeAdapterState } from '../../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../../src/adapters/testing.js';
 import { createTempDir, removeTempDir } from '../helpers/fs.js';
+import { createMockOutput } from '../helpers/mock-output.js';
 
 const testRegistry = createTestAdapterRegistry();
-const mockOutput = {
-  note: () => {},
-  warn: () => {},
-  error: () => {},
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+const mockOutput = createMockOutput();
 const runLoop = (
   projectRoot: string,
   loopName: string,

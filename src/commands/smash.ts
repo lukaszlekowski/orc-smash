@@ -7,7 +7,8 @@ import {
   promptLoopSelect,
   promptMaxIterations
 } from '../interactive.js';
-import { deriveContinuity } from '../stage-menu.js';
+import { deriveContinuity, type AuditContinuityPolicy } from '../stage-menu.js';
+import { collectRunnerOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
@@ -27,6 +28,8 @@ export interface SmashOptions {
   debugSpawnFile?: string;
   output: CliOutput;
   plain?: boolean;
+  runner?: string[];
+  runnerModel?: string[];
   codexAuditContinuity?: boolean;
   auditContinuity?: boolean;
   /**
@@ -49,6 +52,21 @@ interface SmashRunSetup {
   globalOverrides: { agent?: string; model?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
+  runnerOverrides: RunnerOverrideMap;
+  auditContinuity: AuditContinuityPolicy;
+}
+
+function deriveAuditContinuityPolicy(options: SmashOptions): AuditContinuityPolicy {
+  if (options.auditContinuity && options.codexAuditContinuity) {
+    return { enabled: false };
+  }
+  if (options.auditContinuity) {
+    return { enabled: true, requestedBy: 'audit-continuity' };
+  }
+  if (options.codexAuditContinuity) {
+    return { enabled: true, requestedBy: 'codex-audit-continuity' };
+  }
+  return { enabled: false };
 }
 
 async function resolveSmashRunSetup(
@@ -86,6 +104,13 @@ async function resolveSmashRunSetup(
   let loopName = options.loop;
   const isInteractive = !options.loop;
 
+  // Reject per-skill overrides without explicit --loop
+  if (isInteractive && (options.runner?.length || options.runnerModel?.length)) {
+    const msg = 'Error: --runner / --runner-model require an explicit --loop.';
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
+  }
+
   if (isInteractive) {
     const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, config.manifest);
     loopName = await promptLoopSelect(loopKeys, defaultLoop);
@@ -100,9 +125,17 @@ async function resolveSmashRunSetup(
   const loopSpec = config.manifest.loops[loopName]!;
   debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'loop-selected', detail: loopName, result: 'pass' });
 
-  // Defensive check for obsolete options passed programmatically (e.g. in tests)
-  if (options.auditContinuity || options.codexAuditContinuity) {
-    const msg = `Error: unknown option ${options.auditContinuity ? '--audit-continuity' : '--codex-audit-continuity'}`;
+  // 1a. Mutual-exclusion check before policy derivation
+  if (options.auditContinuity && options.codexAuditContinuity) {
+    const msg = 'Error: --audit-continuity and --codex-audit-continuity are mutually exclusive.';
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
+  }
+  const auditContinuity = deriveAuditContinuityPolicy(options);
+
+  // Audit-continuity is only valid for plan/review loops
+  if (auditContinuity.enabled && loopSpec.kind !== 'doc-audit' && loopSpec.kind !== 'code-review') {
+    const msg = `Error: --audit-continuity is not supported for loop '${loopName}' (kind: ${loopSpec.kind}). Only plan and review loops support continuity.`;
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
@@ -136,7 +169,7 @@ async function resolveSmashRunSetup(
     debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: `latestVerdict=${stateScan.latestVerdict}`, result: 'pass' });
   }
 
-  // 4. Runners selection & validation
+  // 3. Runners selection & validation
   const loopSkills = loopSpec.kind === 'implement'
     ? (loopSpec.implement ? [loopSpec.implement] : [])
     : [loopSpec.audit, loopSpec['follow-up']].filter((s): s is string => !!s);
@@ -146,6 +179,48 @@ async function resolveSmashRunSetup(
     agent: options.agent,
     model: options.model
   };
+
+  // Collect per-skill overrides
+  let runnerOverrides: RunnerOverrideMap = {};
+  try {
+    runnerOverrides = collectRunnerOverrides(
+      options.runner ?? [],
+      options.runnerModel ?? [],
+      loopSkills
+    );
+  } catch (err: any) {
+    const msg = `Error: ${err.message}`;
+    options.output.error(msg);
+    return { errorResult: { exitCode: 1, message: msg } };
+  }
+
+  // Audit-continuity requires same agent/model for audit and follow-up
+  if (auditContinuity.enabled && loopSpec.audit && loopSpec['follow-up']) {
+    const auditOverride = runnerOverrides[loopSpec.audit];
+    const followUpOverride = runnerOverrides[loopSpec['follow-up']];
+    const auditAgent = auditOverride?.agent ?? options.agent;
+    const followUpAgent = followUpOverride?.agent ?? options.agent;
+    const auditModel = auditOverride?.model ?? options.model;
+    const followUpModel = followUpOverride?.model ?? options.model;
+
+    if (auditAgent !== followUpAgent || auditModel !== followUpModel) {
+      const msg = 'Error: --audit-continuity requires the same agent/model for both audit and follow-up skills.';
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+
+    if (auditContinuity.requestedBy === 'codex-audit-continuity' && auditAgent !== 'codex') {
+      const msg = `Error: --codex-audit-continuity requires codex, but the resolved agent is '${auditAgent}'.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+
+    if (auditAgent !== 'codex' && auditAgent !== 'opencode' && auditAgent !== 'claude') {
+      const msg = `Error: --audit-continuity requires codex, opencode, or claude, but the resolved agent is '${auditAgent}'.`;
+      options.output.error(msg);
+      return { errorResult: { exitCode: 1, message: msg } };
+    }
+  }
 
   // Interactive implement: defer runner selection to runLoop's implement branch
   // (promptRunners with forceSelect). Pre-seeding the skill default here would
@@ -157,7 +232,10 @@ async function resolveSmashRunSetup(
   for (const skillId of loopSkills) {
     if (deferImplementToPrompt) break;
     try {
-      runners[skillId] = resolveRunner(skillId, config, globalOverrides);
+      const perSkillOverride = runnerOverrides[skillId];
+      const resolved = resolveRunner(skillId, config, globalOverrides, undefined, perSkillOverride);
+      // Store only the Runner contract (agent/model) in the runners map
+      runners[skillId] = { agent: resolved.agent, model: resolved.model };
       debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${runners[skillId].agent} (${runners[skillId].model})`, result: 'pass' });
     } catch (err: any) {
       const msg = `Error: ${err.message}`;
@@ -201,7 +279,9 @@ async function resolveSmashRunSetup(
       maxIterations,
       globalOverrides,
       isInteractive,
-      registry
+      registry,
+      runnerOverrides,
+      auditContinuity
     }
   };
 }
@@ -253,7 +333,9 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         interactive: setup.isInteractive,
         registry: setup.registry,
         output: options.output,
-        ownership
+        ownership,
+        runnerOverrides: setup.runnerOverrides,
+        auditContinuity: setup.auditContinuity
       });
     } catch (err: any) {
       thrownError = err;

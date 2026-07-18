@@ -10,6 +10,7 @@ import { clearInterruptState } from '../src/interrupted-artifact.js';
 import { resetLeaseClock, type OwnershipContext, type ControlRecord } from '../src/run-ownership.js';
 import { createTestConfig } from './helpers/test-config.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 
 /**
  * C2 integration coverage: when the lease expires mid-run, executeLoopStep's
@@ -85,15 +86,7 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
   }
 
   const mockOutput: CliOutput = {
-    note: () => {},
-    warn: () => {},
-    error: () => {},
-    iterationStarted: () => {},
-    stepStarted: () => {},
-    stepSucceeded: () => {},
-    stepFailed: () => {},
-    renderPanel: () => {},
-    finalSummary: () => {},
+    ...createMockOutput(),
     attachLiveRegion: () => {},
     detachLiveRegion: () => {}
   };

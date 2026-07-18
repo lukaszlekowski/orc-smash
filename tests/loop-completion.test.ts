@@ -6,19 +6,10 @@ import { runLoop as baseRunLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapter } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
+import { createMockOutput } from './helpers/mock-output.js';
 
 const testRegistry = createTestAdapterRegistry();
-const mockOutput = {
-  note: () => {},
-  warn: () => {},
-  error: () => {},
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+const mockOutput = createMockOutput();
 const runLoop = (
   projectRoot: string,
   loopName: string,

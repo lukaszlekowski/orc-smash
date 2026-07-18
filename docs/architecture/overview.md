@@ -18,7 +18,8 @@ cli.ts ──▶ commands/{smash,status}.ts
                 │
                 ├─ config.ts        assembles config/providers/*.yaml, config/registry.yaml, and overrides → typed Config
                 ├─ manifest.ts      zod schema + validation (source of truth: skills.yaml, validates model registry)
-                ├─ runner.ts        per-skill {agent,model} resolution (agent model namespaces validation)
+                ├─ runner.ts        per-skill {agent,model} resolution with ResolvedRunner (agentSource/modelSource attribution)
+                ├─ runner-overrides.ts --runner/--runner-model parser, validation, and typed override map
                 ├─ state.ts         scan target docs/dev → normalized artifact and implement facts
                 ├─ follow-up-outcome.ts shared outcome enum, parser, and heading contract
                 ├─ interactive.ts   registry-driven prompts, filtered to configured ∩ runnable agents
@@ -29,7 +30,10 @@ cli.ts ──▶ commands/{smash,status}.ts
                 ├─ prompt-composer  role + skill + resolved inputs → one prompt string
                 ├─ status.ts        pure next-step-message & PanelContext builders
                 ├─ status-panel.ts  pure ASCII boxen/table dashboard string renderer
-                ├─ cli-output.ts    event-driven terminal output seam (panel/plain modes)
+                ├─ cli-output.ts    event-driven terminal output seam with typed RunEvent sink (panel/plain modes)
+                ├─ run-event.ts     typed discriminated RunEvent union + RunEventSink contract
+                ├─ plain-event-renderer.ts pure one-event-to-lines formatting for --plain mode
+                ├─ event-writer.ts  serialized sequence/backpressure/flush writer for canonical stream
                 ├─ run-ownership.ts  schema-versioned admission, lease clock, lifecycle
                 ├─ process-identity.ts + kill-gate.ts  typed identity and signal authority
                 ├─ owned-runtime-registry.ts  fresh live group capabilities
@@ -78,7 +82,7 @@ The codebase is being steered toward these architectural properties:
 
 1. `config` assembles packaged provider catalogues (`config/providers/*.yaml`), runner profiles (`config/runners.yaml`), and timeout settings (`config/registry.yaml`) before loading `skills.yaml`. Each catalogue owns its `models` list and `defaultModel`; manifest skills name only a runner profile.
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
-3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides and validates agent model selections against the registry.
+3. `interactive` proposes loop / per-skill runners / start-point / max-iters (with loop default resolved using implementation facts); `commands/smash` normalizes overrides (including per-skill `--runner`/`--runner-model` entries) and validates agent model selections against the registry, deriving an `AuditContinuityPolicy` from `--audit-continuity`/`--codex-audit-continuity` flags.
 4. `loop` drives the loop execution:
    - For `implement` kind, it requires an approved plan audit and runs `plan-metadata` preflight before provider work. That module migrates a leading legacy Markdown status into parseable YAML front matter with `status: ready`; malformed YAML and unreadable plans fail closed. Once the agent writes its ledger, `implement-ledger` validates the evidence/coverage tables and confidence declaration. `plan-closeout` updates canonical YAML status (`done` or `blocked` at the 0.95 threshold) and appends a structured versioned `## Change Log` entry. Provenance is stamped only after a successful done closeout. A complete unstamped raw ledger is recoverable only through an explicit interactive action, which reuses its version and never spawns a provider.
    - For `doc-audit`/`code-review` loops, it iterates versioned audits and follow-ups.

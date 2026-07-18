@@ -57,6 +57,7 @@ import { runLoop } from '../src/loop.js';
 import { buildFrontMatter } from '../src/provenance.js';
 import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { createMockOutput } from './helpers/mock-output.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { resolveImplementFacts } from '../src/state.js';
 import * as configModule from '../src/config.js';
@@ -66,17 +67,10 @@ const mockedRunLoop = vi.mocked(runLoop);
 
 let lastWarningMessage = '';
 let lastErrorMessage = '';
-const mockOutput = {
-  note: () => {},
+const mockOutput = createMockOutput({
   warn: (msg: string) => { lastWarningMessage = msg; },
-  error: (msg: string) => { lastErrorMessage = msg; },
-  iterationStarted: () => {},
-  stepStarted: () => {},
-  stepSucceeded: () => {},
-  stepFailed: () => {},
-  renderPanel: () => {},
-  finalSummary: () => {}
-};
+  error: (msg: string) => { lastErrorMessage = msg; }
+});
 
 describe('smashAction start-point derivation (consumes canonical rule)', () => {
   const tempDir = join(process.cwd(), 'temp-smash-action');
@@ -452,7 +446,7 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
     expect(lastPromptedDefault).toBe('implement');
   });
 
-  it('rejects --audit-continuity option programmatically', async () => {
+  it('rejects --audit-continuity when agent does not support session resume', async () => {
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
@@ -461,21 +455,62 @@ describe('smashAction setup-time quarantine of interrupted artifacts (§3)', () 
       model: 'fake-model',
       output: mockOutput
     });
+    // fake does not support session resume; the policy validation rejects it
+    // before provider spawn.
     expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('unknown option --audit-continuity');
+    expect(res.message).toContain('requires codex, opencode, or claude, but the resolved agent is');
   });
 
-  it('rejects --codex-audit-continuity option programmatically', async () => {
+  it('rejects mutual --audit-continuity + --codex-audit-continuity', async () => {
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
+      auditContinuity: true,
       codexAuditContinuity: true,
       agent: 'fake',
       model: 'fake-model',
       output: mockOutput
     });
     expect(res.exitCode).toBe(1);
-    expect(res.message).toContain('unknown option --codex-audit-continuity');
+    expect(res.message).toContain('mutually exclusive');
+  });
+
+  it('rejects --audit-continuity for implement loop', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'implement',
+      auditContinuity: true,
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('not supported');
+  });
+
+  it('passes --runner and --runner-model options through to smash', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      loop: 'plan',
+      runner: ['plan-audit=fake'],
+      runnerModel: ['plan-audit=fake-model'],
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    expect(res.exitCode).toBe(0);
+  });
+
+  it('rejects per-skill override without --loop', async () => {
+    const res = await smashAction({
+      project: tempDir,
+      runner: ['plan-audit=fake'],
+      agent: 'fake',
+      model: 'fake-model',
+      output: mockOutput
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.message).toContain('--runner');
   });
 
   it('warns if the audit runner resolves to an unsupported runner', async () => {
