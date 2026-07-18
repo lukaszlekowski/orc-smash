@@ -2,3 +2,4 @@ timeouts:
   claude: 0
   codex: 0
   agy: 0
+  opencode: 0
