@@ -1,19 +1,23 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import type { RunInput, RunResult, RunError } from './types.js';
-import type { LifecycleEvent } from '../adapter-lifecycle.js';
-import type { SpawnRuntime, ProcessGroupHandle } from './process-group.js';
-import type { OwnershipContext } from '../run-ownership.js';
-import { parseOpencodeStream, classifyOpencodeError, diffOpencodeProgress } from './opencode-stream.js';
-import { classifyCompletion } from './completion.js';
-import { debugProcessLifecycle } from '../debug-spawn.js';
+import { spawn, type ChildProcess } from "node:child_process";
+import type { RunInput, RunResult, RunError } from "./types.js";
+import type { LifecycleEvent } from "../adapter-lifecycle.js";
+import type { SpawnRuntime, ProcessGroupHandle } from "./process-group.js";
+import type { OwnershipContext } from "../run-ownership.js";
+import {
+  parseOpencodeStream,
+  classifyOpencodeError,
+  diffOpencodeProgress,
+} from "./opencode-stream.js";
+import { classifyCompletion } from "./completion.js";
+import { debugProcessLifecycle } from "../debug-spawn.js";
 import {
   listOwnedRuntimes,
   terminateOwnedRuntimes,
-  resetOwnedRuntimeRegistryForTests
-} from '../owned-runtime-registry.js';
+  resetOwnedRuntimeRegistryForTests,
+} from "../owned-runtime-registry.js";
 
 /** Built-in opencode execution timeout (ms) when neither env nor config supplies one. */
-export const OPENCODE_BUILT_IN_TIMEOUT_MS = 600000;
+export const OPENCODE_BUILT_IN_TIMEOUT_MS = 900000;
 
 /**
  * Resolve the opencode execution timeout with explicit precedence:
@@ -28,12 +32,18 @@ export const OPENCODE_BUILT_IN_TIMEOUT_MS = 600000;
  * `runProcess` or `spawnOpencode`. It is the single source of truth for the
  * opencode timeout policy.
  */
-export function resolveOpencodeTimeoutMs(opts?: { defaultTimeoutMs?: number }): number {
-  const envRaw = process.env['OPENCODE_RUN_TIMEOUT_MS'];
+export function resolveOpencodeTimeoutMs(opts?: {
+  defaultTimeoutMs?: number;
+}): number {
+  const envRaw = process.env["OPENCODE_RUN_TIMEOUT_MS"];
   let resolved: number;
-  if (envRaw !== undefined && envRaw !== '') {
-    const parsed = /^\d+$/.test(envRaw) ? Number.parseInt(envRaw, 10) : Number.NaN;
-    resolved = Number.isFinite(parsed) ? parsed : opts?.defaultTimeoutMs ?? OPENCODE_BUILT_IN_TIMEOUT_MS;
+  if (envRaw !== undefined && envRaw !== "") {
+    const parsed = /^\d+$/.test(envRaw)
+      ? Number.parseInt(envRaw, 10)
+      : Number.NaN;
+    resolved = Number.isFinite(parsed)
+      ? parsed
+      : (opts?.defaultTimeoutMs ?? OPENCODE_BUILT_IN_TIMEOUT_MS);
   } else {
     resolved = opts?.defaultTimeoutMs ?? OPENCODE_BUILT_IN_TIMEOUT_MS;
   }
@@ -57,7 +67,9 @@ export const CONFIG_ONLY_BUILT_IN_TIMEOUT_MS = 0;
  * This is the single source of truth for the config-only timeout policy; the
  * per-agent aliases below name the same rule for the agents that use it.
  */
-export function resolveConfigOnlyTimeoutMs(opts?: { defaultTimeoutMs?: number }): number {
+export function resolveConfigOnlyTimeoutMs(opts?: {
+  defaultTimeoutMs?: number;
+}): number {
   const t = opts?.defaultTimeoutMs ?? CONFIG_ONLY_BUILT_IN_TIMEOUT_MS;
   return t > 0 ? t : 0;
 }
@@ -71,8 +83,11 @@ export const resolveAgyTimeoutMs = resolveConfigOnlyTimeoutMs;
 
 /** Bound a captured text blob to its tail (default 4000 chars). Shared by the
  *  stderr scanner and the error formatter so the bound lives in one place. */
-export function boundedTail(text: string | null | undefined, max = 4000): string {
-  if (!text) return '';
+export function boundedTail(
+  text: string | null | undefined,
+  max = 4000,
+): string {
+  if (!text) return "";
   return text.length > max ? text.slice(-max) : text;
 }
 
@@ -112,17 +127,19 @@ export interface RawProcessResult {
  * (opencode stream parsing / stderr scanning) lives in the adapters that call
  * this — the shared runner owns only generic process execution.
  */
-export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult> {
+export function runProcess(
+  options: ProcessRunOptions,
+): Promise<RawProcessResult> {
   const { command, args, cwd, timeoutMs = 0 } = options;
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const proc = spawn(command, args, {
       cwd,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
     let timedOut = false;
     let hasClosed = false;
     let killTimeout: NodeJS.Timeout | null = null;
@@ -131,22 +148,22 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
     if (timeoutMs > 0) {
       killTimeout = setTimeout(() => {
         timedOut = true;
-        proc.kill('SIGTERM');
+        proc.kill("SIGTERM");
         forceKillTimeout = setTimeout(() => {
           if (!hasClosed) {
-            proc.kill('SIGKILL');
+            proc.kill("SIGKILL");
           }
         }, 2000);
       }, timeoutMs);
     }
 
-    proc.stdout.on('data', (data) => {
+    proc.stdout.on("data", (data) => {
       const chunk = data.toString();
       stdout += chunk;
       options.onStdoutChunk?.(chunk);
     });
 
-    proc.stderr.on('data', (data) => {
+    proc.stderr.on("data", (data) => {
       stderr += data.toString();
     });
 
@@ -166,20 +183,20 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
 
     debugProcessLifecycle({
       adapter: command,
-      phase: 'spawned',
+      phase: "spawned",
       command,
       args,
       cwd,
-      pid: proc.pid
+      pid: proc.pid,
     });
 
-    proc.on('close', (code, signal) => {
+    proc.on("close", (code, signal) => {
       hasClosed = true;
       cleanup();
       const durationMs = Date.now() - startedAt;
       debugProcessLifecycle({
         adapter: command,
-        phase: 'completed',
+        phase: "completed",
         command,
         args,
         cwd,
@@ -189,18 +206,25 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
         signal,
         timedOut,
         stdout,
-        stderr
+        stderr,
       });
-      resolve({ stdout, stderr, exitCode: code ?? 0, timedOut, signal, durationMs });
+      resolve({
+        stdout,
+        stderr,
+        exitCode: code ?? 0,
+        timedOut,
+        signal,
+        durationMs,
+      });
     });
 
-    proc.on('error', (err) => {
+    proc.on("error", (err) => {
       hasClosed = true;
       cleanup();
       const durationMs = Date.now() - startedAt;
       debugProcessLifecycle({
         adapter: command,
-        phase: 'spawn-error',
+        phase: "spawn-error",
         command,
         args,
         cwd,
@@ -211,14 +235,24 @@ export function runProcess(options: ProcessRunOptions): Promise<RawProcessResult
         timedOut,
         stdout,
         stderr,
-        spawnErrorMessage: err.message
+        spawnErrorMessage: err.message,
       });
-      resolve({ stdout, stderr, exitCode: -1, timedOut, signal: null, durationMs, spawnErrorMessage: err.message });
+      resolve({
+        stdout,
+        stderr,
+        exitCode: -1,
+        timedOut,
+        signal: null,
+        durationMs,
+        spawnErrorMessage: err.message,
+      });
     });
   });
 }
 
-export type ProcessRunner = (options: ProcessRunOptions) => Promise<RawProcessResult>;
+export type ProcessRunner = (
+  options: ProcessRunOptions,
+) => Promise<RawProcessResult>;
 export const realProcessRunner: ProcessRunner = runProcess;
 
 // --- Active child tracking + termination (§3 interrupted-run handling) --------
@@ -230,13 +264,16 @@ export const realProcessRunner: ProcessRunner = runProcess;
 const activeChildren = new Set<ChildProcess>();
 
 /** Register a live child for interrupt-time termination. Auto-removes on exit. */
-export function registerActiveChild(proc: ChildProcess, _handle?: ProcessGroupHandle): void {
+export function registerActiveChild(
+  proc: ChildProcess,
+  _handle?: ProcessGroupHandle,
+): void {
   activeChildren.add(proc);
   const remove = () => {
     activeChildren.delete(proc);
   };
-  proc.once('exit', remove);
-  proc.once('error', remove);
+  proc.once("exit", remove);
+  proc.once("error", remove);
 }
 
 /** Test seam: reset the active-child registry between tests. */
@@ -252,17 +289,23 @@ export function resetActiveChildren(): void {
  */
 export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
   const owned = listOwnedRuntimes();
-  const ownedPids = new Set(owned.map((capability) => capability.bootstrap.pid).filter((pid): pid is number => pid !== undefined));
-  const procs = [...activeChildren].filter((p) => !p.killed && !ownedPids.has(p.pid ?? -1));
+  const ownedPids = new Set(
+    owned
+      .map((capability) => capability.bootstrap.pid)
+      .filter((pid): pid is number => pid !== undefined),
+  );
+  const procs = [...activeChildren].filter(
+    (p) => !p.killed && !ownedPids.has(p.pid ?? -1),
+  );
 
   for (const p of procs) {
     try {
-      p.kill('SIGTERM');
+      p.kill("SIGTERM");
     } catch {
       // Process may have already exited between snapshot and kill.
     }
   }
-  
+
   await terminateOwnedRuntimes(graceMs);
 
   if (procs.length === 0) return;
@@ -270,7 +313,7 @@ export async function terminateActiveChildren(graceMs = 2000): Promise<void> {
   for (const p of procs) {
     try {
       if (!p.killed) {
-        p.kill('SIGKILL');
+        p.kill("SIGKILL");
       }
     } catch {
       // Best-effort; the child is likely already gone.
@@ -295,16 +338,16 @@ function awaitReadyThenResult(spawnRes: {
   return (spawnRes.ready ?? Promise.resolve()).then(
     () => spawnRes.result,
     (readyErr: unknown): RawProcessResult => ({
-      stdout: '',
-      stderr: '',
+      stdout: "",
+      stderr: "",
       exitCode: -1,
       timedOut: false,
       signal: null,
       durationMs: 0,
       ownershipFailure: {
-        message: `Bootstrap registration barrier failed: ${(readyErr as Error)?.message ?? String(readyErr)}`
-      }
-    })
+        message: `Bootstrap registration barrier failed: ${(readyErr as Error)?.message ?? String(readyErr)}`,
+      },
+    }),
   );
 }
 
@@ -327,17 +370,21 @@ export function spawnAgentProcess(
     spawnRuntime?: SpawnRuntime;
     ownership?: OwnershipContext;
   },
-  processRunner: ProcessRunner = realProcessRunner
+  processRunner: ProcessRunner = realProcessRunner,
 ): Promise<RunResult> {
-  if (lifecycle?.onLifecycle && lifecycle.version !== undefined && lifecycle.skillId !== undefined) {
+  if (
+    lifecycle?.onLifecycle &&
+    lifecycle.version !== undefined &&
+    lifecycle.skillId !== undefined
+  ) {
     lifecycle.onLifecycle({
-      type: 'started',
+      type: "started",
       agent: lifecycle.agent,
       model: lifecycle.model,
       version: lifecycle.version,
       skillId: lifecycle.skillId,
       message: command,
-      atMs: Date.now()
+      atMs: Date.now(),
     });
   }
 
@@ -349,7 +396,7 @@ export function spawnAgentProcess(
       command,
       args,
       env: lifecycle.ownership?.env,
-      cwd
+      cwd,
     });
     // Production owned path: await the bootstrap registration barrier (`ready`)
     // before `result`, so codex/claude/agy cannot treat the run as active before
@@ -371,57 +418,66 @@ export function spawnAgentProcess(
     let error: RunError | undefined;
     let failedKind: string | undefined;
     if (raw.ownershipFailure) {
-      error = { kind: 'ownership', message: raw.ownershipFailure.message };
-      failedKind = 'ownership';
+      error = { kind: "ownership", message: raw.ownershipFailure.message };
+      failedKind = "ownership";
     } else if (raw.spawnErrorMessage) {
-      error = { kind: 'spawn', message: `failed to spawn '${command}': ${raw.spawnErrorMessage}` };
-      failedKind = 'spawn';
+      error = {
+        kind: "spawn",
+        message: `failed to spawn '${command}': ${raw.spawnErrorMessage}`,
+      };
+      failedKind = "spawn";
     } else if (raw.timedOut) {
       error = {
-        kind: 'timeout',
+        kind: "timeout",
         message: `agent '${lifecycle?.agent ?? command}' exceeded the configured watchdog timeout`,
-        raw: { timeoutMs }
+        raw: { timeoutMs },
       };
-      failedKind = 'timeout';
+      failedKind = "timeout";
     } else if (raw.exitCode !== 0) {
-      failedKind = 'nonzero-exit';
+      failedKind = "nonzero-exit";
     }
 
     if (lifecycle?.onLifecycle && lifecycle.version !== undefined) {
       if (failedKind) {
         lifecycle.onLifecycle({
-          type: 'failed',
+          type: "failed",
           agent: lifecycle.agent,
           version: lifecycle.version,
           errorKind: failedKind,
-          atMs: Date.now()
+          atMs: Date.now(),
         });
       } else {
         lifecycle.onLifecycle({
-          type: 'completed',
+          type: "completed",
           agent: lifecycle.agent,
           version: lifecycle.version,
-          atMs: Date.now()
+          atMs: Date.now(),
         });
       }
     }
 
-    return { stdout: raw.stdout, stderr: raw.stderr, exitCode: raw.exitCode, error };
+    return {
+      stdout: raw.stdout,
+      stderr: raw.stderr,
+      exitCode: raw.exitCode,
+      error,
+    };
   });
 }
 
 export function scanStderrForError(stderr: string): RunError | null {
   if (!stderr) return null;
-  const combinedPattern = /credential|unauthor|401|api[_-]?key|provider.*(not found|unknown)/i;
+  const combinedPattern =
+    /credential|unauthor|401|api[_-]?key|provider.*(not found|unknown)/i;
   const match = stderr.match(combinedPattern);
   if (!match) return null;
 
   const isConfig = /provider/i.test(match[0]);
   const tail = boundedTail(stderr);
   return {
-    kind: isConfig ? 'config' : 'auth',
+    kind: isConfig ? "config" : "auth",
     message: tail.trim(),
-    raw: tail
+    raw: tail,
   };
 }
 
@@ -430,68 +486,77 @@ export function scanStderrForError(stderr: string): RunError | null {
 export function spawnOpencode(
   input: RunInput,
   args: string[],
-  options?: { defaultTimeoutMs?: number; processRunner?: ProcessRunner }
+  options?: { defaultTimeoutMs?: number; processRunner?: ProcessRunner },
 ): Promise<RunResult> {
   // Precedence: OPENCODE_RUN_TIMEOUT_MS env > options.defaultTimeoutMs (config tier) > built-in 600000.
   // 0 (or env "0") disables the watchdog.
   const timeoutMs = resolveOpencodeTimeoutMs(options);
   const runner = options?.processRunner ?? realProcessRunner;
 
-  let buffer = '';
+  let buffer = "";
   let prevTextLen = 0;
   let prevToolCount = 0;
 
-  if (input.onLifecycle && input.version !== undefined && input.skillId !== undefined) {
+  if (
+    input.onLifecycle &&
+    input.version !== undefined &&
+    input.skillId !== undefined
+  ) {
     input.onLifecycle({
-      type: 'started',
-      agent: 'opencode',
+      type: "started",
+      agent: "opencode",
       model: input.model,
       version: input.version,
       skillId: input.skillId,
-      message: 'opencode',
-      atMs: Date.now()
+      message: "opencode",
+      atMs: Date.now(),
     });
   }
 
-  const onStdoutChunk = input.onLifecycle && input.version !== undefined
-    ? (chunk: string) => {
-        buffer += chunk;
-        const parsed = parseOpencodeStream(buffer);
-        const delta = diffOpencodeProgress(prevTextLen, prevToolCount, parsed);
-        prevTextLen = parsed.finalText.length;
-        prevToolCount = parsed.toolCalls.length;
-        if (delta && input.onLifecycle && input.version !== undefined) {
-          input.onLifecycle({
-            type: 'message',
-            agent: 'opencode',
-            version: input.version,
-            text: delta.textDelta,
-            toolCalls: delta.toolCallDelta,
-            atMs: Date.now()
-          });
+  const onStdoutChunk =
+    input.onLifecycle && input.version !== undefined
+      ? (chunk: string) => {
+          buffer += chunk;
+          const parsed = parseOpencodeStream(buffer);
+          const delta = diffOpencodeProgress(
+            prevTextLen,
+            prevToolCount,
+            parsed,
+          );
+          prevTextLen = parsed.finalText.length;
+          prevToolCount = parsed.toolCalls.length;
+          if (delta && input.onLifecycle && input.version !== undefined) {
+            input.onLifecycle({
+              type: "message",
+              agent: "opencode",
+              version: input.version,
+              text: delta.textDelta,
+              toolCalls: delta.toolCallDelta,
+              atMs: Date.now(),
+            });
+          }
         }
-      }
-    : undefined;
+      : undefined;
 
   let resultPromise: Promise<RawProcessResult>;
   if (input.spawnRuntime) {
     const spawnRes = input.spawnRuntime.spawn({
-      command: 'opencode',
+      command: "opencode",
       args,
       env: input.ownership?.env,
       cwd: input.cwd,
-      onStdoutChunk
+      onStdoutChunk,
     });
     // Production owned path: await the bootstrap registration barrier (`ready`)
     // before `result`, matching the codex/claude/agy shared path.
     resultPromise = awaitReadyThenResult(spawnRes);
   } else {
     resultPromise = runner({
-      command: 'opencode',
+      command: "opencode",
       args,
       cwd: input.cwd,
       timeoutMs,
-      onStdoutChunk
+      onStdoutChunk,
     });
   }
 
@@ -503,46 +568,46 @@ export function spawnOpencode(
 function buildOpencodeRunResult(
   raw: RawProcessResult,
   input: RunInput,
-  timeoutMs: number
+  timeoutMs: number,
 ): RunResult {
   if (raw.ownershipFailure) {
     if (input.onLifecycle && input.version !== undefined) {
       input.onLifecycle({
-        type: 'failed',
-        agent: 'opencode',
+        type: "failed",
+        agent: "opencode",
         version: input.version,
-        errorKind: 'ownership',
-        atMs: Date.now()
+        errorKind: "ownership",
+        atMs: Date.now(),
       });
     }
     return {
-      stdout: '',
+      stdout: "",
       stderr: raw.stderr,
       exitCode: -1,
       error: {
-        kind: 'ownership',
-        message: raw.ownershipFailure.message
-      }
+        kind: "ownership",
+        message: raw.ownershipFailure.message,
+      },
     };
   }
   if (raw.spawnErrorMessage) {
     if (input.onLifecycle && input.version !== undefined) {
       input.onLifecycle({
-        type: 'failed',
-        agent: 'opencode',
+        type: "failed",
+        agent: "opencode",
         version: input.version,
-        errorKind: 'spawn',
-        atMs: Date.now()
+        errorKind: "spawn",
+        atMs: Date.now(),
       });
     }
     return {
-      stdout: '',
+      stdout: "",
       stderr: raw.stderr,
       exitCode: -1,
       error: {
-        kind: 'spawn',
-        message: `failed to spawn 'opencode': ${raw.spawnErrorMessage}`
-      }
+        kind: "spawn",
+        message: `failed to spawn 'opencode': ${raw.spawnErrorMessage}`,
+      },
     };
   }
 
@@ -553,9 +618,9 @@ function buildOpencodeRunResult(
     error = classifyOpencodeError(p.streamError);
   } else if (raw.timedOut) {
     error = {
-      kind: 'timeout',
-      message: 'no completion event before deadline',
-      raw: { timeoutMs }
+      kind: "timeout",
+      message: "no completion event before deadline",
+      raw: { timeoutMs },
     };
   } else {
     const se = scanStderrForError(raw.stderr);
@@ -563,17 +628,21 @@ function buildOpencodeRunResult(
       error = se;
     } else if (raw.exitCode !== 0) {
       error = {
-        kind: 'nonzero-exit',
-        message: `exit code ${raw.exitCode}`
+        kind: "nonzero-exit",
+        message: `exit code ${raw.exitCode}`,
       };
     }
   }
 
-  if (!error && input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+  if (
+    !error &&
+    input.continuity?.mode === "resumed" &&
+    input.continuity.sessionId
+  ) {
     if (p.sessionId !== input.continuity.sessionId) {
       error = {
-        kind: 'server',
-        message: `Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${p.sessionId}`
+        kind: "server",
+        message: `Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${p.sessionId}`,
       };
     }
   }
@@ -581,26 +650,26 @@ function buildOpencodeRunResult(
   if (input.onLifecycle && input.version !== undefined) {
     if (raw.spawnErrorMessage) {
       input.onLifecycle({
-        type: 'failed',
-        agent: 'opencode',
+        type: "failed",
+        agent: "opencode",
         version: input.version,
-        errorKind: 'spawn',
-        atMs: Date.now()
+        errorKind: "spawn",
+        atMs: Date.now(),
       });
     } else if (error) {
       input.onLifecycle({
-        type: 'failed',
-        agent: 'opencode',
+        type: "failed",
+        agent: "opencode",
         version: input.version,
         errorKind: error.kind,
-        atMs: Date.now()
+        atMs: Date.now(),
       });
     } else {
       input.onLifecycle({
-        type: 'completed',
-        agent: 'opencode',
+        type: "completed",
+        agent: "opencode",
         version: input.version,
-        atMs: Date.now()
+        atMs: Date.now(),
       });
     }
   }
@@ -612,8 +681,8 @@ function buildOpencodeRunResult(
     error,
     toolCalls: p.toolCalls,
     stopReason: p.stopReason,
-    sessionId: p.sessionId
+    sessionId: p.sessionId,
   };
-  runResult.completion = classifyCompletion('opencode', runResult);
+  runResult.completion = classifyCompletion("opencode", runResult);
   return runResult;
 }
