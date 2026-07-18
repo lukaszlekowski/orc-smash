@@ -4,7 +4,7 @@ import ora, { Ora } from 'ora';
 import chalk from 'chalk';
 import type { StepKind } from './provenance.js';
 import { debugHarnessEvent } from './debug-spawn.js';
-import type { RunEvent, RunEventSink } from './run-event.js';
+import { makeRunEvent, type RunEvent, type RunEventInput, type RunEventSink } from './run-event.js';
 import { renderRunEvent } from './plain-event-renderer.js';
 import { EventWriter } from './event-writer.js';
 
@@ -107,6 +107,7 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     if (_fatalWriter) return;
     eventLog.push(renderRunEvent(event));
   };
+  const emitEvent = (event: RunEventInput): void => emit(makeRunEvent(event));
 
   const flush = async (): Promise<void> => {
     if (_fatalWriter) throw _fatalWriter;
@@ -117,18 +118,18 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     flush,
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
-      emit({ type: 'note', atMs: Date.now(), message });
+      emitEvent({ type: 'note', atMs: Date.now(), message });
       console.log(chalk.gray(message));
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
-      emit({ type: 'warning', atMs: Date.now(), message });
+      emitEvent({ type: 'warning', atMs: Date.now(), message });
       console.warn(chalk.yellow(`Warning: ${message}`));
     },
     error(message: string) {
       const line = `Error: ${message}`;
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
-      emit({ type: 'error', atMs: Date.now(), message });
+      emitEvent({ type: 'error', atMs: Date.now(), message });
       if (liveActive) {
         pendingFailures.push(line);
       } else {
@@ -137,11 +138,11 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
-      emit({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
+      emitEvent({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
     },
     stepStarted(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
-      emit({
+      emitEvent({
         type: 'step.started', atMs: Date.now(),
         kind: ctx.kind, skillId: ctx.skillId, agent: ctx.agent, model: ctx.model,
         version: ctx.version, message: ctx.message
@@ -237,6 +238,7 @@ export function createPlainCliOutput(projectRoot?: string): CliOutput {
     const line = renderRunEvent(event);
     writer.write(event, line);
   };
+  const emitEvent = (event: RunEventInput): void => emit(makeRunEvent(event));
 
   const flush = async (): Promise<void> => {
     await writer.flush();
@@ -247,23 +249,23 @@ export function createPlainCliOutput(projectRoot?: string): CliOutput {
     flush,
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
-      emit({ type: 'note', atMs: Date.now(), message });
+      emitEvent({ type: 'note', atMs: Date.now(), message });
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
-      emit({ type: 'warning', atMs: Date.now(), message });
+      emitEvent({ type: 'warning', atMs: Date.now(), message });
     },
     error(message: string) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'error', detail: message, result: 'fail' });
-      emit({ type: 'error', atMs: Date.now(), message });
+      emitEvent({ type: 'error', atMs: Date.now(), message });
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: 'iteration-started', detail: `${ctx.iteration}/${ctx.maxIterations}`, result: 'info' });
-      emit({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
+      emitEvent({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
     },
     stepStarted(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
-      emit({
+      emitEvent({
         type: 'step.started', atMs: Date.now(),
         kind: ctx.kind, skillId: ctx.skillId, agent: ctx.agent, model: ctx.model,
         version: ctx.version, message: ctx.message
@@ -271,25 +273,17 @@ export function createPlainCliOutput(projectRoot?: string): CliOutput {
     },
     stepSucceeded(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
-      emit({
-        type: 'artifact.verified', atMs: Date.now(),
-        path: `v${ctx.version}`, verdict: 'pass'
-      });
+      emitEvent({ type: 'note', atMs: Date.now(), message: `${ctx.kind} v${ctx.version} completed: ${ctx.message}` });
     },
     stepFailed(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-failed:${ctx.kind}`, detail: `v${ctx.version} errorKind=${ctx.errorKind ?? 'unknown'} ${ctx.message}`, result: 'fail' });
-      emit({ type: 'error', atMs: Date.now(), message: `${ctx.kind} v${ctx.version}: ${ctx.message}` });
+      emitEvent({ type: 'error', atMs: Date.now(), message: `${ctx.kind} v${ctx.version}: ${ctx.message}` });
     },
     renderPanel(_context: PanelContext) {
       // Plain mode: panel snapshots are replaced by chronological events. No-op.
     },
     finalSummary(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
-      if (ctx.success) {
-        emit({ type: 'run.completed', atMs: Date.now(), verdict: ctx.verdict ?? 'unknown', outcome: ctx.message });
-      } else {
-        emit({ type: 'run.failed', atMs: Date.now(), reason: ctx.message });
-      }
     },
     attachLiveRegion: () => {},
     detachLiveRegion: () => {}

@@ -193,7 +193,7 @@ describe('smashAction start-point derivation (consumes canonical rule)', () => {
     expect(res.exitCode).toBe(0);
     // Explicit override seeds the runner (no interactive prompt).
     const overrideRunners = mockedRunLoop.mock.calls[0]![4] as Record<string, unknown>;
-    expect(overrideRunners['30-simple-implement']).toEqual({ agent: 'fake', model: 'fake-model' });
+    expect(overrideRunners['30-simple-implement']).toMatchObject({ agent: 'fake', model: 'fake-model' });
   });
 
   it('interactive implement (no override) defers runner selection to runLoop — does not silently seed the default', async () => {

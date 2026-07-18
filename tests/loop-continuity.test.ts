@@ -173,6 +173,62 @@ describe('Loop Continuity Orchestration', () => {
     expect(scanResult.timeline[2]!.sessionId).toBe('sess_abc123');
   });
 
+  it('explicit audit continuity arms after a rejected seed and resumes follow-up plus next audit', async () => {
+    const root = setupProject();
+    const config = loadConfig(root);
+    let auditCount = 0;
+    const capturedArgs: string[][] = [];
+
+    const codexProcessRunner = async (options: ProcessRunOptions): Promise<RawProcessResult> => {
+      capturedArgs.push(options.args);
+      const resumed = options.args.includes('resume');
+      const sessionId = resumed ? options.args[options.args.indexOf('resume') + 1]! : 'sess_seed';
+      const prompt = options.args[options.args.length - 1] || '';
+      const outputPath = prompt.match(/Write your output to:\s*([^\s\r\n]+)/i)?.[1];
+      if (outputPath) {
+        const absolute = resolve(root, outputPath);
+        mkdirSync(join(root, 'docs/dev'), { recursive: true });
+        if (outputPath.includes('followup')) {
+          writeFileSync(absolute, '# Plan Follow-up\n\n## Follow-up Outcome\npatched\n');
+        } else {
+          writeFileSync(absolute, `# Plan Audit\n\n## Verdict\n${auditCount++ === 0 ? 'REJECTED' : 'APPROVED'}\n`);
+        }
+      }
+      return {
+        stdout: codexStdout(sessionId, 'completed'),
+        stderr: '',
+        exitCode: 0,
+        timedOut: false,
+        signal: null,
+        durationMs: 10
+      };
+    };
+
+    const registry = createProductionAdapterRegistry(config.registry, { codexProcessRunner });
+    const result = await runLoop(root, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'codex', model: 'gpt-5.5' },
+      'plan-follow-up': { agent: 'codex', model: 'gpt-5.5' }
+    }, {
+      maxIterations: 5,
+      registry,
+      output: mockOutput,
+      interactive: false,
+      auditContinuity: { enabled: true, requestedBy: 'audit-continuity' }
+    });
+
+    expect(result.success).toBe(true);
+    expect(capturedArgs).toHaveLength(3);
+    expect(capturedArgs[0]).not.toContain('resume');
+    expect(capturedArgs[1]).toContain('resume');
+    expect(capturedArgs[2]).toContain('resume');
+
+    const scanResult = scan(root, {
+      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
+      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md'
+    });
+    expect(scanResult.timeline.map(step => step.sessionMode)).toEqual(['fresh', 'resumed', 'resumed']);
+  });
+
   it('fails loudly on thread ID mismatch', async () => {
     const root = setupProject();
     const config = loadConfig(root);

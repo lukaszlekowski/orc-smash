@@ -44,6 +44,12 @@ describe('runner selection', () => {
     expect(resolveRunner('audit', config, { agent: 'codex' })).toMatchObject({ agent: 'codex', model: 'gpt-x' });
     expect(resolveRunner('audit', config, { model: 'opencode-go/y' })).toMatchObject({ agent: 'opencode', model: 'opencode-go/y' });
   });
+  it('re-defaults agent-only per-skill overrides in each provider namespace', () => {
+    expect(resolveRunner('audit', config, {}, undefined, { agent: 'claude' })).toMatchObject({ agent: 'claude', model: 'claude-x', agentSource: 'skill', modelSource: 'agent-default' });
+    expect(resolveRunner('audit', config, {}, undefined, { agent: 'opencode' })).toMatchObject({ agent: 'opencode', model: 'opencode-go/x', agentSource: 'skill', modelSource: 'agent-default' });
+    expect(resolveRunner('audit', config, {}, undefined, { agent: 'codex' })).toMatchObject({ agent: 'codex', model: 'gpt-x', agentSource: 'skill', modelSource: 'agent-default' });
+    expect(resolveRunner('audit', config, {}, undefined, { agent: 'agy' })).toMatchObject({ agent: 'agy', model: 'Gemini', agentSource: 'skill', modelSource: 'agent-default' });
+  });
   it('keeps agy a strict catalogue allow-list', () => {
     expect(isValidModelForAgent('agy', ' Gemini ', config.registry)).toBe(true);
     expect(isValidModelForAgent('agy', 'gpt-x', config.registry)).toBe(false);

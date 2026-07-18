@@ -5,4 +5,5 @@ export type LoopReturn = {
   verdict: string;
   message: string;
   lastAuditPath: string | null;
+  terminalEventEmitted?: boolean;
 };

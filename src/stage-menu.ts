@@ -376,7 +376,7 @@ export function deriveContinuity(agent: string): boolean {
 
 export function applyAuditContinuityPolicy(
   actions: StageAction[],
-  state: { phase: MenuPhase },
+  state: { phase: MenuPhase; armed: boolean; lastVerdict: string | null },
   policy: AuditContinuityPolicy
 ): StageAction[] {
   if (policy.enabled) {
@@ -388,13 +388,13 @@ export function applyAuditContinuityPolicy(
         return {
           ...a,
           sessionPolicy: {
-            followUp: 'resumed' as const,
-            audit: 'resumed' as const
+            followUp: state.armed && state.lastVerdict === 'REJECTED' ? 'resumed' as const : 'new' as const,
+            audit: state.armed && state.lastVerdict === 'REJECTED' ? 'resumed' as const : 'new' as const
           }
         };
       }
       if (a.group === 'continue' && a.sessionPolicy === 'resumed') {
-        return { ...a, sessionPolicy: 'resumed' as SessionPolicy };
+        return { ...a, sessionPolicy: state.armed && state.lastVerdict === 'REJECTED' ? 'resumed' as SessionPolicy : 'new' as SessionPolicy };
       }
       return a;
     }).filter(a => a.id !== 'start-new-same-session');
