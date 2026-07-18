@@ -72,7 +72,8 @@ itself.
   variable > registry configuration `timeouts.opencode` > built-in default of `600000` ms (10 minutes).
   A timeout value of `0` disables the watchdog. `claude`, `codex`, and `agy` are **config-only**:
   `timeouts.<agent>` > built-in `0` (disabled by default); there are **no env vars** for these agents.
-  A timeout surfaces `error.kind === 'timeout'` and a failed lifecycle event.
+  A timeout is an absolute wall-clock deadline, not an inactivity detector; it can expire while a provider
+  is still actively using tools. It surfaces `error.kind === 'timeout'` and a failed lifecycle event.
 - **Interrupted runs are visible and resumable**: `SIGINT`/`SIGTERM` writes a durable marker under
   the active project root (`src/interrupted-artifact.ts`), terminates in-flight provider children
   (`terminateActiveChildren` in `src/adapters/utils.ts`), and exits with the conventional signal

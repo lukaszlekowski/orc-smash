@@ -123,6 +123,8 @@ human-readable names printed by `agy models`; `runner.ts` accepts **only** the c
   `src/adapters/utils.ts`; `spawnOpencode` and `createOpencodeAdapter` use it. There is no
   per-call programmatic override — the option is the config-driven default, not an override. The
   production registry accepts an optional `opencodeSpawn` test seam; production code never passes it.
+  The watchdog is an absolute wall-clock deadline rather than an inactivity detector, so provider
+  progress does not reset it and an actively working run can reach the deadline.
 - **claude / codex / agy** (config-only): `registry.timeouts.<agent>` > built-in `0` (disabled by
   default); there are **no env vars**. The single source of truth is the pure
   `resolveConfigOnlyTimeoutMs` (aliased as `resolveClaudeTimeoutMs` / `resolveCodexTimeoutMs` /
