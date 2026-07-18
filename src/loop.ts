@@ -16,7 +16,7 @@ import type { Config } from './config.js';
 import type { LoopSpec, SkillSpec } from './manifest.js';
 import type { CliOutput } from './cli-output.js';
 import { resolveRunner } from './runner.js';
-import { findHighestRawImplementLedger, isCompleteImplementLedger } from './implement-ledger.js';
+import { findHighestRawImplementLedger, validateImplementLedger } from './implement-ledger.js';
 import { deriveCloseoutSignal, writePlanCloseout } from './plan-closeout.js';
 import { initializePlanMetadata } from './plan-metadata.js';
 import { quarantineArtifact, quarantineInterruptedResume } from './interrupted-artifact.js';
@@ -779,7 +779,8 @@ export async function runLoop(
       return emitFinalSummary(false, 'unknown', missingArtifact.message, null);
     }
     const ledgerContent = readFileSync(absOutputPath, 'utf-8');
-    const isComplete = isCompleteImplementLedger(ledgerContent);
+    const validation = validateImplementLedger(ledgerContent);
+    const isComplete = validation.valid;
     debugHarnessEvent({
       cwd: projectRoot,
       category: 'check',
@@ -788,9 +789,18 @@ export async function runLoop(
       detail: isComplete ? 'valid' : 'invalid/incomplete structure'
     });
     if (!isComplete) {
-      const reason = !ledgerContent.trim()
-        ? 'empty'
-        : 'missing the required evidence table, requirement coverage table, and/or confidence declaration (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")';
+      const reasons: string[] = [];
+      if (!ledgerContent.trim()) {
+        reasons.push('empty');
+      } else {
+        if (!validation.evidenceTableValid || !validation.coverageTableValid) {
+          reasons.push('missing the required evidence table and/or requirement coverage table (see 30-simple-implement SKILL.md "Implementation Evidence Ledger")');
+        }
+        if (!validation.confidenceValid) {
+          reasons.push('missing the required numeric confidence declaration');
+        }
+      }
+      const reason = reasons.join(' and ');
       options.output.stepFailed({
         kind: 'implement',
         skillId: implementSkillId,

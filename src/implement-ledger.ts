@@ -35,7 +35,7 @@ function parseMarkdownTable(content: string, headerPattern: RegExp, expectedColu
       .split('|')
       .slice(1, -1)
       .map((cell) => cell.trim());
-    if (cells.length !== expectedColumns) continue;
+    if (cells.length !== expectedColumns) return null;
     rows.push(cells);
   }
   return rows.length > 0 ? rows : null;
@@ -50,18 +50,39 @@ function hasOnlyCompleteRows(rows: string[][], statusColumn: number): boolean {
   );
 }
 
-export function isCompleteImplementLedger(content: string): boolean {
-  if (!content || !content.trim()) return false;
+export interface ImplementLedgerValidation {
+  valid: boolean;
+  evidenceTableValid: boolean;
+  coverageTableValid: boolean;
+  confidenceValid: boolean;
+}
+
+export function validateImplementLedger(content: string): ImplementLedgerValidation {
+  if (!content || !content.trim()) {
+    return {
+      valid: false,
+      evidenceTableValid: false,
+      coverageTableValid: false,
+      confidenceValid: false
+    };
+  }
 
   const evidenceRows = parseMarkdownTable(content, EVIDENCE_TABLE_HEADER, 5);
   const coverageRows = parseMarkdownTable(content, COVERAGE_TABLE_HEADER, 4);
-  if (!evidenceRows || !coverageRows) return false;
+  const evidenceTableValid = Boolean(evidenceRows && hasOnlyCompleteRows(evidenceRows, 3));
+  const coverageTableValid = Boolean(coverageRows && hasOnlyCompleteRows(coverageRows, 3));
+  const confidenceValid = CONFIDENCE.test(content);
 
-  return (
-    hasOnlyCompleteRows(evidenceRows, 3) &&
-    hasOnlyCompleteRows(coverageRows, 3) &&
-    CONFIDENCE.test(content)
-  );
+  return {
+    valid: evidenceTableValid && coverageTableValid && confidenceValid,
+    evidenceTableValid,
+    coverageTableValid,
+    confidenceValid
+  };
+}
+
+export function isCompleteImplementLedger(content: string): boolean {
+  return validateImplementLedger(content).valid;
 }
 
 export interface RawImplementLedger {

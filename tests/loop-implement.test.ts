@@ -302,6 +302,37 @@ describe('Three-stage pipeline loop/implement integration', () => {
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
     expect(result.message).toMatch(/requirement coverage/i);
+    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
+    expect(existsSync(join(tempDir, 'docs/dev/impl-v1-fake.md'))).toBe(true);
+    expect(readFileSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), 'utf-8')).not.toMatch(/^---\nloop:/);
+  });
+
+  it('gated: implementation reports only the table reason when confidence is valid', async () => {
+    writePlanAudit(1, 'APPROVED');
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
+      const rel = relMatch?.[1]?.trim() ?? '';
+      if (/impl-v\d+-/.test(rel) && rel) {
+        const abs = resolve(input.cwd, rel);
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs,
+          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+          '| --- | --- | --- | --- | --- |\n' +
+          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
+          'State overall confidence: 0.95\n');
+      }
+      return { stdout: 'done', exitCode: 0 };
+    });
+    const config = loadConfig(tempDir);
+    const implementSpec = config.manifest.loops['implement']!;
+    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
+      maxIterations: 5, registry: testRegistry, output: mockOutput,
+      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
+    });
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('unknown');
+    expect(result.message).toMatch(/missing the required evidence table and\/or requirement coverage table/i);
+    expect(result.message).not.toMatch(/confidence/i);
   });
 
   it('gated: implementation fails when ledger has both tables but no confidence declaration', async () => {
@@ -331,7 +362,39 @@ describe('Three-stage pipeline loop/implement integration', () => {
     });
     expect(result.success).toBe(false);
     expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/confidence/i);
+    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
+    expect(result.message).not.toMatch(/evidence table|requirement coverage table/i);
+  });
+
+  it('gated: implementation reports malformed confidence separately when both tables are valid', async () => {
+    writePlanAudit(1, 'APPROVED');
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
+      const rel = relMatch?.[1]?.trim() ?? '';
+      if (/impl-v\d+-/.test(rel) && rel) {
+        const abs = resolve(input.cwd, rel);
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs,
+          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+          '| --- | --- | --- | --- | --- |\n' +
+          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
+          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
+          '| --- | --- | --- | --- |\n' +
+          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
+          'State overall confidence: high\n');
+      }
+      return { stdout: 'done', exitCode: 0 };
+    });
+    const config = loadConfig(tempDir);
+    const implementSpec = config.manifest.loops['implement']!;
+    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
+      maxIterations: 5, registry: testRegistry, output: mockOutput,
+      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
+    });
+    expect(result.success).toBe(false);
+    expect(result.verdict).toBe('unknown');
+    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
+    expect(result.message).not.toMatch(/evidence table|requirement coverage table/i);
   });
 
   it('gated: implementation accepts the skill\'s literal "State overall confidence" wording — v2-audit C1 fix', async () => {
