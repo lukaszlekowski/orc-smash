@@ -22,7 +22,7 @@ const OPENCODE_HINTS: Partial<Record<string, (ctx: MessageContext, msg: string, 
   'config': (_ctx, msg, refStr) =>
     `opencode provider/credential error: ${msg}${refStr}. Run \`opencode providers list\`.`,
   'timeout': (_ctx, _msg, _refStr, ms) =>
-    `opencode run timed out after ${ms}ms (network/gateway stall?). Verify the model/provider with \`opencode models\`.`,
+    `opencode exceeded the configured wall-clock timeout after ${ms}ms. This does not imply a provider stall; the run may still have been active. Increase OPENCODE_RUN_TIMEOUT_MS, set it to 0 to disable the watchdog, or rerun with --debug-spawn to inspect provider activity.`,
   'spawn': (_ctx, msg) =>
     `opencode failed to start: is the 'opencode' CLI installed and on PATH? (${msg})`
 };
