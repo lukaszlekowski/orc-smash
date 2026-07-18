@@ -1,15 +1,20 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const here = dirname(fileURLToPath(import.meta.url));
+const compiledCli = resolve(here, '../dist/src/cli.js');
 
-const cliPath = resolve(__dirname, '../src/cli.ts');
-const tsxPath = resolve(__dirname, '../node_modules/.bin/tsx');
-
-const result = spawnSync(tsxPath, [cliPath, ...process.argv.slice(2)], {
-  stdio: 'inherit'
-});
-process.exit(result.status ?? 0);
+if (!existsSync(compiledCli)) {
+  process.stderr.write('orc: build output not found. Run `pnpm build` first.\n');
+  process.exitCode = 127;
+} else {
+  try {
+    const { main } = await import(pathToFileURL(compiledCli).href);
+    await main(process.argv);
+  } catch (error) {
+    process.stderr.write(`orc: failed to start: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
+}

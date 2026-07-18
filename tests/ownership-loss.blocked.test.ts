@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { writeFileSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { handleOwnershipLoss, clearInterruptState } from '../src/interrupted-artifact.js';
 import type { OwnershipContext, ControlRecord } from '../src/run-ownership.js';
 import type { LoopSpec } from '../src/manifest.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { registerOwnedRuntime, resetOwnedRuntimeRegistryForTests } from '../src/owned-runtime-registry.js';
 
 /**
  * C2 core coverage: handleOwnershipLoss must NEVER throw out of the lease-expiry
@@ -34,9 +35,11 @@ describe('handleOwnershipLoss — structured result, no escape', () => {
     runDir = join(tmp, 'runs', 'run-a');
     projectDir = join(tmp, 'projects', 'hash');
     clearInterruptState();
+    resetOwnedRuntimeRegistryForTests();
   });
 
   afterEach(() => {
+    resetOwnedRuntimeRegistryForTests();
     removeTempDir(tmp);
   });
 
@@ -67,9 +70,11 @@ describe('handleOwnershipLoss — structured result, no escape', () => {
 
   function writeActive(groups: unknown[], state = 'running'): void {
     mkdirSync(runDir, { recursive: true });
+    chmodSync(runDir, 0o700);
     writeFileSync(
       join(runDir, 'active.json'),
       JSON.stringify({
+        schemaVersion: 1,
         cliIdentity: { pid: process.pid, startMs: 0, command: 'orc' },
         groups,
         state,
@@ -91,23 +96,27 @@ describe('handleOwnershipLoss — structured result, no escape', () => {
   });
 
   it('resolves ownership-blocked (does NOT throw) when a registered group cannot be terminated', async () => {
-    // A registered group whose cgroup cannot be validated (cgroup-v2 is
-    // unavailable on non-Linux) makes live-run authorization fail. The previous
-    // implementation threw here; the fix records a terminal ownership-failure
-    // and resolves as blocked so the race never escapes.
+    // A registered group whose leader is gone cannot be verified-owned, so the
+    // kill gate refuses to signal it (a recycled PGID must never be signalled).
+    // The previous implementation threw here; the fix records a terminal
+    // ownership-failure and resolves as blocked so the race never escapes.
+    // pgid 1 is also structurally forbidden, so no real signal is ever sent.
     writeActive([
       {
-        cgroupPath: '/sys/fs/cgroup/orc-smash/run-a',
         pgid: 1,
         leaderPid: 1,
+        sessionId: 1,
         leaderStartMs: 0,
-        command: 'orc'
+        command: 'orc',
+        bootstrapExecutablePath: process.execPath,
+        executablePath: 'orc'
       }
     ]);
     mkdirSync(projectDir, { recursive: true });
+    chmodSync(projectDir, 0o700);
     writeFileSync(
       join(projectDir, 'project.json'),
-      JSON.stringify({ currentRunId: 'run-a', runDir, pid: process.pid, startMs: 0, state: 'starting' }),
+      JSON.stringify({ schemaVersion: 1, currentRunId: 'run-a', runDir, pid: process.pid, startMs: 0, state: 'starting' }),
       { mode: 0o600 }
     );
 
@@ -128,5 +137,59 @@ describe('handleOwnershipLoss — structured result, no escape', () => {
     expect(a.kind).toBe('ownership-stopped');
     // Second entry hit the once-flag and short-circuited.
     expect(b.kind).toBe('ownership-stopped');
+  });
+
+  it('uses the registered fresh capability instead of reconstructing durable authority', async () => {
+    const group = {
+      pgid: 4242,
+      leaderPid: 4242,
+      sessionId: 4242,
+      leaderStartMs: 1,
+      command: 'provider',
+      bootstrapExecutablePath: process.execPath,
+      executablePath: process.execPath
+    };
+    writeActive([group]);
+    const projectRecordPath = join(projectDir, 'project.json');
+    mkdirSync(projectDir, { recursive: true });
+    chmodSync(projectDir, 0o700);
+    writeFileSync(projectRecordPath, JSON.stringify({
+      schemaVersion: 1,
+      currentRunId: 'run-a',
+      runDir,
+      pid: process.pid,
+      startMs: 0,
+      state: 'running'
+    }), { mode: 0o600 });
+
+    const terminate = vi.fn(async () => ({
+      outcome: 'already-gone' as const,
+      sent: false as const,
+      signal: 'SIGTERM' as const,
+      target: { pgid: 4242, leaderPid: 4242, source: 'fresh' as const },
+      reason: 'fixture capability terminated the group'
+    }));
+    const retireIfClosed = vi.fn(async () => {
+      const activePath = join(runDir, 'active.json');
+      const active = JSON.parse(readFileSync(activePath, 'utf8'));
+      active.groups = [];
+      writeFileSync(activePath, JSON.stringify(active), { mode: 0o600 });
+      return true;
+    });
+    registerOwnedRuntime({
+      epoch: Symbol('fresh-test'),
+      runId: 'run-a',
+      runDir,
+      bootstrap: { pid: 4242 } as any,
+      handle: group,
+      terminate,
+      retireIfClosed
+    });
+
+    const result = await handleOwnershipLoss(loopSpec, ctx());
+    expect(result.kind).toBe('ownership-stopped');
+    expect(terminate).toHaveBeenCalledWith(2000);
+    expect(retireIfClosed).toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(join(runDir, 'active.json'), 'utf8')).state).toBe('stopped');
   });
 });

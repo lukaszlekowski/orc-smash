@@ -22,7 +22,7 @@ const OPENCODE_HINTS: Partial<Record<string, (ctx: MessageContext, msg: string, 
   'config': (_ctx, msg, refStr) =>
     `opencode provider/credential error: ${msg}${refStr}. Run \`opencode providers list\`.`,
   'timeout': (_ctx, _msg, _refStr, ms) =>
-    `opencode run timed out after ${ms}ms (network/gateway stall?). Verify the model/provider with \`opencode models\`.`,
+    `opencode exceeded the configured wall-clock timeout after ${ms}ms. This does not imply a provider stall; the run may still have been active. Increase OPENCODE_RUN_TIMEOUT_MS, set it to 0 to disable the watchdog, or rerun with --debug-spawn to inspect provider activity.`,
   'spawn': (_ctx, msg) =>
     `opencode failed to start: is the 'opencode' CLI installed and on PATH? (${msg})`
 };
@@ -70,7 +70,7 @@ export function structuredMessage(result: RunResult, ctx: MessageContext): strin
       case 'spawn':
         return `${agent} failed to start: ${msg}`;
       case 'ownership':
-        return `Run ownership error: ${msg}${refStr}. Inspect the run state directory (${process.env['ORC_RUN_STATE_DIR'] ?? '$XDG_RUNTIME_DIR'}/orc-smash/projects/<hash>/) and clear project.lock only after revalidating that no owned cgroup/processes remain; then relaunch the run.`;
+        return `Run ownership error: ${msg}${refStr}. Inspect project.lock with \`orc ownership status --project <path>\`, inspect the recorded process-group evidence, and use \`orc ownership release --project <path> --yes\` only after confirming that no owned processes remain.`;
       case 'nonzero-exit':
         return `${label} exited with code ${exitCode}. stderr: ${stderrTail}`;
       default:
