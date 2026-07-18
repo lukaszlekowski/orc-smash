@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isCompleteImplementLedger } from '../src/implement-ledger.js';
+import { isCompleteImplementLedger, validateImplementLedger } from '../src/implement-ledger.js';
 
 const EVIDENCE_TABLE =
   '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
@@ -151,5 +151,79 @@ describe('isCompleteImplementLedger', () => {
 
   it('rejects prose without the two required tables even if confidence appears', () => {
     expect(isCompleteImplementLedger('Did some work. ' + CONFIDENCE_SCORE)).toBe(false);
+  });
+});
+
+describe('validateImplementLedger', () => {
+  it('reports all validation categories as valid for a complete ledger', () => {
+    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
+      valid: true,
+      evidenceTableValid: true,
+      coverageTableValid: true,
+      confidenceValid: true
+    });
+  });
+
+  it('classifies an empty ledger as invalid in every category', () => {
+    expect(validateImplementLedger('   \n  ')).toEqual({
+      valid: false,
+      evidenceTableValid: false,
+      coverageTableValid: false,
+      confidenceValid: false
+    });
+  });
+
+  it('classifies missing evidence and missing coverage independently', () => {
+    expect(validateImplementLedger(COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
+      valid: false,
+      evidenceTableValid: false,
+      coverageTableValid: true,
+      confidenceValid: true
+    });
+    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
+      valid: false,
+      evidenceTableValid: true,
+      coverageTableValid: false,
+      confidenceValid: true
+    });
+  });
+
+  it('classifies header-only tables as invalid tables', () => {
+    const headerOnlyEvidence =
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+      '| --- | --- | --- | --- | --- |\n';
+    expect(validateImplementLedger(headerOnlyEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
+      valid: false,
+      evidenceTableValid: false,
+      coverageTableValid: true,
+      confidenceValid: true
+    });
+  });
+
+  it('classifies blank cells and unsupported statuses as invalid tables', () => {
+    const blankEvidence = EVIDENCE_TABLE.replace('src/x.ts', '');
+    const failingCoverage = COVERAGE_TABLE.replace('| pass |', '| pending |');
+    expect(validateImplementLedger(blankEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE).evidenceTableValid).toBe(false);
+    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + failingCoverage + '\n' + STATE_OVERALL_CONFIDENCE).coverageTableValid).toBe(false);
+  });
+
+  it('classifies rows with the wrong number of cells as invalid tables', () => {
+    const incompleteEvidence = EVIDENCE_TABLE.replace(
+      '| Step 1 | src/x.ts | pnpm test | pass | none |',
+      '| Step 1 | src/x.ts | pnpm test | pass |'
+    );
+    expect(validateImplementLedger(incompleteEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE).evidenceTableValid).toBe(false);
+  });
+
+  it('classifies absent and malformed confidence declarations without invalidating valid tables', () => {
+    const withoutConfidence = validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE);
+    const malformedConfidence = validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\nState overall confidence: high\n');
+    expect(withoutConfidence).toEqual({
+      valid: false,
+      evidenceTableValid: true,
+      coverageTableValid: true,
+      confidenceValid: false
+    });
+    expect(malformedConfidence).toEqual(withoutConfidence);
   });
 });
