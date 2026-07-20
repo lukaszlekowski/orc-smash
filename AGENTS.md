@@ -1,21 +1,41 @@
 # AGENTS.md — orc-smash repo rules
 
-> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+> **Active architecture migration:** `docs/dev/plan.md` is the controlling target
+> contract for the config-driven engine. Source and tests describe the current
+> pre-migration runtime until each release lands. During this implementation, the
+> plan overrides legacy-specific rules about `skills.yaml`, hardcoded
+> plan/implement/review stages, fixed verdict words, audit-only continuity flags,
+> filename heuristics, and automatic downstream transitions. It does **not**
+> override the provider, ownership, signal-gate, interruption, timeout, event,
+> logging, or supervisor-compatibility safety invariants in this file.
 
 orc-smash is a **stateless subprocess harness**: it decides what coding-agent CLI to run, when,
 reads the verdict, and loops. The agents do the LLM work; orc-smash never calls a model API
 itself.
 
-## 1. Manifest-as-data is the source of truth
+## 1. The v1 manifest and active plan are the target source of truth
 
-- Loops, skills (with **per-skill runner defaults**), roles, and per-loop input schemas live in
-  `skills.yaml`. No loop logic is hardcoded in TS.
-- `prompt-composer.ts` renders the prompt generically from a loop's declared `inputs:` list.
-- The input source set is `target`, `version`, `priorAudit`, `outputPath`, `planPath`,
-  `checklistPath`. Adding a loop that uses these sources = one YAML entry + two skill files,
-  **no TS changes**. A novel input source needs one resolver line in `prompt-composer.ts`.
-- These docs must stay synchronized with `docs/dev/plan.md` on manifest semantics, the runner
-  model, and verification gates.
+- Replace `skills.yaml` with the single v1 manifest described by
+  `docs/dev/plan.md`: packaged `config/orc-smash.yaml`, optional project
+  `<project>/.orc-smash.yaml`, and explicit `--config` precedence. Do not retain a
+  compatibility loader or a second execution engine.
+- The manifest owns generic skills, roles, reusable approval-loop/task bindings,
+  linear pipeline stage instances, per-skill runner profiles, prompt inputs,
+  output patterns, output contracts, and configurable decision tokens. TypeScript
+  must not branch on the literal workflow names `research`, `plan`, `implement`,
+  or `review`.
+- Role and skill definition paths resolve from `manifestRoot`. Targets, named
+  project inputs, and output patterns resolve from `projectRoot`; missing project
+  inputs affect action availability/preflight and do not invalidate the manifest.
+- `prompt-composer.ts` renders declared inputs generically. Built-ins are `target`,
+  `version`, `priorArtifact`, and `outputPath`; additional project-file inputs are
+  keys in a binding's `files:` map.
+- Workflow artifacts and their provenance—not hardcoded filename categories—are
+  the durable source of run, chain, stage, runner, effort, session, and lineage
+  state. Old artifacts without the v1 identity contract are unclassified rather
+  than specially migrated.
+- Keep this file, `README.md`, and `docs/architecture/overview.md` synchronized
+  with `docs/dev/plan.md` as releases land.
 
 ## 1a. Architecture direction matters as much as feature scope
 
@@ -30,11 +50,11 @@ itself.
 
 ## 2. Runners are per-skill; four real adapters behind one seam
 
-- Each skill declares a `runnerProfile` that selects its default provider; the provider catalogue supplies its default model. The operator can override any skill's
-  runner per run. Different skills in one loop may run on different CLIs/models. On a `CONTINUE`
-  runner per run. Different skills in one loop may run on different CLIs/models. On interactive actions,
-  the operator selects the full upcoming pair of runners up front, with subsequent steps reusing the
-  up-front selections without mid-chain re-prompts.
+- Each skill declares a `runnerProfile` that selects its default provider; the
+  provider catalogue supplies its default model. The operator selects the
+  provider, model, effort, and session strategy independently for each skill in
+  the selected loop/task. A two-skill approval loop selects the complete upcoming
+  pair before execution and does not re-prompt between its steps.
 - **All four providers — `opencode`, `codex`, `claude`, `agy` (Antigravity) — are real runnable
   adapters** (no stubs); `fake` is a deterministic no-spawn adapter for tests.
 - Agent and model are a **coupled pair** (each CLI has its own model-id namespace). Runner
@@ -42,17 +62,16 @@ itself.
   override > `--agent`/`--model` (run-wide) > skill runner profile > provider default model.
   **Changing an agent re-defaults its model** to that agent's catalogue default
   (`registry.providers.<agent>.defaultModel`; catalogues and profiles are never mutated).
-  Per-skill overrides (`--runner <skill>=<agent>` and `--runner-model <skill>=<model>`)
-  are repeatable and require an explicit `--loop`. `runner.ts` resolves this with the
+  During the migration, CLI override scope must follow the selected generic
+  loop/task/pipeline contract rather than assuming only `--loop`. `runner.ts` resolves this with the
   `ResolvedRunner` type carrying `agentSource`/`modelSource` attribution; `loop.ts` selects
   the adapter **per step**
   from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
   excludes `fake`, which is only available in the test registry (`testing.ts`).
-- **Audit filenames follow the skill's convention** `docs/dev/<type>-v{n}-{agent}.md`
-  (the `21-simple-plans-audit` / review skills hardcode this shape). A model slug is
-  intentionally **not** added — diverging from the skill's template risks the agent writing to
-  the templated path and breaking state detection. orc-smash records the model itself via a
-  provenance stamp (`provenance.ts`).
+- **Artifact filenames follow each binding's validated `output.pattern`.** The
+  pattern supplies `{version}` and `{provider}`; model and effort belong in
+  provenance, not filenames. Do not hardcode audit/review filename families in
+  state detection.
 - All agents implement `AgentAdapter` (`buildRun` + `run`). Agents are black boxes — opaque
   native binaries invoked over `stdio + args`. orc-smash never imports them or shares a runtime.
 - Headless agents that must write files require the provider's autonomy flag
@@ -82,40 +101,53 @@ itself.
   the active project root (`src/interrupted-artifact.ts`), terminates in-flight provider children
   (`terminateActiveChildren` in `src/adapters/utils.ts`), and exits with the conventional signal
   code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run
-  never resolves to terminal `unknown` and never advances state incorrectly. `orc status` selects
-  the loop **marker-first** (`marker.loop` beats the audit-history heuristic) and renders the
-  interrupted stage via the display-only `scanForStatus` helper in `src/state.ts`. Normal
-  decision-path `scan()` never includes synthetic interrupted steps.
+  never resolves to terminal `unknown` and never advances state incorrectly. Marker-first
+  authority remains invariant: the current runtime's `marker.loop`/audit-history implementation
+  is migrated to generic binding/chain identity rather than retained as a hardcoded loop rule.
+  Normal decision-path scanning never treats a synthetic interrupted step as completed evidence.
 - **Adding a provider is not "one file."** It requires one adapter file **plus** registry
   wiring, a per-agent default model in config, agent/model-namespace validation, an env-gated
   contract test, an interactive option, and doc updates across
   `AGENTS.md` / `README.md` / `docs/architecture/overview.md`.
 
-## 3. `unknown` is terminal; follow-up is gated on REJECTED
+## 3. `unknown` is terminal; repair is gated on configured retry
 
-- `verdict.ts` returns `APPROVED | REJECTED | unknown` and never throws.
-- `unknown` (missing file, malformed `## Verdict`, stdout parse miss, transport failure) stops
-  the loop for human review. The target is **never** mutated on a parse miss or infrastructure
-  failure.
+- A `decision-artifact` normalizes the binding's configured accepted/retry tokens
+  to `accepted | retry | unknown`; the parser never throws. `APPROVED` and
+  `REJECTED` are defaults in packaged workflows, not runtime literals.
+- `unknown` (missing/malformed output, parse miss, invalid contract, or transport
+  failure) stops the active step safely. The target is never treated as accepted
+  and the workflow never advances on unknown evidence.
 - Execution-completeness signals are part of this rule when an adapter can provide them. In the
   current repo direction, `opencode` is the only provider with a verified completion signal
   (`stopReason`); `codex` and `claude` still rely on exit code + structured error handling until
   proven otherwise.
-- Follow-up runs **only** on a concrete `REJECTED` audit — never on `unknown` or `APPROVED`.
+- Repair runs only on a concrete configured `retry` decision—never on `unknown`
+  or `accepted`. `completion-artifact` separately normalizes `COMPLETED`,
+  `BLOCKED`, or `unknown` as defined by the plan.
 
-## 4. Post-approval offers a second opinion
+## 4. Post-acceptance offers a second opinion
 
-- On APPROVED the loop offers `stop | run-second-opinion`. Second-opinion re-prompts the audit
-  skill's runner (defaulting to a different agent than the one that just approved) and runs the
-  next audit version — the v2+ independent pass the audit skills are built around.
+- After an approval loop reaches its configured accepted decision, the action
+  surface keeps a second opinion visible. A second opinion is an independent
+  chain root with no inherited provider session. It does not automatically start
+  a downstream stage.
 
 ## 5. Statelessness; one runner per target
 
-- The tool holds only config. All per-run target state is read from the
-  target's `docs/dev/` filenames on each run; nothing is persisted or resumed by the tool.
+- The tool holds only config. Per-run state is reconstructed from validated
+  workflow artifacts and provenance on each run; no hidden runtime database or
+  shell-history inference is introduced.
 - One runner per target. Concurrent runs on *different* targets are fine and must not
   interfere (proven by the dual-target isolation e2e).
-- **Audit continuity exception**: When `--audit-continuity` is enabled on the `plan` or `review` loop, the harness offers an opt-in mode where subsequent audit steps in the primary rejected chain resume the same session ID. Supported for `codex`, `opencode`, and `claude` providers. The session ID is captured from the live provider streams on the first step and recorded explicitly in artifact metadata (`sessionMode`, `sessionId`). Resuming does not use `--last` or local shell/process history; the artifact metadata remains the source of truth, and second opinions do not inherit the session. The legacy `--codex-audit-continuity` is kept as a temporary Codex-only alias. Both flags are mutually exclusive.
+- **Per-skill continuity:** continuity is selected per skill after provider/model/
+  effort selection and is enabled only when the selected adapter declares
+  `resumeSession`. Unsupported choices remain visible with a reason. Session IDs
+  are captured from provider streams and persisted in artifact provenance;
+  resumption never uses `--last`, shell history, or a provider-name allowlist.
+  The legacy `--audit-continuity` and `--codex-audit-continuity` flags and their
+  plan/review-only policy are migration inputs to remove, not constraints on the
+  target engine. Second opinions remain fresh.
 
 ## 5a. Commit message hygiene
 
@@ -159,10 +191,11 @@ itself.
 
 ## 6. Plan before implementation; verify every real provider path
 
-- `docs/dev/plan.md` is the design source of truth and is audited (`21-simple-plans-audit`) and
-  repaired (`22-simple-plans-follow-up`) before implementation. Do not implement features that
-  contradict an un-approved plan. Keep audit-response bookkeeping in versioned audit artifacts,
-  not in the plan body.
+- `docs/dev/plan.md` is the design source of truth for the active migration and
+  `docs/dev/research.md` records its product rationale. Implement the plan's
+  release boundaries and acceptance gates even where the current source or
+  legacy descriptions differ. Do not use an old audit artifact as an architectural
+  constraint; audit-response bookkeeping remains in versioned artifacts.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The
   contract-gated real provider paths are `opencode`, `codex`, and `claude`; `agy` remains a real
