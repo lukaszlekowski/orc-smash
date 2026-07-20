@@ -1,11 +1,18 @@
 # orc-smash
 
-> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+> **Architecture migration:** the commands marked as current below describe the
+> pre-migration release. The target architecture and implementation contract are
+> [docs/dev/plan.md](./docs/dev/plan.md), supported by
+> [docs/dev/research.md](./docs/dev/research.md). During that implementation, the
+> plan supersedes legacy assumptions about `skills.yaml`, fixed
+> plan/implement/review stages, audit-specific verdicts and continuity flags,
+> filename heuristics, and automatic stage transitions. Existing process-safety,
+> provider, event, logging, and supervisor contracts remain mandatory.
 
 A thin **TypeScript CLI harness** that drives coding-agent CLIs (**opencode, codex, claude, agy** —
-all real) through skill-based `audit ↔ follow-up` loops until a verdict is **APPROVED**, then
-stops for human review (or runs a second-opinion pass). Stateless — all per-run state is derived
-from the target project's filenames. No DB, no S3, no web UI.
+all real) through configured approval loops and one-off tasks. The current release instantiates
+fixed `audit ↔ follow-up` workflows; the target engine makes those workflows data. Stateless —
+all per-run state is reconstructed from target-project artifacts. No DB, no S3, no web UI.
 
 The binary is **`orc`**; the main command is **`orc smash`**.
 
@@ -25,7 +32,7 @@ Each provider's complete catalogue lives in `config/providers/<provider>.yaml`, 
 
 Interactive selection lets you choose from configured models or provide a validated custom model.
 
-## Commands
+## Current released commands
 
 ```bash
 orc smash --project <path>          # run the audit↔follow-up loop (interactive if flags omitted)
@@ -98,7 +105,11 @@ bounded fresh-capability cleanup, process isolation, canary survival, and fail-c
 restart behavior. See the companion repository's `README.md` and
 `docs/release-gate-result.md` for installation details and current evidence.
 
-## How it works
+## Current released workflow
+
+The following describes the runtime before the config-driven migration. It is
+useful for operating the current build, but it must not be treated as a
+restriction on implementing `docs/dev/plan.md`.
 
 - **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
 - **Up-front interactive runner selection:** In interactive mode, selecting a start-new or continue action prompts the operator to choose the full upcoming pair of runners up front (for both steps in the segment, such as audit and follow-up). The selections are reused without mid-chain re-prompts, and any step kind with a prior resumable session skips prompting and inherits its runner automatically.
@@ -114,15 +125,40 @@ restart behavior. See the companion repository's `README.md` and
 - **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
 - **Audit Continuity (Opt-in):** By passing `--audit-continuity`, subsequent audit steps in the `plan` or `review` loop primary rejected chain will resume the session ID of the first run. Supported for `codex`, `opencode`, and `claude` providers. Resumption is artifact-driven (using the `sessionMode` and `sessionId` metadata stamped in front matter), never `--last`-driven or history-driven, and second-opinion audits are kept fresh and independent. The legacy `--codex-audit-continuity` remains supported as a temporary alias for Codex runs, but is mutually exclusive with `--audit-continuity`.
 
-## Architecture direction
+## Target architecture
 
-Current development is steering the harness toward a cleaner runtime architecture:
+The committed implementation plan replaces the fixed workflow with these
+contracts:
+
+- **One clean manifest:** packaged `config/orc-smash.yaml`, optional project
+  `.orc-smash.yaml`, and explicit `--config` precedence replace `skills.yaml`.
+  There is no compatibility loader or parallel legacy engine.
+- **Generic bindings:** reusable approval loops and one-off tasks declare their
+  targets, prompt inputs, output patterns, output contracts, configurable
+  decision tokens, and per-skill runner profiles. Linear pipelines contain
+  uniquely identified stage instances referencing those reusable bindings.
+- **Operator-controlled progression:** the tool may display evidence-backed next
+  stage suggestions, but it never starts a downstream stage automatically.
+  Direct loop/task starts are ad hoc; only an explicit pipeline start or confirmed
+  suggested-stage continuation carries pipeline identity.
+- **Artifact-derived state:** a generic global artifact index reconstructs
+  binding, chain, pipeline, stage, provider, model, effort, session, fingerprint,
+  and lineage state from validated provenance. Legacy artifacts lacking the v1
+  identity contract are shown as unclassified.
+- **Per-skill continuity:** provider, model, effort, and session strategy are
+  selected for each skill. Unsupported capabilities remain visible with an
+  explanation; second opinions use fresh independent chains.
+- **Safe recovery:** unavailable actions stay visible with reasons. Recoverable
+  failures return to the appropriate interactive menu or fail clearly in
+  headless mode; critical ownership and identity failures remain fail-closed.
+
+The implementation also retains these structural principles:
 
 - **Single-source-of-truth rules:** artifact-path rendering/parsing, next-step resolution, and
   shared runtime contracts should each live in one clearly named place.
 - **Purposeful module boundaries:** new files are added only when they own a stable
   responsibility. Avoid generic buckets such as `helpers.ts`, `common.ts`, or `misc.ts`.
-- **Thin orchestration:** `loop.ts` should orchestrate, while stable runtime seams own process
+- **Thin orchestration:** generic loop/task executors orchestrate, while stable runtime seams own process
   execution, artifact conventions, and decision logic.
 - **Provider-specific behavior behind adapters:** shared runtime code should consume normalized
   signals; provider-specific parsing and remediation stay in the adapter layer.
@@ -144,8 +180,8 @@ Current development is steering the harness toward a cleaner runtime architectur
   contract; ordinary `orc smash` invocations do not opt into it automatically.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
-[docs/roadmap.md](./docs/roadmap.md) for staged direction, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the current Batch A implementation plan.
+[docs/dev/research.md](./docs/dev/research.md) for product rationale, and
+[docs/dev/plan.md](./docs/dev/plan.md) for the active implementation contract.
 
 ## Verification and CI
 
@@ -176,5 +212,6 @@ Use these docs with different expectations:
 
 - [docs/architecture/overview.md](./docs/architecture/overview.md): canonical architecture overview
 - [docs/roadmap.md](./docs/roadmap.md): staged roadmap and architectural direction
-- [docs/dev/plan.md](./docs/dev/plan.md): current implementation plan
+- [docs/dev/research.md](./docs/dev/research.md): product direction and design rationale
+- [docs/dev/plan.md](./docs/dev/plan.md): active config-driven implementation contract
 - [AGENTS.md](./AGENTS.md): repository rules and invariants

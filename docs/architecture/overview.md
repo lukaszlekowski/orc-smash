@@ -1,12 +1,20 @@
 # orc-smash — Architecture Overview
 
-> Temporary notice: This document may contain outdated guidance and will be updated in the near future. Verify behavior against the current source and tests.
+> **Migration authority:** `docs/dev/plan.md` defines the target config-driven
+> architecture and overrides the legacy-specific portions of the current-state
+> descriptions below while it is implemented. In particular, `skills.yaml`, the
+> hardcoded plan/implement/review pipeline, audit-specific verdicts and continuity
+> flags, filename-based stage inference, and automatic downstream transitions are
+> not architectural invariants. Source and tests remain the authority for what the
+> currently built binary does. Provider boundaries, typed events, ownership,
+> interruption, timeouts, authorized signalling, and supervisor compatibility
+> remain mandatory throughout the migration.
 
-orc-smash is a **stateless subprocess harness** that drives coding-agent CLIs through skill-based
-`audit ↔ follow-up` loops until a verdict is APPROVED, then stops for human review (or runs a
-second-opinion pass). The agents do the LLM work; orc-smash decides what to run, when, reads the
-result, and loops. Detailed implementation planning for current runtime cleanup lives in
-`docs/dev/plan.md`. Rules: `../AGENTS.md`.
+orc-smash is a **stateless subprocess harness** that drives coding-agent CLIs through configured
+approval loops and one-off tasks. The current release instantiates fixed
+`audit ↔ follow-up` workflows; the target engine makes those workflows data. The agents do the
+LLM work; orc-smash decides what to run, when, reads the result, and loops. The active product rationale is `docs/dev/research.md`; the
+implementation contract is `docs/dev/plan.md`. Rules: `../AGENTS.md`.
 
 This document is the canonical architecture overview for the repo. `README.md` should stay
 shorter and point here rather than restating the same internals in full.
@@ -41,9 +49,10 @@ cli.ts ──▶ commands/{smash,status}.ts
 ```
 
 `bin/orc.js` is the stable production entrypoint and loads `dist/src/cli.js` in the
-same Node process. `pnpm build` cleans and compiles production `src/` to `dist/src/`
-and copies `config/`, `roles/`, `skills/`, `skills.yaml`, `package.json`, and the
-detached process-group bootstrap into the packaged runtime layout. Missing build
+same Node process. Before R1, `pnpm build` cleans and compiles production `src/` to
+`dist/src/` and copies `config/`, `roles/`, `skills/`, `skills.yaml`, `package.json`, and the
+detached process-group bootstrap into the packaged runtime layout. R1 replaces
+the packaged `skills.yaml` with `config/orc-smash.yaml` as specified by the plan. Missing build
 output is a clear `pnpm build` error; the bin never spawns `tsx` or a second CLI.
 
 `orc supervisor-contract` is the explicit cross-repository handshake. It emits one
@@ -63,9 +72,21 @@ To guarantee test isolation:
 - `vitest.config.ts` registers `tests/setup.ts` as a global setup file.
 - `tests/setup.ts` enforces the invariant that the global fake-adapter state is reset `beforeEach` test, preventing leakages between tests while letting file-local overrides win.
 
-## Target direction
+## Target config-driven architecture
 
-The codebase is being steered toward these architectural properties:
+The migration has a concrete three-release contract, not an open-ended cleanup:
+
+- **R1 — generic engine:** replace `skills.yaml` with the single v1 manifest;
+  introduce reusable approval-loop/task bindings, pipeline stage instances,
+  output contracts, generic artifact identity/indexing, and public ad-hoc
+  `--loop`/`--task` plus explicit `--pipeline` execution.
+- **R2 — operator surface and continuity:** replace hardcoded menus with visible
+  config-driven actions and reasons; select provider/model/effort/session strategy
+  per skill using adapter capabilities rather than provider or loop allowlists.
+- **R3 — pipelines and budgets:** render evidence-backed suggestions without
+  automatic execution and add safe iteration extension after retry decisions.
+
+The target is constrained by these architectural properties:
 
 - **Clear responsibility modules:** artifact path rules, next-step rules, and shared runtime
   contracts each live in one clearly named module.
@@ -75,10 +96,18 @@ The codebase is being steered toward these architectural properties:
   results; provider-specific stream parsing and remediation stay in adapter code.
 - **No generic helper sprawl:** new files are justified only by stable responsibility, shared
   domain rule, or testable contract.
-- **Incremental evolution:** runtime seams should support later work like plain rendering and live
-  status without forcing a top-down rewrite.
+- **One engine:** no compatibility manifest loader, hidden legacy execution path,
+  or special migration rules for old workflow artifacts.
+- **Operator authority:** status may suggest a next stage and explain why, but only
+  an explicit pipeline start or confirmed suggested-stage action authorizes it.
+- **Durable generic identity:** artifacts carry binding, pipeline stage, chain,
+  runner, effort, session, fingerprint, and immediate-parent provenance. Missing
+  v1 identity makes an artifact unclassified, never implicitly valid.
 
-## Data flow — one `orc smash` run
+## Current pre-migration data flow
+
+This section documents the currently built binary for debugging and staged
+replacement. It does not constrain the target implementation.
 
 1. `config` assembles packaged provider catalogues (`config/providers/*.yaml`), runner profiles (`config/runners.yaml`), and timeout settings (`config/registry.yaml`) before loading `skills.yaml`. Each catalogue owns its `models` list and `defaultModel`; manifest skills name only a runner profile.
 2. `state.scan` globs target's versioned artifacts, parses metadata, and scans implementation ledgers to map current progress across plan, implement, and review stages.
@@ -92,6 +121,30 @@ The codebase is being steered toward these architectural properties:
    - `review` loops APPROVED verdict offers `stop | run-second-opinion` (`run-second-opinion` is offered only when a different configured+runnable agent exists).
 6. Each execution step consumes its resolved runner (resolved up-front in interactive mode) → `prompt-composer` assembles role + skill + inputs → the adapter spawns the agent → versioned output is verified and metadata provenance is written.
 7. `cli.ts` serves as the single process-exit boundary mapping structured `CommandResult` to process exit code.
+
+## Target data flow
+
+1. `config` selects `--config`, project `.orc-smash.yaml`, or packaged
+   `config/orc-smash.yaml`; it retains separate `manifestRoot` and `projectRoot`.
+2. The v1 manifest validates generic roles, skills, approval loops, tasks,
+   pipeline stage instances, runner profiles, prompt inputs, output patterns,
+   output contracts, and decision-token mappings without requiring project inputs
+   to exist.
+3. A generic artifact index scans declared patterns and validates provenance,
+   contracts, lineage, and fingerprints. It constructs the global project
+   snapshot and evidence-bearing continuation candidates.
+4. The operator chooses an ad-hoc loop/task, an explicit first-stage pipeline
+   start, or a confirmed suggested-stage continuation. Unavailable choices remain
+   visible with reasons; no downstream stage starts automatically.
+5. Runner selection resolves provider, model, effort, and session strategy per
+   skill. Unsupported capabilities remain visible and disabled.
+6. The generic loop or task executor resolves declared inputs, captures input
+   identity, composes role + skill + inputs, invokes the adapter through existing
+   ownership/safety boundaries, verifies the declared output contract, and stamps
+   result identity and immediate lineage.
+7. Recoverable interactive errors return to the appropriate menu; headless errors
+   emit a visible terminal result and exit. Safety-critical ambiguity remains
+   fail-closed.
 
 ## Execution completeness
 
@@ -260,9 +313,11 @@ supervisor release gate.
   skill declares its own agent/model (overridable per run). Agent and model are a coupled pair —
   switching agent re-defaults model. The adapter is selected per step, so stages can mix CLIs.
 - **Explicit Registries:** The production adapter registry registers only real adapters; test-only adapters (such as `fake`) are registered via a separate test registry constructor (`testing.ts`).
-- **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`.
-  A loop using the existing input sources (`target`, `version`, `priorAudit`, `outputPath`,
-  `planPath`, `checklistPath`) is added via YAML only (no TS).
+- **Manifest-as-data:** the target source of truth is the single v1
+  `config/orc-smash.yaml` schema (or an identically shaped project/explicit
+  override). It declares reusable loops/tasks and linear pipeline stage
+  instances. Built-in prompt sources are `target`, `version`, `priorArtifact`,
+  and `outputPath`; binding `files:` keys provide named project inputs.
 - **One composed prompt:** each agent run gets role + skill + inputs — no task content is invented.
 - **Single-source-of-truth runtime rules:** path rendering/parsing, next-step resolution, and
   shared contracts should not be reimplemented ad hoc across multiple files.
@@ -274,8 +329,10 @@ supervisor release gate.
 - **Opencode execution timeout is config-driven-first:** precedence is `OPENCODE_RUN_TIMEOUT_MS`
   env > `registry.timeouts.opencode` > built-in 600000 ms. `0` disables. The pure
   `resolveOpencodeTimeoutMs` function in `src/adapters/utils.ts` is the single source of truth.
-- **`unknown` is terminal:** a missing/malformed verdict stops the loop for human review; the
-  target is never mutated on a parse miss. Follow-up runs only on a concrete REJECTED audit.
+- **`unknown` is terminal:** configured decision tokens normalize to
+  `accepted | retry | unknown`; repair runs only after concrete retry. Missing or
+  malformed output never advances a stage. `completion-artifact` independently
+  normalizes `COMPLETED | BLOCKED | unknown`.
 - **Black-box agents:** providers are opaque native binaries invoked over stdio + args; the
   harness never imports them. Headless writes require the provider's autonomy flag.
 - **Stateless; isolated per target:** the tool holds only config; all per-run target state is
@@ -285,5 +342,9 @@ supervisor release gate.
   `src/kill-gate.ts`, behind structural + identity guards. App-owned mode uses portable POSIX
   process groups; an unverifiable, forbidden, or recycled PGID is never signalled — the run
   fail-closes instead.
-- **Audit continuity (opt-in):** As an explicit architectural exception to pure statelessness, the `--audit-continuity` option allows audit runs in the `plan` or `review` loops to resume the same session ID for the `codex`, `opencode`, and `claude` providers. The session ID is captured from the live provider streams and persisted explicitly in artifact metadata (`sessionMode`, `sessionId`). Resuming is strictly artifact-driven (re-read from front matter) rather than hidden-session-driven or history-driven, and second opinions remain fresh. The legacy `--codex-audit-continuity` flag is kept as a temporary Codex-only alias. both flags are mutually exclusive.
+- **Per-skill continuity:** session strategy follows each selected adapter's
+  `resumeSession` capability. Session IDs are persisted in artifact provenance;
+  resumption is never inferred from `--last` or shell history. Unsupported
+  options stay visible with reasons, and second opinions remain fresh. Legacy
+  audit-only continuity flags are removed by the migration.
 - **Verify every real path & CI:** a GitHub Actions CI workflow gates the codebase using deterministic checks (typecheck + test runs on `fake` adapter). Real-provider paths for opencode, codex, and claude remain covered by env-gated contract tests; agy stays a real adapter but is verified manually from an already-authenticated shell because its browser login flow is not suitable for an automated contract gate.
