@@ -136,7 +136,7 @@ export function loadPackagedRegistry(toolRoot: string): ModelRegistry {
   try {
     const global = RegistryTimeoutsSchema.parse(YAML.parse(readFileSync(registryPath, 'utf-8')));
     const runners = RunnersSchema.parse(YAML.parse(readFileSync(runnersPath, 'utf-8')));
-    const providers: Record<string, { models: string[]; defaultModel: string; efforts?: string[]; defaultEffort?: string }> = {};
+    const providers: Record<string, z.infer<typeof ProviderCatalogSchema>> = {};
     const seen = new Set<string>();
     for (const file of readdirSync(providersRoot).sort()) {
       if (!file.endsWith('.yaml')) continue;

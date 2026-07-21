@@ -98,7 +98,7 @@ describe('generic per-step continuity', () => {
       {
         'plan-audit': { agent: 'fake', model: 'fake-model', effort: 'medium' },
       },
-      { maxIterations: 3, registry: createTestAdapterRegistry(), output, interactive: false },
+      { maxIterations: 3, registry: createTestAdapterRegistry(), output, interactive: false, globalOverrides: { sessionStrategy: 'resume-per-skill' } },
     );
 
     expect(result.success).toBe(true);

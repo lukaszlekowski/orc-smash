@@ -63,6 +63,10 @@ export function parseArtifactMetaClassified(
     return { status: 'unclassified', reason: 'Artifact provenance front matter is malformed.', meta };
   }
 
+  if (raw.status === 'interrupted') {
+    return { status: 'interrupted', reason: 'Artifact stamped as interrupted.', meta };
+  }
+
   const requiredFields = [
     'schemaVersion',
     'pipelineId',

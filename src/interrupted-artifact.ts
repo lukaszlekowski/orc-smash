@@ -19,7 +19,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { resolve, join, relative, basename, dirname } from 'node:path';
-import type { StepKind } from './provenance.js';
+import { buildFrontMatter, type StepKind, type ChainMode } from './provenance.js';
 import { renderPattern, patternToRegex } from './patterns.js';
 import { terminateActiveChildren } from './adapters/utils.js';
 import type { RunEventInput } from './run-event.js';
@@ -55,6 +55,14 @@ export interface InterruptedMarker {
   stageId?: string | null;
   artifactIdentity?: string;
   parentArtifactIdentity?: string | null;
+  bindingKind?: string;
+  bindingId?: string;
+  chainMode?: ChainMode;
+  inputFingerprint?: string;
+  resultFingerprint?: string;
+  sessionMode?: string;
+  sessionId?: string;
+  status?: 'interrupted';
 }
 
 /** Active step context: non-null only while a provider subprocess is live. */
@@ -73,6 +81,13 @@ export interface StepCtx {
   stageId?: string | null;
   artifactIdentity?: string;
   parentArtifactIdentity?: string | null;
+  bindingKind?: string;
+  bindingId?: string;
+  chainMode?: ChainMode;
+  inputFingerprint?: string;
+  resultFingerprint?: string;
+  sessionMode?: string;
+  sessionId?: string;
 }
 
 type BindingDefinition = LoopBinding | TaskBinding | Record<string, unknown>;
@@ -223,6 +238,14 @@ export function readInterruptedMarker(projectRoot: string): InterruptedMarker | 
         stageId: obj.stageId,
         artifactIdentity: obj.artifactIdentity,
         parentArtifactIdentity: obj.parentArtifactIdentity,
+        bindingKind: obj.bindingKind,
+        bindingId: obj.bindingId,
+        chainMode: obj.chainMode,
+        inputFingerprint: obj.inputFingerprint,
+        resultFingerprint: obj.resultFingerprint,
+        sessionMode: obj.sessionMode,
+        sessionId: obj.sessionId,
+        status: obj.status,
       };
     }
     return null;
@@ -278,7 +301,7 @@ export function resolveInterruptedArtifactPath(
 export function quarantineArtifact(
   projectRoot: string,
   absArtifactPath: string,
-  opts: { reason?: string; notBeforeMs?: number } = {}
+  opts: { reason?: string; notBeforeMs?: number; marker?: InterruptedMarker } = {}
 ): { quarantined: boolean; archivedPath: string | null } {
   if (!existsSync(absArtifactPath)) {
     return { quarantined: false, archivedPath: null };
@@ -290,6 +313,58 @@ export function quarantineArtifact(
       return { quarantined: false, archivedPath: null };
     }
   }
+
+  // Stamp front-matter when quarantined for interruption
+  const ctx = opts.marker || activeStepCtx;
+  if (opts.reason === 'interrupted' && ctx) {
+    try {
+      let content = readFileSync(absArtifactPath, 'utf-8');
+      const fmMatch = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+      if (fmMatch) {
+        content = content.slice(fmMatch[0].length);
+      }
+      const role = ctx.kind === 'audit' || ctx.kind === 'evaluate'
+        ? 'auditor'
+        : ctx.kind === 'follow-up' || ctx.kind === 'repair'
+          ? 'planner'
+          : 'implementer';
+      const meta = {
+        schemaVersion: 1,
+        bindingKind: ctx.bindingKind,
+        bindingId: ctx.bindingId,
+        chainId: ctx.chainId!,
+        chainMode: ctx.chainMode!,
+        artifactIdentity: ctx.artifactIdentity,
+        inputFingerprint: ctx.inputFingerprint,
+        resultFingerprint: ctx.resultFingerprint,
+        parentArtifactIdentity: ctx.parentArtifactIdentity ?? null,
+        pipelineId: ctx.pipelineId ?? null,
+        pipelineRunId: ctx.pipelineRunId ?? null,
+        stageId: ctx.stageId ?? null,
+        version: ctx.version,
+        provider: ctx.agent,
+        agent: ctx.agent,
+        model: ctx.model,
+        effort: ctx.effort,
+        sessionStrategy: ctx.sessionStrategy,
+        sessionMode: ctx.sessionMode as any,
+        sessionId: ctx.sessionId,
+        status: 'interrupted',
+        loop: ctx.loop,
+        skill: ctx.skillId,
+        role,
+        kind: ctx.kind,
+        target: '.',
+        priorAudit: 'none',
+        timestamp: new Date().toISOString(),
+      };
+      const stamped = buildFrontMatter(meta) + content;
+      writeFileSync(absArtifactPath, stamped, 'utf-8');
+    } catch {
+      // ignore stamp failures
+    }
+  }
+
   const archivedDir = join(projectRoot, 'docs/dev/archived');
   mkdirSync(archivedDir, { recursive: true });
   const original = basename(absArtifactPath);
@@ -367,7 +442,7 @@ export function quarantineInterruptedResume(
 
   const inFlight = resolveInterruptedArtifactPath(projectRoot, marker, bindings);
   if (inFlight) {
-    const result = quarantineArtifact(projectRoot, inFlight, { reason: 'interrupted' });
+    const result = quarantineArtifact(projectRoot, inFlight, { reason: 'interrupted', marker });
     if (result.quarantined && result.archivedPath) {
       quarantined.push(result.archivedPath);
     }
@@ -412,6 +487,14 @@ export async function handleInterruptSignal(signal: NodeJS.Signals): Promise<voi
       stageId: ctx.stageId,
       artifactIdentity: ctx.artifactIdentity,
       parentArtifactIdentity: ctx.parentArtifactIdentity,
+      bindingKind: ctx.bindingKind,
+      bindingId: ctx.bindingId,
+      chainMode: ctx.chainMode,
+      inputFingerprint: ctx.inputFingerprint,
+      resultFingerprint: ctx.resultFingerprint,
+      sessionMode: ctx.sessionMode,
+      sessionId: ctx.sessionId,
+      status: 'interrupted',
       interruptedAtMs: Date.now()
     });
   }
@@ -486,6 +569,14 @@ async function performOwnershipLoss(binding: BindingDefinition, ctx: any): Promi
         stageId: stepCtx.stageId,
         artifactIdentity: stepCtx.artifactIdentity,
         parentArtifactIdentity: stepCtx.parentArtifactIdentity,
+        bindingKind: stepCtx.bindingKind,
+        bindingId: stepCtx.bindingId,
+        chainMode: stepCtx.chainMode,
+        inputFingerprint: stepCtx.inputFingerprint,
+        resultFingerprint: stepCtx.resultFingerprint,
+        sessionMode: stepCtx.sessionMode,
+        sessionId: stepCtx.sessionId,
+        status: 'interrupted',
         interruptedAtMs
       });
     }

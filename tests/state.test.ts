@@ -25,15 +25,16 @@ describe('generic artifact index', () => {
 
   it('indexes loop and task artifacts by configured binding and canonical contract state', () => {
     const config = loadConfig(project);
+    const evalMeta = makeV1ArtifactMeta({ bindingId: 'plan', kind: 'evaluate', version: 1 });
     writeArtifact(
       'docs/dev/plan-audit-v1-fake.md',
       '# Evaluation\n\n## Verdict\n\nREJECTED\n',
-      makeV1ArtifactMeta({ bindingId: 'plan', kind: 'evaluate', version: 1 }),
+      evalMeta,
     );
     writeArtifact(
       'docs/dev/plan-followup-v1-fake.md',
       '# Repair\n\n## Outcome\n\nCOMPLETED\n',
-      makeV1ArtifactMeta({ bindingId: 'plan', kind: 'repair', version: 1, parentArtifactIdentity: 'artifact-plan-1-fake' }),
+      makeV1ArtifactMeta({ bindingId: 'plan', kind: 'repair', version: 1, parentArtifactIdentity: evalMeta.artifactIdentity }),
     );
 
     const snapshot = scanGlobalSnapshot(project, config.manifest);

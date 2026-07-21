@@ -1,3 +1,4 @@
+import { computeArtifactIdentity } from '../../src/pipeline-state.js';
 import type { ArtifactMeta, StepKind } from '../../src/provenance.js';
 
 /**
@@ -33,28 +34,35 @@ export function makeV1ArtifactMeta(
   const step = kind === 'evaluate' || kind === 'repair' || kind === 'task' ? kind : 'evaluate';
   const version = overrides.version ?? 1;
   const agent = overrides.agent ?? 'fake';
+  const model = overrides.model ?? 'fake-model';
+  const provider = overrides.provider ?? agent;
+  const effort = overrides.effort ?? 'medium';
+  const sessionMode = overrides.sessionMode ?? 'fresh';
+  const sessionId = overrides.sessionId ?? 'none';
+  const chainId = overrides.chainId ?? 'chain-' + bindingId;
+  const inputFingerprint = overrides.inputFingerprint ?? 'input-' + version;
+  const resultFingerprint = overrides.resultFingerprint ?? 'result-' + version;
+  const parentArtifactIdentity = overrides.parentArtifactIdentity ?? null;
 
-  return {
+  const partialMeta = {
     loop: bindingId,
     skill: overrides.skill ?? (kind === 'task' ? '30-simple-implement' : 'plan-audit'),
     role: overrides.role ?? (kind === 'task' ? 'implementer' : 'auditor'),
     version,
     agent,
-    provider: overrides.provider ?? agent,
-    model: overrides.model ?? 'fake-model',
-    effort: overrides.effort ?? 'medium',
+    provider,
+    model,
+    effort,
     target: overrides.target ?? (kind === 'task' ? '.' : 'docs/dev/plan.md'),
     priorAudit: overrides.priorAudit ?? 'none',
     timestamp: overrides.timestamp ?? '2026-07-20T00:00:00.000Z',
-    sessionMode: overrides.sessionMode ?? 'fresh',
-    sessionId: overrides.sessionId ?? 'none',
+    sessionMode,
+    sessionId,
     sessionStrategy: overrides.sessionStrategy ?? 'fresh',
-    chainId: overrides.chainId ?? 'chain-' + bindingId,
-    artifactIdentity: overrides.artifactIdentity ?? 'artifact-' + bindingId + '-' + version + '-' + agent,
-    inputFingerprint: overrides.inputFingerprint ?? 'input-' + version,
-    resultFingerprint: overrides.resultFingerprint ?? 'result-' + version,
-    parentArtifactIdentity: overrides.parentArtifactIdentity ?? null,
-    ...overrides,
+    chainId,
+    inputFingerprint,
+    resultFingerprint,
+    parentArtifactIdentity,
     kind,
     step,
     schemaVersion: 1,
@@ -64,5 +72,32 @@ export function makeV1ArtifactMeta(
     pipelineRunId,
     stageId,
     chainMode,
+  };
+
+  const artifactIdentity = overrides.artifactIdentity ?? computeArtifactIdentity({
+    schemaVersion: 1,
+    pipelineId,
+    pipelineRunId,
+    stageId,
+    bindingKind,
+    bindingId,
+    chainId,
+    chainMode,
+    step,
+    version,
+    provider,
+    model,
+    effort,
+    sessionMode,
+    sessionId,
+    parentArtifactIdentity,
+    inputFingerprint,
+    resultFingerprint,
+  });
+
+  return {
+    ...partialMeta,
+    artifactIdentity,
+    ...overrides,
   };
 }
