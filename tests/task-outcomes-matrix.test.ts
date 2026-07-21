@@ -203,7 +203,7 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
     expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'ownership')).toBe(true);
   });
 
-  it('Outcome 7: interrupted -> returns exitCode: 130, emits run.failed', async () => {
+  it('Outcome 7: interrupted -> returns exitCode: 130, emits run.interrupted', async () => {
     const { projectRoot } = setupTestProject();
     const events: RunEvent[] = [];
     const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
@@ -224,6 +224,6 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
     });
 
     expect(result.exitCode).toBe(130);
-    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'interrupted')).toBe(true);
+    expect(events.some(e => e.type === 'run.interrupted')).toBe(true);
   });
 });

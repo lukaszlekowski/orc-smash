@@ -33,8 +33,9 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
 export function isValidEffortForModel(agent: string, model: string, effort: string, registry: ModelRegistry): boolean {
   const catalogue = registry.providers[agent];
   if (!catalogue) return false;
+  if (!catalogue.models.includes(model)) return false;
   const levels = catalogue.modelEfforts?.[model] ?? catalogue.efforts;
-  return !levels || levels.includes(effort);
+  return !!levels && levels.includes(effort);
 }
 
 export function isValidEffortForAgent(agent: string, effort: string, registry: ModelRegistry): boolean {
@@ -202,7 +203,10 @@ function resolveEffort(
   const value = explicit ?? profileEffort ?? registry.providers[agent]?.defaultEffort;
   if (!value) return null;
   if (!isValidEffortForModel(agent, model, value, registry)) {
-    throw new Error(`effort '${value}' is not supported by agent '${agent}' model '${model}'`);
+    if (explicit) {
+      throw new Error(`effort '${value}' is not supported by agent '${agent}' model '${model}'`);
+    }
+    return null;
   }
   const resolvedSource = explicit
     ? source

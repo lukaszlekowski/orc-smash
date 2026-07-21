@@ -1,6 +1,4 @@
 defaultModel: opencode-go/deepseek-v4-flash
-efforts: [low, medium, high, xhigh]
-defaultEffort: medium
 models:
   - opencode-go/deepseek-v4-flash
   - opencode-go/deepseek-v4-pro
@@ -15,3 +13,17 @@ models:
   - opencode-go/qwen3.7-max
   - opencode-go/qwen3.7-plus
   - opencode-go/qwen3.6-plus
+modelEfforts:
+  opencode-go/deepseek-v4-flash: [low, medium, high, xhigh]
+  opencode-go/deepseek-v4-pro: [low, medium, high, xhigh]
+  opencode-go/glm-5.2: [low, medium, high]
+  opencode-go/glm-5.1: [low, medium, high]
+  opencode-go/kimi-k2.7-code: [low, medium]
+  opencode-go/kimi-k2.6: [low, medium]
+  opencode-go/mimo-v2.5: [low]
+  opencode-go/mimo-v2.5-pro: [low, medium]
+  opencode-go/minimax-m3: [low, medium]
+  opencode-go/minimax-m2.7: [low]
+  opencode-go/qwen3.7-max: [low, medium, high]
+  opencode-go/qwen3.7-plus: [low, medium, high]
+  opencode-go/qwen3.6-plus: [low, medium]

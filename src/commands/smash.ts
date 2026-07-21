@@ -4,7 +4,7 @@ import { loadConfig, type Config } from '../config.js';
 import { scanGlobalSnapshot } from '../state.js';
 import { runLoop, runTask } from '../loop.js';
 import { resolveRunner, validateRunnerCapabilities, type ResolvedRunner } from '../runner.js';
-import { promptLoopSelect, promptMaxIterations } from '../interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery } from '../interactive.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, setActiveRunEventSink, quarantineInterruptedResume } from '../interrupted-artifact.js';
@@ -350,6 +350,8 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     }
     if (terminal.success) {
       options.output.emit(makeRunEvent({ type: 'run.completed', atMs: Date.now(), result: terminal.verdict, outcome: finalResult.message ?? 'completed' }));
+    } else if (terminal.errorKind === 'interrupted') {
+      options.output.emit(makeRunEvent({ type: 'run.interrupted', atMs: Date.now(), reason: finalResult.message ?? 'interrupted' }));
     } else {
       options.output.emit(makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: finalResult.message ?? 'run failed', errorKind: terminal.errorKind }));
     }
@@ -369,74 +371,92 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     setActiveRunEventSink((event) => options.output.emit(makeRunEvent(event)));
     options.output.emit(makeRunEvent({ type: 'run.started', atMs: Date.now() }));
 
-    let setupResult: ResolveResult;
-    let retryCount = 0;
+    let isInteractiveRun = false;
     while (true) {
-      setupResult = await resolveSmashRunSetup(projectRoot, options);
-      if ('errorResult' in setupResult) {
-        return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
+      let setupResult: ResolveResult;
+      let retryCount = 0;
+      while (true) {
+        setupResult = await resolveSmashRunSetup(projectRoot, options);
+        if ('errorResult' in setupResult) {
+          return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
+        }
+        if (!('retry' in setupResult)) break;
+        retryCount += 1;
+        if (retryCount >= 10) {
+          const message = 'Project inputs still missing after multiple retries.';
+          options.output.error(`Error: ${message}`);
+          return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'setup' });
+        }
       }
-      if (!('retry' in setupResult)) break;
-      retryCount += 1;
-      if (retryCount >= 10) {
-        const message = 'Project inputs still missing after multiple retries.';
-        options.output.error(`Error: ${message}`);
-        return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'setup' });
+
+      const { setup } = setupResult;
+      isInteractiveRun = setup.isInteractive;
+      
+      try {
+        const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
+        ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
+        if (ownership) options.output.emit(makeRunEvent({ type: 'ownership.opened', atMs: Date.now(), projectRoot }));
+      } catch (err: any) {
+        const msg = `Ownership setup failed: ${err.message}`;
+        options.output.error(msg);
+        return finish({ exitCode: 2, message: msg }, { success: false, verdict: 'ownership-lost', errorKind: 'ownership' });
       }
-    }
 
-    const { setup } = setupResult;
-    try {
-      const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
-      ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
-      if (ownership) options.output.emit(makeRunEvent({ type: 'ownership.opened', atMs: Date.now(), projectRoot }));
-    } catch (err: any) {
-      const msg = `Ownership setup failed: ${err.message}`;
-      options.output.error(msg);
-      return finish({ exitCode: 2, message: msg }, { success: false, verdict: 'ownership-lost', errorKind: 'ownership' });
-    }
+      let runResult: LoopReturn;
+      try {
+        const executorOptions = {
+          maxIterations: setup.maxIterations,
+          globalOverrides: setup.globalOverrides,
+          interactive: setup.isInteractive,
+          registry: setup.registry,
+          output: options.output,
+          ownership,
+          runnerOverrides: setup.runnerOverrides,
+          runContext: setup.runContext,
+          emitTerminal: false,
+        };
+        runResult = setup.bindingKind === 'task'
+          ? await runTask(setup.projectRoot, setup.bindingId, setup.binding as TaskBinding, setup.config, setup.runners, executorOptions)
+          : await runLoop(setup.projectRoot, setup.bindingId, setup.binding as LoopBinding, setup.config, setup.runners, executorOptions);
+      } catch (err: any) {
+        const message = `Error running ${setup.bindingKind} '${setup.bindingId}': ${err.message}`;
+        options.output.error(message);
+        runResult = {
+          success: false,
+          verdict: 'unknown',
+          message,
+          lastAuditPath: null,
+          terminalEventEmitted: false,
+          outcome: { kind: 'unknown', message, artifactPath: null },
+        };
+      }
 
-    let runResult: LoopReturn;
-    try {
-      const executorOptions = {
-        maxIterations: setup.maxIterations,
-        globalOverrides: setup.globalOverrides,
-        interactive: setup.isInteractive,
-        registry: setup.registry,
-        output: options.output,
-        ownership,
-        runnerOverrides: setup.runnerOverrides,
-        runContext: setup.runContext,
-        emitTerminal: false,
+      const outcome = outcomeForResult(runResult);
+      const result = commandResultForOutcome(outcome);
+      const terminal = {
+        success: outcome.kind === 'completed',
+        verdict: runResult.verdict,
+        errorKind: outcome.kind === 'ownership-lost' ? 'ownership' : outcome.kind === 'completed' ? undefined : outcome.kind,
       };
-      runResult = setup.bindingKind === 'task'
-        ? await runTask(setup.projectRoot, setup.bindingId, setup.binding as TaskBinding, setup.config, setup.runners, executorOptions)
-        : await runLoop(setup.projectRoot, setup.bindingId, setup.binding as LoopBinding, setup.config, setup.runners, executorOptions);
-    } catch (err: any) {
-      const message = `Error running ${setup.bindingKind} '${setup.bindingId}': ${err.message}`;
-      options.output.error(message);
-      runResult = {
-        success: false,
-        verdict: 'unknown',
-        message,
-        lastAuditPath: null,
-        terminalEventEmitted: false,
-        outcome: { kind: 'unknown', message, artifactPath: null },
-      };
-    }
+      const cmdResult = await finish(result, terminal, {
+        success: terminal.success,
+        verdict: terminal.verdict,
+        message: outcome.message,
+      });
 
-    const outcome = outcomeForResult(runResult);
-    const result = commandResultForOutcome(outcome);
-    const terminal = {
-      success: outcome.kind === 'completed',
-      verdict: runResult.verdict,
-      errorKind: outcome.kind === 'ownership-lost' ? 'ownership' : outcome.kind === 'completed' ? undefined : outcome.kind,
-    };
-    return finish(result, terminal, {
-      success: terminal.success,
-      verdict: terminal.verdict,
-      message: outcome.message,
-    });
+      if (!isInteractiveRun) {
+        return cmdResult;
+      }
+
+      const nextAction = await promptPostRunRecovery();
+      if (nextAction === 'exit') {
+        return cmdResult;
+      }
+
+      // Reset state for next iteration
+      ownership = null;
+      ownershipFinalized = false;
+    }
   } catch (err: any) {
     const message = `Error running smash setup: ${err?.message ?? String(err)}`;
     options.output.error(message);

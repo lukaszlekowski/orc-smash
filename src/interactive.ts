@@ -204,3 +204,14 @@ export async function promptRunners(
 
   return runners;
 }
+
+export async function promptPostRunRecovery(): Promise<'menu' | 'exit'> {
+  return select({
+    message: 'Run finished. What would you like to do next?',
+    choices: [
+      { name: 'Return to selection menu', value: 'menu' },
+      { name: 'Exit', value: 'exit' },
+    ],
+    default: 'menu'
+  });
+}

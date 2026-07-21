@@ -269,6 +269,13 @@ export async function executeLoopStep(
       stageId,
       artifactIdentity: draftArtifactIdentity,
       parentArtifactIdentity,
+      bindingKind: deps.bindingKind,
+      bindingId: deps.loopName,
+      chainMode,
+      inputFingerprint: request.inputFingerprint,
+      resultFingerprint: targetFingerprintBefore,
+      sessionMode,
+      sessionId,
     });
     
     // Pre-spawn check

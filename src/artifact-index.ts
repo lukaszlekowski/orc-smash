@@ -6,6 +6,7 @@ import type { V1Manifest } from './manifest.js';
 import { classifyArtifact } from './artifact-contract.js';
 import { validateImplementLedger } from './implement-ledger.js';
 import { roleForKind, type Step, type GlobalSnapshot } from './state.js';
+import { computeArtifactIdentity, expectedPredecessor } from './pipeline-state.js';
 
 const EXCLUDED_DIRS = new Set([
   '.git',
@@ -175,6 +176,77 @@ export function scanGlobalSnapshot(
       const content = readFileSync(file, 'utf-8');
       const parsedMeta = parseArtifactMeta(content, { agent: provider, version, kind: matchingPatterns[0]!.phase });
       const classifiedMeta = parseArtifactMetaClassified(content, { agent: provider, version, kind: matchingPatterns[0]!.phase });
+
+      if (classifiedMeta.status === 'classified') {
+        const meta = parsedMeta;
+        
+        // 1. Recompute artifactIdentity from parsed canonical tuple and reject mismatch
+        if (!meta.artifactIdentity || !meta.inputFingerprint || !meta.resultFingerprint) {
+          throw new Error('Missing identity digests.');
+        }
+        const computed = computeArtifactIdentity({
+          schemaVersion: meta.schemaVersion ?? 1,
+          pipelineId: meta.pipelineId ?? null,
+          pipelineRunId: meta.pipelineRunId ?? null,
+          stageId: meta.stageId ?? null,
+          bindingKind: meta.bindingKind!,
+          bindingId: meta.bindingId!,
+          chainId: meta.chainId!,
+          chainMode: meta.chainMode!,
+          step: meta.step ?? meta.kind!,
+          version: meta.version!,
+          provider: meta.provider ?? meta.agent!,
+          model: meta.model!,
+          effort: meta.effort,
+          sessionMode: meta.sessionMode,
+          sessionId: meta.sessionId,
+          parentArtifactIdentity: meta.parentArtifactIdentity ?? null,
+          inputFingerprint: meta.inputFingerprint!,
+          resultFingerprint: meta.resultFingerprint!,
+        });
+        if (computed !== meta.artifactIdentity) {
+          throw new Error(`Artifact identity digest verification failed. Expected: '${computed}', Got: '${meta.artifactIdentity}'.`);
+        }
+        
+        // 2. Require filename pattern, phase, bindingId, and bindingKind to agree
+        const patternMatch = matchingPatterns.find((candidate) =>
+          meta.bindingId === candidate.bindingId &&
+          meta.bindingKind === candidate.bindingKind &&
+          meta.kind === candidate.phase
+        );
+        if (!patternMatch) {
+          throw new Error(`Filename pattern, phase, bindingId, and bindingKind mismatch.`);
+        }
+        
+        // 3. Validate (pipelineId, stageId) exists and resolves to that same binding
+        if (meta.pipelineId) {
+          const pipeline = manifest.pipelines?.[meta.pipelineId];
+          if (!pipeline) {
+            throw new Error(`Pipeline '${meta.pipelineId}' not found in manifest.`);
+          }
+          const stage = pipeline.stages.find(s => s.stageId === meta.stageId);
+          if (!stage) {
+            throw new Error(`Stage '${meta.stageId}' not found in pipeline '${meta.pipelineId}'.`);
+          }
+          const boundBindingId = stage.loop ?? stage.task;
+          const boundBindingKind = stage.loop ? 'loop' : 'task';
+          if (boundBindingId !== meta.bindingId || boundBindingKind !== meta.bindingKind) {
+            throw new Error(`Stage '${meta.stageId}' maps to ${boundBindingKind} '${boundBindingId}', but front matter has '${meta.bindingId}'.`);
+          }
+          
+          // 4. Require pipeline-start to be the configured first stage with null parent
+          if (meta.chainMode === 'pipeline-start') {
+            const firstStage = pipeline.stages[0];
+            if (!firstStage || firstStage.stageId !== meta.stageId) {
+              throw new Error(`Stage '${meta.stageId}' is not the first stage in pipeline '${meta.pipelineId}'.`);
+            }
+            if (meta.parentArtifactIdentity !== null) {
+              throw new Error(`pipeline-start artifact must have null parent.`);
+            }
+          }
+        }
+      }
+
       const patternInfo = classifiedMeta.status === 'classified'
         ? matchingPatterns.find((candidate) => parsedMeta.bindingId === candidate.bindingId && parsedMeta.bindingKind === candidate.bindingKind)
           ?? (matchingPatterns.length === 1 ? matchingPatterns[0] : undefined)
@@ -288,6 +360,66 @@ export function scanGlobalSnapshot(
       byBinding.set(bindingId, bindingSteps);
       steps.push(step);
       unclassified.push(step);
+    }
+  }
+
+  // 5 & 6. Fixpoint structural validation pass for pipeline lineage
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const step of steps) {
+      if (step.unclassified) continue;
+      
+      let invalidReason = '';
+      
+      // 5. Require a stage-continuation root to point to a classified, completed artifact from expectedPredecessor(...) in the same pipeline run
+      if (step.pipelineId && step.chainMode === 'stage-continuation') {
+        const parentId = step.parentArtifactIdentity;
+        const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
+        const predStage = expectedPredecessor(step.pipelineId, step.stageId!, manifest);
+        
+        if (!parentId) {
+          invalidReason = `stage-continuation is missing parentArtifactIdentity.`;
+        } else if (!parent) {
+          invalidReason = `stage-continuation parent artifact '${parentId}' not found or is unclassified.`;
+        } else {
+          const isParentCompleted = parent.decision === 'accepted' ||
+            parent.completionOutcome === 'completed' ||
+            (parent.contractValid === true && parent.decision === undefined && parent.completionOutcome === undefined);
+            
+          if (
+            parent.pipelineId !== step.pipelineId ||
+            parent.pipelineRunId !== step.pipelineRunId ||
+            parent.stageId !== predStage ||
+            !isParentCompleted
+          ) {
+            invalidReason = `stage-continuation parent artifact '${parentId}' is in a different pipeline/run/stage, or is not completed.`;
+          }
+        }
+      }
+      
+      // 6. Keep exact immediate-parent validation for subsequent same-chain artifacts
+      if (step.parentArtifactIdentity !== null && step.chainMode !== 'stage-continuation' && step.chainMode !== 'pipeline-start') {
+        const parentId = step.parentArtifactIdentity;
+        const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
+        
+        if (!parent || parent.chainId !== step.chainId) {
+          invalidReason = `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
+        }
+      }
+      
+      if (invalidReason) {
+        step.unclassified = true;
+        step.contractValid = false;
+        step.decision = undefined;
+        step.completionOutcome = undefined;
+        step.verdict = undefined;
+        step.outcome = undefined;
+        if (!unclassified.includes(step)) {
+          unclassified.push(step);
+        }
+        changed = true;
+      }
     }
   }
 

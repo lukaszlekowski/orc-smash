@@ -115,6 +115,9 @@ export function scanAllForStatus(
       chainId: marker.chainId,
       artifactIdentity: marker.artifactIdentity,
       parentArtifactIdentity: marker.parentArtifactIdentity,
+      chainMode: marker.chainMode,
+      sessionMode: marker.sessionMode as any,
+      sessionId: marker.sessionId,
     };
   }
 

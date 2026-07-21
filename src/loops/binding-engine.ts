@@ -184,7 +184,7 @@ export async function runBinding(
     const parentIdentityForLookup = request.parentArtifactIdentity;
     const predecessor = lastArtifact
       ?? history.find(item => item.meta.artifactIdentity === parentIdentityForLookup);
-    const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? (bindingKind === 'loop' && predecessor ? 'resume-per-skill' : 'fresh-per-invocation');
+    const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? 'fresh-per-invocation';
     const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy, request.skillId);
     // Prompt-semantic inputs are captured before the provider can mutate the
     // target or the referenced predecessor artifact.
