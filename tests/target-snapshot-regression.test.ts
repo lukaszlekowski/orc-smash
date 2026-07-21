@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { captureTargetSnapshot } from '../src/target-snapshot.js';
 import type { V1Manifest } from '../src/manifest.js';

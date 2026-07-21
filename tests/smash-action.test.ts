@@ -1,11 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { smashAction } from '../src/commands/smash.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { AgentRegistry } from '../src/adapters/registry.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery } from '../src/interactive.js';
+
+vi.mock('../src/interactive.js', () => {
+  return {
+    promptLoopSelect: vi.fn(),
+    promptMaxIterations: vi.fn(),
+    promptPostRunRecovery: vi.fn(),
+    promptRunners: vi.fn(),
+  };
+});
 
 const MODEL = 'opencode-go/deepseek-v4-flash';
 
@@ -111,5 +121,159 @@ describe('generic smash dispatch', () => {
     const result = await run({ task: 'implement' });
     expect(result.exitCode).toBe(1);
     expect(result.message).toContain('planPath=docs/dev/plan.md');
+  });
+
+  describe('F11 Interactive vs Non-interactive Recovery Matrix', () => {
+    let savedEnv: NodeJS.ProcessEnv;
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      savedEnv = { ...process.env };
+      delete process.env.ORC_RUN_ID;
+      delete process.env.ORC_RUN_TOKEN;
+      delete process.env.ORC_RUN_STATE_DIR;
+    });
+
+    afterEach(() => {
+      Object.assign(process.env, savedEnv);
+    });
+
+    it('Interactive mode: successful run followed by menu choice exit', async () => {
+      vi.mocked(promptLoopSelect).mockResolvedValueOnce('plan');
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptLoopSelect).toHaveBeenCalledTimes(1);
+      expect(promptMaxIterations).toHaveBeenCalledTimes(1);
+      expect(promptPostRunRecovery).toHaveBeenCalledTimes(1);
+    });
+
+    it('Interactive mode: provider failure followed by menu choice menu then exit', async () => {
+      vi.mocked(promptLoopSelect).mockResolvedValue('plan');
+      vi.mocked(promptMaxIterations).mockResolvedValue(4);
+      vi.mocked(promptPostRunRecovery)
+        .mockResolvedValueOnce('menu') // Loops back
+        .mockResolvedValueOnce('exit'); // Exits
+
+      // Mock failure adapter
+      const adapter: AgentAdapter = {
+        name: 'opencode',
+        capabilities: { resumeSession: true, effort: true },
+        buildRun: () => ({ command: 'scripted-opencode', args: [] }),
+        run: async () => ({ stdout: 'failed model run', exitCode: 1 }),
+      };
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(promptLoopSelect).toHaveBeenCalledTimes(2);
+      expect(promptMaxIterations).toHaveBeenCalledTimes(2);
+      expect(promptPostRunRecovery).toHaveBeenCalledTimes(2);
+    });
+
+    it('Interactive mode: missing project input preflight and retry loop', async () => {
+      vi.mocked(promptMaxIterations).mockResolvedValue(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValue('exit');
+
+      // Remove input file
+      const planPath = join(project, 'docs/dev/plan.md');
+      if (existsSync(planPath)) unlinkSync(planPath);
+
+      // Create a mock that restores the file during the second call of the prompt/retry loop!
+      vi.mocked(promptLoopSelect)
+        .mockResolvedValueOnce('plan') // First call (preflight fails)
+        .mockImplementationOnce(async () => {
+          writeFileSync(planPath, '# Plan\n'); // Second call (preflight succeeds)
+          return 'plan';
+        });
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      // It should have failed the first resolution/validation, retry: true, and succeeded in the next iteration
+      expect(promptLoopSelect).toHaveBeenCalledTimes(2);
+    });
+
+    it('Interactive mode: safety-critical ownership failure (exits directly without prompting recovery)', async () => {
+      vi.mocked(promptLoopSelect).mockResolvedValue('plan');
+      vi.mocked(promptMaxIterations).mockResolvedValue(4);
+
+      // Trigger safety critical ownership mismatch (ambiguous mode)
+      process.env['ORC_RUN_ID'] = 'run-id-mismatch';
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(2);
+      expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
+
+    it('Non-interactive mode: provider failure does NOT prompt recovery', async () => {
+      const adapter: AgentAdapter = {
+        name: 'opencode',
+        capabilities: { resumeSession: true, effort: true },
+        buildRun: () => ({ command: 'scripted-opencode', args: [] }),
+        run: async () => ({ stdout: 'failed model run', exitCode: 1 }),
+      };
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        task: 'implement',
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
+
+    it('Non-interactive mode: missing project input preflight does NOT prompt recovery', async () => {
+      const planPath = join(project, 'docs/dev/plan.md');
+      if (existsSync(planPath)) unlinkSync(planPath);
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        task: 'implement',
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
   });
 });
