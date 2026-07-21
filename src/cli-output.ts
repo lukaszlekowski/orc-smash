@@ -34,6 +34,7 @@ export interface CliOutput extends RunEventSink {
     skillId: string;
     agent: string;
     model: string;
+    effort?: string;
     iteration: number;
     version: number;
     message: string;
@@ -141,10 +142,11 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       emitEvent({ type: 'iteration.started', atMs: Date.now(), iteration: ctx.iteration, maxIterations: ctx.maxIterations });
     },
     stepStarted(ctx) {
-      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} ${ctx.message}`, result: 'info' });
+      debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-started:${ctx.kind}`, detail: `v${ctx.version} agent=${ctx.agent} model=${ctx.model} effort=${ctx.effort ?? 'none'} ${ctx.message}`, result: 'info' });
       emitEvent({
         type: 'step.started', atMs: Date.now(),
         kind: ctx.kind, skillId: ctx.skillId, agent: ctx.agent, model: ctx.model,
+        effort: ctx.effort,
         version: ctx.version, message: ctx.message
       });
       if (liveActive) return;

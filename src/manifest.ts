@@ -226,36 +226,11 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
     }
     validatePatternForContext(ctx, ['tasks', taskId, 'output', 'pattern'], task.output.pattern);
     if (task.output.contract === 'decision-artifact') {
-      if (!task.output.decision) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['tasks', taskId, 'output'],
-          message: `decision-artifact contract requires a 'decision' config in task '${taskId}'.`,
-        });
-      } else {
-        const { accepted, retry } = task.output.decision;
-        if (!accepted || accepted.trim() === '') {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['tasks', taskId, 'output', 'decision', 'accepted'],
-            message: `decision 'accepted' token in task '${taskId}' must be a non-empty string.`,
-          });
-        }
-        if (!retry || retry.trim() === '') {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['tasks', taskId, 'output', 'decision', 'retry'],
-            message: `decision 'retry' token in task '${taskId}' must be a non-empty string.`,
-          });
-        }
-        if (accepted && retry && accepted.trim().toLowerCase() === retry.trim().toLowerCase()) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['tasks', taskId, 'output', 'decision'],
-            message: `decision 'accepted' and 'retry' tokens in task '${taskId}' must be case-insensitively distinct.`,
-          });
-        }
-      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tasks', taskId, 'output', 'contract'],
+        message: `Task '${taskId}' cannot use 'decision-artifact' contract. Tasks only support 'completion-artifact' and 'required-artifact'.`,
+      });
     }
     for (let i = 0; i < task.inputs.length; i++) {
       const input = task.inputs[i]!;

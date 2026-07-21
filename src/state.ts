@@ -108,6 +108,13 @@ export function scanAllForStatus(
       status: 'interrupted',
       artifactPath,
       mtime: marker.interruptedAtMs,
+      effort: marker.effort,
+      pipelineId: marker.pipelineId,
+      pipelineRunId: marker.pipelineRunId,
+      stageId: marker.stageId,
+      chainId: marker.chainId,
+      artifactIdentity: marker.artifactIdentity,
+      parentArtifactIdentity: marker.parentArtifactIdentity,
     };
   }
 

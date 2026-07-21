@@ -11,7 +11,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'config.loaded'; path: string })
   | (RunEventBase & { type: 'config.failed'; message: string })
   | (RunEventBase & { type: 'binding.selected'; bindingId: string; bindingKind: 'loop' | 'task' })
-  | (RunEventBase & { type: 'runner.resolved'; skillId: string; agent: string; model: string; effort?: string; agentSource: string; modelSource: string; inheritedSession?: { agent: string; model: string; sessionId: string } })
+  | (RunEventBase & { type: 'runner.resolved'; skillId: string; agent: string; model: string; effort?: string; effortSource?: string; agentSource: string; modelSource: string; inheritedSession?: { agent: string; model: string; sessionId: string } })
   | (RunEventBase & { type: 'runner.rejected'; skillId: string; message: string })
   | (RunEventBase & { type: 'state.scanned'; latestResult: string; version: number })
   | (RunEventBase & { type: 'iteration.started'; iteration: number; maxIterations: number })

@@ -58,13 +58,51 @@ describe('generic per-step continuity', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(calls.map(call => call.continuity?.mode)).toEqual(['fresh', 'resumed', 'resumed']);
+    expect(calls.map(call => call.continuity?.mode)).toEqual(['fresh', 'fresh', 'fresh']);
     const snapshot = scanGlobalSnapshot(workspace, config.manifest);
     const steps = snapshot.byBinding.get('plan')!.filter(step => !step.unclassified);
     expect(steps).toHaveLength(3);
     expect(steps[1]!.parentArtifactIdentity).toBe(steps[0]!.artifactIdentity);
     expect(steps[2]!.parentArtifactIdentity).toBe(steps[1]!.artifactIdentity);
-    expect(steps.every(step => step.sessionMode === 'resumed' || step.sessionMode === 'fresh')).toBe(true);
+    expect(steps.every(step => step.sessionMode === 'fresh')).toBe(true);
+  });
+
+  it('resumes when the skill matches and strategy is resume-per-skill', async () => {
+    const config = loadConfig(workspace);
+    config.manifest.loops.plan!.repair.skill = 'plan-audit';
+
+    const calls: Array<{ kind?: string; continuity?: { mode: string; sessionId?: string } }> = [];
+    let evaluation = 0;
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      calls.push({ kind: input.kind, continuity: input.continuity });
+      const outputMatch = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      const outputPath = outputMatch?.[1]?.trim();
+      if (outputPath) {
+        const absolute = resolve(input.cwd, outputPath);
+        mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+        if (input.kind === 'repair') {
+          writeFileSync(absolute, '# Repair\n\n## Outcome\n\nCOMPLETED\n');
+        } else {
+          const token = evaluation++ === 0 ? 'REJECTED' : 'APPROVED';
+          writeFileSync(absolute, '# Evaluation\n\n## Verdict\n\n' + token + '\n');
+        }
+      }
+      return { stdout: 'done', exitCode: 0, sessionId: 'session-b' };
+    });
+
+    const result = await runLoop(
+      workspace,
+      'plan',
+      config.manifest.loops.plan!,
+      config,
+      {
+        'plan-audit': { agent: 'fake', model: 'fake-model', effort: 'medium' },
+      },
+      { maxIterations: 3, registry: createTestAdapterRegistry(), output, interactive: false },
+    );
+
+    expect(result.success).toBe(true);
+    expect(calls.map(call => call.continuity?.mode)).toEqual(['fresh', 'resumed', 'resumed']);
   });
 
   it('falls back to a fresh session when the adapter does not advertise resume support', async () => {

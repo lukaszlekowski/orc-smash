@@ -135,7 +135,7 @@ function renderTimelineSection(context: PanelContext): string {
       roleAcc.chalk(roleAcc.label),
       context.inFlight.agent,
       context.inFlight.model,
-      'default',
+      context.inFlight.effort ?? 'default',
       '\u2014',
       chalk.gray(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
       '\u2014',

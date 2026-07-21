@@ -42,6 +42,7 @@ export interface PanelContext {
     skillId: string;
     agent: string;
     model: string;
+    effort?: string;
     version: number;
     iteration: number;
     startedAtMs: number;

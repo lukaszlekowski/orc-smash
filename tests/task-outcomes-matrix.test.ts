@@ -1,21 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { runBinding } from '../src/loops/binding-engine.js';
-import { DEFAULT_REGISTRY, type Config } from '../src/config.js';
-import { fakeAdapter } from '../src/adapters/fake.js';
-import { createTestAdapterRegistry } from '../src/adapters/testing.js';
+import { smashAction } from '../src/commands/smash.js';
+import { runTask } from '../src/loop.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import type { RunEvent } from '../src/run-event.js';
 import type { V1Manifest, TaskBinding } from '../src/manifest.js';
-import type { Runner } from '../src/loops/runtime.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import YAML from 'yaml';
 
-describe('Task Engine Outcomes Matrix (M6 Verification)', () => {
-  const testDir = join(process.cwd(), '.test-task-matrix');
+vi.mock('../src/loop.js', () => {
+  return {
+    runTask: vi.fn(),
+    runLoop: vi.fn(),
+  };
+});
+
+describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
+  const testDir = join(process.cwd(), '.test-task-matrix-smash');
 
   beforeEach(() => {
     vi.restoreAllMocks();
     rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(join(testDir, 'docs/dev'), { recursive: true });
+    mkdirSync(join(testDir, 'skills'), { recursive: true });
+    mkdirSync(join(testDir, 'roles'), { recursive: true });
+    writeFileSync(join(testDir, 'skills/implementer.md'), '# Implementer Skill');
+    writeFileSync(join(testDir, 'roles/implementer.md'), '# Implementer Role');
   });
 
   afterEach(() => {
@@ -23,13 +33,7 @@ describe('Task Engine Outcomes Matrix (M6 Verification)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  function setupTestProject(): { manifest: V1Manifest; projectRoot: string; taskBinding: TaskBinding; config: Config } {
-    mkdirSync(join(testDir, 'docs/dev'), { recursive: true });
-    mkdirSync(join(testDir, 'skills'), { recursive: true });
-    mkdirSync(join(testDir, 'roles'), { recursive: true });
-    writeFileSync(join(testDir, 'skills/implementer.md'), '# Implementer Skill');
-    writeFileSync(join(testDir, 'roles/implementer.md'), '# Implementer Role');
-
+  function setupTestProject(): { manifest: V1Manifest; projectRoot: string } {
     const taskBinding: TaskBinding = {
       target: { path: '.', kind: 'worktree' },
       inputs: [],
@@ -50,119 +54,176 @@ describe('Task Engine Outcomes Matrix (M6 Verification)', () => {
       pipelines: {},
     };
 
-    const config: Config = {
-      manifest,
-      registry: DEFAULT_REGISTRY,
-      projectRoot: testDir,
-      manifestPath: join(testDir, 'manifest.yaml'),
-      manifestRoot: testDir,
-    };
+    writeFileSync(join(testDir, '.orc-smash.yaml'), YAML.stringify(manifest));
 
-    return { manifest, projectRoot: testDir, taskBinding, config };
+    return { manifest, projectRoot: testDir };
   }
 
-  const runners: Record<string, Runner> = {
-    implement: { agent: 'fake', model: 'fake-model' },
-  };
-
-  it('handles outcome 1: COMPLETED on valid completed artifact', async () => {
-    const { projectRoot, taskBinding, config } = setupTestProject();
+  it('Outcome 1: completed -> returns exitCode: 0, emits run.completed', async () => {
+    const { projectRoot } = setupTestProject();
     const events: RunEvent[] = [];
     const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
 
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const path = resolve(input.cwd, `docs/dev/task-v${input.version}-fake.md`);
-      mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
-      writeFileSync(path, '# Task\n\n## Outcome\n\nCOMPLETED\n');
-      return { stdout: 'done', exitCode: 0 };
+    vi.mocked(runTask).mockResolvedValue({
+      success: true,
+      verdict: 'completed',
+      message: 'task completed successfully',
+      lastAuditPath: '/some/path',
+      terminalEventEmitted: false,
+      outcome: { kind: 'completed', message: 'task completed successfully', artifactPath: '/some/path' },
     });
 
-    const result = await runBinding(
-      projectRoot,
-      'implement',
-      'task',
-      taskBinding,
-      config,
-      runners,
-      { registry: createTestAdapterRegistry(), output, maxIterations: 1 }
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.outcome?.kind).toBe('completed');
-    expect(events.some((e: RunEvent) => e.type === 'stage.completed')).toBe(true);
-  });
-
-  it('handles outcome 2: BLOCKED on task artifact with BLOCKED status', async () => {
-    const { projectRoot, taskBinding, config } = setupTestProject();
-    const events: RunEvent[] = [];
-    const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
-
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const path = resolve(input.cwd, `docs/dev/task-v${input.version}-fake.md`);
-      mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
-      writeFileSync(path, '# Task\n\n## Outcome\n\nBLOCKED\n');
-      return { stdout: 'blocked', exitCode: 0 };
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
     });
 
-    const result = await runBinding(
-      projectRoot,
-      'implement',
-      'task',
-      taskBinding,
-      config,
-      runners,
-      { registry: createTestAdapterRegistry(), output, maxIterations: 1 }
-    );
-
-    expect(result.success).toBe(false);
-    expect(result.outcome?.kind).toBe('blocked');
-    expect(events.some((e: RunEvent) => e.type === 'stage.blocked')).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(events.some(e => e.type === 'run.completed' && e.result === 'completed')).toBe(true);
   });
 
-  it('handles outcome 3: UNKNOWN on invalid task artifact content', async () => {
-    const { projectRoot, taskBinding, config } = setupTestProject();
+  it('Outcome 2: blocked -> returns exitCode: 1, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
     const events: RunEvent[] = [];
     const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
 
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const path = resolve(input.cwd, `docs/dev/task-v${input.version}-fake.md`);
-      mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
-      writeFileSync(path, '# Task without valid outcome section\n');
-      return { stdout: 'invalid', exitCode: 0 };
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'blocked',
+      message: 'task blocked by dependency',
+      lastAuditPath: '/some/path',
+      terminalEventEmitted: false,
+      outcome: { kind: 'blocked', message: 'task blocked by dependency', artifactPath: '/some/path' },
     });
 
-    const result = await runBinding(
-      projectRoot,
-      'implement',
-      'task',
-      taskBinding,
-      config,
-      runners,
-      { registry: createTestAdapterRegistry(), output, maxIterations: 1 }
-    );
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
 
-    expect(result.success).toBe(false);
-    expect(result.outcome?.kind).toBe('unknown');
+    expect(result.exitCode).toBe(1);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'blocked')).toBe(true);
   });
 
-  it('handles outcome 4: INPUT MISSING when a declared file input is absent', async () => {
-    const { projectRoot, taskBinding, config } = setupTestProject();
-    taskBinding.files = { missingInput: 'nonexistent.txt' };
+  it('Outcome 3: unknown -> returns exitCode: 1, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
     const events: RunEvent[] = [];
     const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
 
-    const result = await runBinding(
-      projectRoot,
-      'implement',
-      'task',
-      taskBinding,
-      config,
-      runners,
-      { registry: createTestAdapterRegistry(), output, maxIterations: 1 }
-    );
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'unknown',
+      message: 'malformed task output',
+      lastAuditPath: '/some/path',
+      terminalEventEmitted: false,
+      outcome: { kind: 'unknown', message: 'malformed task output', artifactPath: '/some/path' },
+    });
 
-    expect(result.success).toBe(false);
-    expect(result.outcome?.kind).toBe('unknown');
-    expect(result.message).toContain('does not exist');
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'unknown')).toBe(true);
+  });
+
+  it('Outcome 4: provider-failed -> returns exitCode: 1, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
+    const events: RunEvent[] = [];
+    const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'unknown',
+      message: 'provider exit 1',
+      lastAuditPath: null,
+      terminalEventEmitted: false,
+      outcome: { kind: 'provider-failed', message: 'provider exit 1', artifactPath: null },
+    });
+
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'provider-failed')).toBe(true);
+  });
+
+  it('Outcome 5: budget-exhausted -> returns exitCode: 1, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
+    const events: RunEvent[] = [];
+    const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'unknown',
+      message: 'budget limit hit',
+      lastAuditPath: null,
+      terminalEventEmitted: false,
+      outcome: { kind: 'budget-exhausted', message: 'budget limit hit', artifactPath: null },
+    });
+
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'budget-exhausted')).toBe(true);
+  });
+
+  it('Outcome 6: ownership-lost -> returns exitCode: 2, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
+    const events: RunEvent[] = [];
+    const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'ownership-lost',
+      message: 'lease expired',
+      lastAuditPath: null,
+      terminalEventEmitted: false,
+      outcome: { kind: 'ownership-lost', message: 'lease expired', artifactPath: null },
+    });
+
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
+
+    expect(result.exitCode).toBe(2);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'ownership')).toBe(true);
+  });
+
+  it('Outcome 7: interrupted -> returns exitCode: 130, emits run.failed', async () => {
+    const { projectRoot } = setupTestProject();
+    const events: RunEvent[] = [];
+    const output = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+
+    vi.mocked(runTask).mockResolvedValue({
+      success: false,
+      verdict: 'interrupted',
+      message: 'SIGINT received',
+      lastAuditPath: null,
+      terminalEventEmitted: false,
+      outcome: { kind: 'interrupted', message: 'SIGINT received', artifactPath: null },
+    });
+
+    const result = await smashAction({
+      project: projectRoot,
+      task: 'implement',
+      output,
+    });
+
+    expect(result.exitCode).toBe(130);
+    expect(events.some(e => e.type === 'run.failed' && e.errorKind === 'interrupted')).toBe(true);
   });
 });

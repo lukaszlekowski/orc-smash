@@ -48,16 +48,39 @@ export const ModelRegistrySchema = z.object({
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'defaultEffort'], message: `defaultEffort '${catalogue.defaultEffort}' must be listed in provider '${provider}' efforts` });
       }
     }
+    if (catalogue.modelEfforts) {
+      for (const [model, efforts] of Object.entries(catalogue.modelEfforts)) {
+        if (!catalogue.models.includes(model)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'modelEfforts', model], message: `modelEfforts contains config for unknown model '${model}' under provider '${provider}'` });
+        }
+        const uniqueEfforts = new Set(efforts);
+        if (uniqueEfforts.size !== efforts.length) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'modelEfforts', model], message: `efforts list for model '${model}' under provider '${provider}' contains duplicate values` });
+        }
+      }
+    }
   }
   for (const [profile, value] of Object.entries(registry.profiles)) {
     const catalogue = registry.providers[value.provider];
     if (!catalogue) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'provider'], message: `Profile '${profile}' names unknown provider '${value.provider}'` });
-    } else if (value.model && !catalogue.models.includes(value.model)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'model'], message: `Profile '${profile}' specifies model '${value.model}' which is not in provider '${value.provider}' catalogue` });
-    }
-    if (catalogue && catalogue.efforts && value.effort && !catalogue.efforts.includes(value.effort)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'effort'], message: `Profile '${profile}' specifies effort '${value.effort}' which is not supported by provider '${value.provider}'` });
+    } else {
+      const model = value.model ?? catalogue.defaultModel;
+      if (value.model && !catalogue.models.includes(value.model)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'model'], message: `Profile '${profile}' specifies model '${value.model}' which is not in provider '${value.provider}' catalogue` });
+      }
+      if (value.effort) {
+        const modelEffortLimit = catalogue.modelEfforts?.[model];
+        if (modelEffortLimit) {
+          if (!modelEffortLimit.includes(value.effort)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'effort'], message: `Profile '${profile}' specifies effort '${value.effort}' which is not supported by model '${model}' under provider '${value.provider}'` });
+          }
+        } else if (catalogue.efforts) {
+          if (!catalogue.efforts.includes(value.effort)) {
+            ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'effort'], message: `Profile '${profile}' specifies effort '${value.effort}' which is not supported by provider '${value.provider}'` });
+          }
+        }
+      }
     }
   }
   if (!registry.profiles[registry.defaultProfile]) {
