@@ -306,7 +306,6 @@ function outcomeForResult(runResult: LoopReturn): RunOutcome {
 function commandResultForOutcome(outcome: RunOutcome): CommandResult {
   if (outcome.kind === 'completed') return { exitCode: 0, message: outcome.message };
   if (outcome.kind === 'ownership-lost') return { exitCode: 2, message: outcome.message };
-  if (outcome.kind === 'interrupted') return { exitCode: 130, message: outcome.message };
   return { exitCode: 1, message: outcome.message };
 }
 
@@ -350,8 +349,6 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     }
     if (terminal.success) {
       options.output.emit(makeRunEvent({ type: 'run.completed', atMs: Date.now(), result: terminal.verdict, outcome: finalResult.message ?? 'completed' }));
-    } else if (terminal.errorKind === 'interrupted') {
-      options.output.emit(makeRunEvent({ type: 'run.interrupted', atMs: Date.now(), reason: finalResult.message ?? 'interrupted' }));
     } else {
       options.output.emit(makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: finalResult.message ?? 'run failed', errorKind: terminal.errorKind }));
     }
