@@ -13,7 +13,7 @@ APPROVED
 
 Some other notes.
     `;
-    expect(parseVerdict(fileContent)).toBe('APPROVED');
+    expect(parseVerdict(fileContent)).toBe('accepted');
   });
 
   it('parses REJECTED with bold markdown from ## Verdict block', () => {
@@ -27,7 +27,7 @@ Some findings...
 
 Some other notes.
     `;
-    expect(parseVerdict(fileContent)).toBe('REJECTED');
+    expect(parseVerdict(fileContent)).toBe('retry');
   });
 
   it('handles other characters/whitespace in Verdict block', () => {
@@ -35,12 +35,12 @@ Some other notes.
 ## Verdict
    APPROVED   
     `;
-    expect(parseVerdict(fileContent)).toBe('APPROVED');
+    expect(parseVerdict(fileContent)).toBe('accepted');
   });
 
-  it('falls back to stdout if file is missing or has no verdict block', () => {
+  it('does not treat stdout as artifact evidence', () => {
     const stdout = 'Agent process ran. Verdict was APPROVED';
-    expect(parseVerdict(null, stdout)).toBe('APPROVED');
+    expect(parseVerdict(null, stdout)).toBe('unknown');
   });
 
   it('returns unknown if missing both or both present or malformed', () => {

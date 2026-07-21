@@ -17,14 +17,11 @@ describe('ownershipFence — completion-side gate', () => {
   let runDir: string;
   let projectDir: string;
   const loopSpec: LoopSpec = {
-    kind: 'doc-audit',
-    target: 'docs/dev/plan.md',
-    targetKind: 'file',
-    audit: 'plan-audit',
-    'follow-up': 'plan-followup',
-    auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-    followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-    inputs: []
+    type: 'approval-loop',
+    target: { path: 'docs/dev/plan.md', kind: 'file' },
+    inputs: [],
+    evaluate: { skill: 'plan-audit', output: { pattern: 'docs/dev/plan-audit-v{version}-{provider}.md', contract: 'decision-artifact', decision: { heading: 'Verdict', accepted: 'APPROVED', retry: 'REJECTED' } } },
+    repair: { skill: 'plan-followup', output: { pattern: 'docs/dev/plan-followup-v{version}-{provider}.md', contract: 'completion-artifact' } }
   } as LoopSpec;
 
   beforeEach(() => {

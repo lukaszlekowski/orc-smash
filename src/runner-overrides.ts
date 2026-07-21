@@ -1,6 +1,7 @@
 export interface PerSkillOverride {
   agent?: string;
   model?: string;
+  effort?: string;
 }
 
 export type RunnerOverrideMap = Record<string, PerSkillOverride>;
@@ -13,7 +14,7 @@ export interface ParsedOverride {
 export function parseSkillEquals(raw: string): ParsedOverride {
   const eqIdx = raw.indexOf('=');
   if (eqIdx <= 0 || eqIdx === raw.length - 1) {
-    throw new Error(`invalid --runner/--runner-model entry '${raw}': expected skill=value`);
+    throw new Error(`invalid --runner/--runner-model/--runner-effort entry '${raw}': expected skill=value`);
   }
   return {
     skillId: raw.slice(0, eqIdx),
@@ -52,6 +53,28 @@ export function collectRunnerOverrides(
     }
     seenModel.add(skillId);
     map[skillId] = { ...map[skillId], model };
+  }
+
+  return map;
+}
+
+export function collectEffortOverrides(
+  effortEntries: string[],
+  validSkillIds: string[],
+): RunnerOverrideMap {
+  const map: RunnerOverrideMap = {};
+  const seen = new Set<string>();
+
+  for (const entry of effortEntries) {
+    const { skillId, value: effort } = parseSkillEquals(entry);
+    if (seen.has(skillId)) {
+      throw new Error(`Duplicate --runner-effort entry for skill '${skillId}'`);
+    }
+    if (!validSkillIds.includes(skillId)) {
+      throw new Error(`--runner-effort: skill '${skillId}' is not a valid skill in the selected loop. Valid skills: ${validSkillIds.join(', ')}`);
+    }
+    seen.add(skillId);
+    map[skillId] = { ...map[skillId], effort };
   }
 
   return map;

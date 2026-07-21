@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   writeArtifactWithMeta,
-  parseArtifactMeta
+  parseArtifactMeta,
+  parseArtifactMetaClassified
 } from '../src/provenance.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 describe('Provenance front-matter contract', () => {
   const tempDir = join(process.cwd(), 'temp-provenance-test');
@@ -129,5 +131,16 @@ Auditor: codex-gpt-5
     const parsed = parseArtifactMeta(written, { agent: 'fake', version: 99 });
     expect(parsed.sessionMode).toBe('resumed');
     expect(parsed.sessionId).toBe('sess_abc123');
+  });
+
+  it('classifies the complete v1 identity tuple and rejects filename/provenance drift', () => {
+    const meta = makeV1ArtifactMeta({ bindingId: 'plan', kind: 'evaluate', version: 1 });
+    writeArtifactWithMeta(tempFile, '## Verdict\n\nAPPROVED\n', meta);
+    const written = readFileSync(tempFile, 'utf-8');
+    expect(parseArtifactMetaClassified(written, { agent: 'fake', version: 1, kind: 'evaluate' }).status).toBe('classified');
+
+    writeArtifactWithMeta(tempFile, '## Verdict\n\nAPPROVED\n', { ...meta, provider: 'codex', agent: 'codex' });
+    const drifted = readFileSync(tempFile, 'utf-8');
+    expect(parseArtifactMetaClassified(drifted, { agent: 'fake', version: 1, kind: 'evaluate' }).status).toBe('unclassified');
   });
 });

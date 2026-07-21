@@ -1,10 +1,9 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
-import { renderFollowUpOutcomeSection } from '../follow-up-outcome.js';
 
 export const fakeAdapterState = {
-  verdicts: [] as ('APPROVED' | 'REJECTED' | 'unknown')[],
+  verdicts: [] as string[],
   stdout: '',
   exitCode: 0,
   writeVerdictFile: true,
@@ -18,16 +17,18 @@ export const fakeAdapterState = {
 
 export const fakeAdapter: AgentAdapter = {
   name: 'fake',
+  capabilities: { resumeSession: true, effort: true },
 
   buildRun(input: RunInput) {
     return { command: 'fake', args: [] };
   },
 
   async run(input: RunInput): Promise<RunResult> {
-    const match = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
+    const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
     const relativePath = match?.[1]?.trim() ?? '';
-    const isFollowUp = /followup-v\d+-/.test(relativePath);
-    const isImplement = /impl-v\d+-/.test(relativePath);
+    const isRepair = input.kind === 'repair' || /followup-v\d+-/.test(relativePath);
+    const isTask = input.kind === 'task';
+    const isImplement = input.skillId === '30-simple-implement' || /impl-v\d+-/.test(relativePath);
 
 
     const emitStart = () => {
@@ -95,7 +96,7 @@ export const fakeAdapter: AgentAdapter = {
         await new Promise(r => setTimeout(r, fakeAdapterState.delayMs));
       }
       const rawRes = await spawnRes.result;
-      const err = isFollowUp ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
+      const err = isRepair || isTask ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
       if (err) {
         emitEnd(err);
         return {
@@ -128,7 +129,16 @@ export const fakeAdapter: AgentAdapter = {
           exitCode: rawRes.exitCode
         };
       }
-      if (!isFollowUp) {
+      if (isTask) {
+        if (relativePath && fakeAdapterState.writeVerdictFile) {
+          const absolutePath = resolve(input.cwd, relativePath);
+          mkdirSync(dirname(absolutePath), { recursive: true });
+          writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\nCOMPLETED\n`);
+        }
+        emitEnd();
+        return { stdout: rawRes.stdout || fakeAdapterState.stdout || 'Fake task completed', exitCode: rawRes.exitCode };
+      }
+      if (!isRepair) {
         const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';
         if (relativePath && fakeAdapterState.writeVerdictFile) {
           const absolutePath = resolve(input.cwd, relativePath);
@@ -146,7 +156,7 @@ export const fakeAdapter: AgentAdapter = {
         const absolutePath = resolve(input.cwd, relativePath);
         mkdirSync(dirname(absolutePath), { recursive: true });
         writeFileSync(absolutePath,
-          `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n\nFiles patched: docs/dev/plan.md\n`);
+          `# Follow-up\n\n## Outcome\n\nCOMPLETED\n\nFiles patched: docs/dev/plan.md\n`);
       }
       const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
       if (targetMatch?.[1]) {
@@ -157,7 +167,7 @@ export const fakeAdapter: AgentAdapter = {
       }
       emitEnd();
       return {
-        stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake follow-up completed`,
+        stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake repair completed`,
         exitCode: rawRes.exitCode
       };
     }
@@ -184,7 +194,7 @@ export const fakeAdapter: AgentAdapter = {
 
     emitMessages();
 
-    const err = isFollowUp ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
+    const err = isRepair || isTask ? fakeAdapterState.followUpError : fakeAdapterState.auditError;
     if (err) {
       emitEnd(err);
       return {
@@ -219,7 +229,20 @@ export const fakeAdapter: AgentAdapter = {
       };
     }
 
-    if (!isFollowUp) {
+    if (isTask) {
+      if (relativePath && fakeAdapterState.writeVerdictFile) {
+        const absolutePath = resolve(input.cwd, relativePath);
+        mkdirSync(dirname(absolutePath), { recursive: true });
+        writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\nCOMPLETED\n`);
+      }
+      emitEnd();
+      return {
+        stdout: fakeAdapterState.stdout || 'Fake task completed',
+        exitCode: fakeAdapterState.exitCode
+      };
+    }
+
+    if (!isRepair) {
       // --- Audit path: consume exactly one verdict, write the audit artifact. ---
       const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';
       if (relativePath && fakeAdapterState.writeVerdictFile) {
@@ -240,7 +263,7 @@ export const fakeAdapter: AgentAdapter = {
       const absolutePath = resolve(input.cwd, relativePath);
       mkdirSync(dirname(absolutePath), { recursive: true });
       writeFileSync(absolutePath,
-        `# Plan Follow-up\n\n${renderFollowUpOutcomeSection('patched')}\n\nFiles patched: docs/dev/plan.md\n`);
+        `# Follow-up\n\n## Outcome\n\nCOMPLETED\n\nFiles patched: docs/dev/plan.md\n`);
     }
     const targetMatch = input.prompt.match(/Target document:\s*([^\r\n]+)/i);
     if (targetMatch?.[1]) {
@@ -251,7 +274,7 @@ export const fakeAdapter: AgentAdapter = {
     }
     emitEnd();
     return {
-      stdout: fakeAdapterState.stdout || `Fake follow-up completed`,
+      stdout: fakeAdapterState.stdout || `Fake repair completed`,
       exitCode: fakeAdapterState.exitCode
     };
   }

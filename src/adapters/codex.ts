@@ -19,6 +19,7 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'codex',
+    capabilities: { resumeSession: true, effort: true },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
       const isContinuity = !!input.continuity;
@@ -37,6 +38,10 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
         '--skip-git-repo-check',
         '--dangerously-bypass-approvals-and-sandbox'
       );
+
+      if (input.effort) {
+        args.push('-c', `model_reasoning_effort=${input.effort}`);
+      }
 
       if (isContinuity) {
         args.push('--json');

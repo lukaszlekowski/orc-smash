@@ -18,22 +18,27 @@ vi.mock('@inquirer/prompts', () => ({
 
 describe('Interactive registry selection', () => {
   const dummyConfig = (providers: Record<string, string[]>, defaults: { agent: string; model: string }): Config => ({
+    projectRoot: process.cwd(),
+    manifestPath: '/path/to/config/orc-smash.yaml',
+    manifestRoot: '/path/to/config',
     registry: {
       providers: Object.fromEntries(Object.entries(providers).map(([provider, models]) => [provider, { models, defaultModel: models[0]! }])),
       defaultProfile: 'default',
       profiles: { default: { provider: defaults.agent } }
     },
     manifest: {
+      schemaVersion: 1 as const,
       roles: { auditor: 'roles/auditor.md' },
       skills: {
         'plan-audit': {
           file: 'skills/plan-audit/SKILL.md',
           role: 'auditor',
-          kind: 'audit',
           runnerProfile: 'default'
         }
       },
-      loops: {}
+      loops: {},
+      tasks: {},
+      pipelines: {}
     }
   });
 
@@ -102,6 +107,9 @@ describe('Interactive registry selection', () => {
 
   it('does not throw when defaultProfile provider is unselectable but skill profile provider is selectable', async () => {
     const config: Config = {
+      projectRoot: process.cwd(),
+      manifestPath: '/path/to/config/orc-smash.yaml',
+      manifestRoot: '/path/to/config',
       registry: {
         providers: {
           codex: { models: ['codex-model'], defaultModel: 'codex-model' }
@@ -113,16 +121,18 @@ describe('Interactive registry selection', () => {
         }
       },
       manifest: {
+        schemaVersion: 1 as const,
         roles: { auditor: 'roles/auditor.md' },
         skills: {
           'plan-audit': {
             file: 'skills/plan-audit/SKILL.md',
             role: 'auditor',
-            kind: 'audit',
             runnerProfile: 'selectableProfile'
           }
         },
-        loops: {}
+        loops: {},
+        tasks: {},
+        pipelines: {}
       }
     };
 
@@ -144,8 +154,8 @@ describe('Interactive registry selection', () => {
     vi.mocked(select).mockResolvedValueOnce('continue');
 
     const actions: StageAction[] = [
-      { id: 'start-new-new-session', group: 'start-new', stage: 'audit', version: 1, sessionPolicy: 'new', label: 'Start New', recommended: false },
-      { id: 'continue', group: 'continue', stage: 'audit', version: 1, sessionPolicy: 'resumed', label: 'Continue', recommended: true }
+      { id: 'start-new', group: 'start-new', stage: 'evaluate', version: 1, sessionPolicy: 'new', label: 'Start New', recommended: false },
+      { id: 'continue', group: 'continue', stage: 'repair', version: 1, sessionPolicy: 'new', label: 'Continue', recommended: true }
     ];
 
     const result = await promptStageAction(actions, 'continue');
@@ -236,5 +246,22 @@ describe('Interactive registry selection', () => {
     expect(vi.mocked(confirm)).not.toHaveBeenCalled();
     expect(vi.mocked(select)).toHaveBeenCalledTimes(2);
     expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
+  });
+
+  it('selects effort after the provider/model pair when the adapter supports it', async () => {
+    const config = dummyConfig({ opencode: ['opencode-model'] }, { agent: 'opencode', model: 'opencode-model' });
+    config.registry.providers.opencode!.efforts = ['low', 'medium', 'high'];
+    config.registry.providers.opencode!.defaultEffort = 'medium';
+    const prodRegistry = createProductionAdapterRegistry();
+
+    vi.mocked(confirm).mockResolvedValueOnce(true);
+    vi.mocked(select)
+      .mockResolvedValueOnce('opencode')
+      .mockResolvedValueOnce('opencode-model')
+      .mockResolvedValueOnce('high');
+
+    const runners = await promptRunners(['plan-audit'], config, prodRegistry);
+    expect(runners['plan-audit']).toEqual({ agent: 'opencode', model: 'opencode-model', effort: 'high' });
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(3);
   });
 });

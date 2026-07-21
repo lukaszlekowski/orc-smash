@@ -76,7 +76,7 @@ describe('Plain mode loop-level integration', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.verdict).toBe('APPROVED');
+    expect(result.verdict).toBe('accepted');
 
     // console.clear must NOT be called in plain mode
     expect(clearSpy).not.toHaveBeenCalled();
@@ -111,7 +111,7 @@ describe('Plain mode loop-level integration', () => {
     expect(ora).not.toHaveBeenCalled();
 
     const writes = stdoutWriteSpy.mock.calls.map((c: any) => String(c[0])).join('');
-    expect(writes).toContain('step.started kind=audit');
+    expect(writes).toContain('step.started kind=evaluate');
     expect(writes).toContain('run.failed');
   });
 
@@ -134,13 +134,13 @@ describe('Plain mode loop-level integration', () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.verdict).toBe('REJECTED');
+    expect(result.verdict).toBe('retry');
 
     expect(clearSpy).not.toHaveBeenCalled();
     expect(ora).not.toHaveBeenCalled();
 
     const writes = stdoutWriteSpy.mock.calls.map((c: any) => String(c[0])).join('');
-    expect(writes).toContain('step.started kind=audit');
+    expect(writes).toContain('step.started kind=evaluate');
     expect(writes).toContain('version=1');
     expect(writes).toContain('version=2');
     expect(writes).toContain('run.failed');

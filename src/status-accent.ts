@@ -35,7 +35,10 @@ export function roleAccent(role: string): RoleAccent {
 const kindMap: Record<StepKind, KindAccent> = {
   audit: { chalk: chalk.cyan, label: 'audit' },
   'follow-up': { chalk: chalk.yellow, label: 'follow-up' },
-  implement: { chalk: chalk.green, label: 'implement' }
+  implement: { chalk: chalk.green, label: 'implement' },
+  evaluate: { chalk: chalk.cyan, label: 'evaluate' },
+  repair: { chalk: chalk.yellow, label: 'repair' },
+  task: { chalk: chalk.green, label: 'task' },
 };
 
 export function kindAccent(kind: StepKind): KindAccent {
@@ -62,7 +65,10 @@ export function panelBorderColor(ctx: PanelContext): PanelBorderColor {
     const map: Record<StepKind, PanelBorderColor> = {
       audit: 'cyan',
       'follow-up': 'yellow',
-      implement: 'green'
+      implement: 'green',
+      evaluate: 'cyan',
+      repair: 'yellow',
+      task: 'green',
     };
     return map[ctx.inFlight.kind];
   }
@@ -76,7 +82,10 @@ export function panelBorderColor(ctx: PanelContext): PanelBorderColor {
     const map: Record<StepKind, PanelBorderColor> = {
       audit: 'cyan',
       'follow-up': 'yellow',
-      implement: 'green'
+      implement: 'green',
+      evaluate: 'cyan',
+      repair: 'yellow',
+      task: 'green',
     };
     return map[last.kind] ?? 'blue';
   }

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runLoop } from '../src/loop.js';
+import { runLoop, runTask } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapterState } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
@@ -151,7 +151,7 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
     expect(first.maxIterations).toBe(5);
   });
 
-  it('live follow-up spawn carries inFlight.kind === "follow-up" and panelBorderColor === "yellow" (v9 audit Major #2 closure)', async () => {
+  it('live repair spawn carries inFlight.kind === "repair" and panelBorderColor === "yellow"', async () => {
     fakeAdapterState.verdicts = ['REJECTED', 'APPROVED'];
     fakeAdapterState.delayMs = 50;
     const config = loadConfig(tempWorkspace);
@@ -169,25 +169,22 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       interactive: false
     });
 
-    // At least one snapshot must have inFlightKind === 'follow-up'
-    // (the live follow-up spawn's in-flight record).
-    const followUpSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'follow-up');
+    const followUpSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'repair');
     expect(followUpSnapshots.length).toBeGreaterThan(0);
-    // The timeline (snapshot) must NOT contain a follow-up step at attach-time
-    // (the pre-artifact case — the follow-up hasn't been pushed yet).
+    // The timeline must not contain the repair step at attach-time.
     for (const snap of followUpSnapshots) {
-      expect(snap.timelineKinds.includes('follow-up')).toBe(false);
+      expect(snap.timelineKinds.includes('repair')).toBe(false);
     }
     // panelBorderColor during the live follow-up spawn must be 'yellow'
     // (the border mirrors the in-flight kind, not the historical timeline).
-    const followUpRaw = captured.rawContexts.filter(ctx => ctx.inFlight?.kind === 'follow-up');
+    const followUpRaw = captured.rawContexts.filter(ctx => ctx.inFlight?.kind === 'repair');
     expect(followUpRaw.length).toBeGreaterThan(0);
     for (const ctx of followUpRaw) {
       expect(panelBorderColor(ctx)).toBe('yellow');
     }
   });
 
-  it('live audit spawn carries inFlight.kind === "audit" with status: "running"', async () => {
+  it('live evaluate spawn carries inFlight.kind === "evaluate" with status: "running"', async () => {
     fakeAdapterState.verdicts = ['APPROVED'];
     fakeAdapterState.delayMs = 50;
     const config = loadConfig(tempWorkspace);
@@ -205,7 +202,7 @@ describe('loop-level live region — runLoop with delayed fake adapter', () => {
       interactive: false
     });
 
-    const auditLive = captured.snapshots.filter(s => s.inFlightKind === 'audit' && s.inFlightStatus === 'running');
+    const auditLive = captured.snapshots.filter(s => s.inFlightKind === 'evaluate' && s.inFlightStatus === 'running');
     expect(auditLive.length).toBeGreaterThan(0);
   });
 
@@ -283,14 +280,9 @@ describe('loop-level live region — failure transition (v8 audit M1 closure)', 
 });
 
 describe('loop-level live region — implement loop (v9 audit Major #2 closure)', () => {
-  it('live implement spawn captures pre-artifact state and panelBorderColor === "green"', async () => {
-    // Write an approved plan audit artifact so requireApprovedPlanAuditPath succeeds
+  it('live task spawn captures pre-artifact state and panelBorderColor === "green"', async () => {
     const devDir = join(tempWorkspace, 'docs/dev');
     mkdirSync(devDir, { recursive: true });
-    writeFileSync(join(devDir, 'plan-audit-v1-fake.md'),
-      '# Plan Audit\n\n## Verdict\n\nAPPROVED\n');
-
-    // plan.md with proper front matter (needed by implement closeout)
     writeFileSync(join(devDir, 'plan.md'),
       '---\nstatus: ready\nconfidence: 0.96\n---\n\n# My Plan\n');
 
@@ -302,9 +294,7 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
     fakeAdapterState.verdicts = [];
     fakeAdapterState.delayMs = 50;
 
-    const implementLoopSpec = config.manifest.loops['implement']!;
-
-    await runLoop(tempWorkspace, 'implement', implementLoopSpec, config, {
+    await runTask(tempWorkspace, 'implement', config.manifest.tasks!.implement!, config, {
       '30-simple-implement': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 1,
@@ -313,22 +303,20 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
       interactive: false
     });
 
-    // At least one snapshot must have inFlightKind === 'implement'
-    const implementSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'implement');
+    const implementSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'task');
     expect(implementSnapshots.length).toBeGreaterThan(0);
 
-    // Pre-artifact case: timeline must NOT contain an implement step at attach-time
-    // (the implement hasn't been pushed yet).
+    // Pre-artifact case: timeline must not contain a task step at attach-time.
     for (const snap of implementSnapshots) {
-      expect(snap.timelineKinds.includes('implement')).toBe(false);
+      expect(snap.timelineKinds.includes('task')).toBe(false);
     }
 
     // At least one snapshot has inFlightStatus === 'running'
-    const runningImplement = captured.snapshots.filter(s => s.inFlightKind === 'implement' && s.inFlightStatus === 'running');
+    const runningImplement = captured.snapshots.filter(s => s.inFlightKind === 'task' && s.inFlightStatus === 'running');
     expect(runningImplement.length).toBeGreaterThan(0);
 
     // panelBorderColor during the live implement spawn must be 'green'
-    const implementRaw = captured.rawContexts.filter(ctx => ctx.inFlight?.kind === 'implement');
+    const implementRaw = captured.rawContexts.filter(ctx => ctx.inFlight?.kind === 'task');
     expect(implementRaw.length).toBeGreaterThan(0);
     for (const ctx of implementRaw) {
       expect(panelBorderColor(ctx)).toBe('green');
@@ -356,16 +344,14 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
       interactive: false
     });
 
-    // Check snapshots captured during the audit phase (kind: audit)
-    const auditSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'audit');
+    const auditSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'evaluate');
     expect(auditSnapshots.length).toBeGreaterThan(0);
     for (const snap of auditSnapshots) {
       expect(snap.inFlightRole).toBe('reviewer');
       expect(snap.nextStepMessage).toContain('review');
     }
 
-    // Check snapshots captured during the follow-up phase (kind: follow-up)
-    const followUpSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'follow-up');
+    const followUpSnapshots = captured.snapshots.filter(s => s.inFlightKind === 'repair');
     expect(followUpSnapshots.length).toBeGreaterThan(0);
     for (const snap of followUpSnapshots) {
       expect(snap.inFlightRole).toBe('implementer');

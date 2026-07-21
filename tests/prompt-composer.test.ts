@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { composePrompt } from '../src/prompt-composer.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { LoopSpec } from '../src/manifest.js';
+import type { InputSpec } from '../src/manifest.js';
 
 describe('Prompt Composer', () => {
   const tempDir = join(process.cwd(), 'temp-prompt-composer-test');
@@ -22,34 +22,26 @@ describe('Prompt Composer', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('correctly assembles role, skill, and inputs for audit kind', () => {
-    const loopSpec: LoopSpec = {
-      kind: 'doc-audit',
-      target: 'docs/dev/plan.md',
-      targetKind: 'file',
-      audit: 'plan-audit',
-      'follow-up': 'plan-follow-up',
-      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-      inputs: [
-        { label: 'Target document', source: 'target' },
-        { label: 'Audit version', source: 'version' },
-        { label: 'Prior audit (v2+)', source: 'priorAudit' },
-        { label: 'Write your output to', source: 'outputPath' }
-      ]
-    };
+  const auditInputs: InputSpec[] = [
+    { label: 'Target document', source: 'target' },
+    { label: 'Audit version', source: 'version' },
+    { label: 'Prior audit (v2+)', source: 'priorArtifact' },
+    { label: 'Output path', source: 'outputPath' }
+  ];
 
+  it('correctly assembles role, skill, and inputs for audit kind', () => {
     const prompt = composePrompt(
       'some-skill',
       'roles/auditor.md',
       'skills/some-skill/SKILL.md',
-      loopSpec,
+      auditInputs,
       {
-        targetRoot: tempDir,
+        projectRoot: tempDir,
+        target: { path: 'docs/dev/plan.md', kind: 'file' },
         version: 3,
-        priorAuditPath: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'),
-        agentName: 'opencode',
-        kind: 'audit'
+        provider: 'opencode',
+        priorArtifact: { path: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'), artifactIdentity: 'v2-audit', contentDigest: 'abc' },
+        outputPattern: 'docs/dev/plan-audit-v{version}-{provider}.md',
       },
       tempDir
     );
@@ -60,71 +52,50 @@ describe('Prompt Composer', () => {
     expect(prompt).toContain(`Target document: ${join(tempDir, 'docs/dev/plan.md')}`);
     expect(prompt).toContain('Audit version: 3');
     expect(prompt).toContain(`Prior audit (v2+): ${join(tempDir, 'docs/dev/plan-audit-v2-opencode.md')}`);
-    expect(prompt).toContain(`Write your output to: ${join(tempDir, 'docs/dev/plan-audit-v3-opencode.md')}`);
+    expect(prompt).toContain(`Output path: ${join(tempDir, 'docs/dev/plan-audit-v3-opencode.md')}`);
   });
 
   it('correctly assembles role, skill, and inputs for follow-up kind', () => {
-    const loopSpec: LoopSpec = {
-      kind: 'doc-audit',
-      target: 'docs/dev/plan.md',
-      targetKind: 'file',
-      audit: 'plan-audit',
-      'follow-up': 'plan-follow-up',
-      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-      inputs: [
-        { label: 'Target document', source: 'target' },
-        { label: 'Audit version', source: 'version' },
-        { label: 'Prior audit (v2+)', source: 'priorAudit' },
-        { label: 'Write your output to', source: 'outputPath' }
-      ]
-    };
-
     const prompt = composePrompt(
       'some-skill',
       'roles/auditor.md',
       'skills/some-skill/SKILL.md',
-      loopSpec,
+      auditInputs,
       {
-        targetRoot: tempDir,
+        projectRoot: tempDir,
+        target: { path: 'docs/dev/plan.md', kind: 'file' },
         version: 3,
-        priorAuditPath: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'),
-        agentName: 'opencode',
-        kind: 'follow-up'
+        provider: 'opencode',
+        priorArtifact: { path: join(tempDir, 'docs/dev/plan-audit-v2-opencode.md'), artifactIdentity: 'v2-audit', contentDigest: 'abc' },
+        outputPattern: 'docs/dev/plan-followup-v{version}-{provider}.md',
       },
       tempDir
     );
 
-    expect(prompt).toContain(`Write your output to: ${join(tempDir, 'docs/dev/plan-followup-v3-opencode.md')}`);
+    expect(prompt).toContain(`Output path: ${join(tempDir, 'docs/dev/plan-followup-v3-opencode.md')}`);
   });
 
   it('renders every implementation filesystem input as an absolute target-root path', () => {
-    const loopSpec: LoopSpec = {
-      kind: 'implement',
-      target: '.',
-      targetKind: 'worktree',
-      planPath: 'docs/dev/plan.md',
-      implement: '30-simple-implement',
-      implementPattern: 'docs/dev/impl-v{n}-{agent}.md',
-      inputs: [
-        { label: 'Plan document', source: 'planPath' },
-        { label: 'Target (working tree)', source: 'target' },
-        { label: 'Approved audit (v1+)', source: 'priorAudit' },
-        { label: 'Write your output to', source: 'outputPath' }
-      ]
-    };
+    const implInputs: InputSpec[] = [
+      { label: 'Plan document', source: 'planPath' },
+      { label: 'Target (working tree)', source: 'target' },
+      { label: 'Approved audit (v1+)', source: 'priorArtifact' },
+      { label: 'Output path', source: 'outputPath' }
+    ];
 
     const prompt = composePrompt(
       'some-skill',
       'roles/auditor.md',
       'skills/some-skill/SKILL.md',
-      loopSpec,
+      implInputs,
       {
-        targetRoot: tempDir,
+        projectRoot: tempDir,
+        target: { path: '.', kind: 'worktree' },
         version: 1,
-        priorAuditPath: join(tempDir, 'docs/dev/plan-audit-v10-codex.md'),
-        agentName: 'agy',
-        kind: 'implement'
+        provider: 'agy',
+        priorArtifact: { path: join(tempDir, 'docs/dev/plan-audit-v10-codex.md'), artifactIdentity: 'v10-audit', contentDigest: 'xyz' },
+        outputPattern: 'docs/dev/impl-v{version}-{provider}.md',
+        files: { planPath: 'docs/dev/plan.md' },
       },
       tempDir
     );
@@ -132,32 +103,29 @@ describe('Prompt Composer', () => {
     expect(prompt).toContain(`Plan document: ${join(tempDir, 'docs/dev/plan.md')}`);
     expect(prompt).toContain(`Target (working tree): ${tempDir}`);
     expect(prompt).toContain(`Approved audit (v1+): ${join(tempDir, 'docs/dev/plan-audit-v10-codex.md')}`);
-    expect(prompt).toContain(`Write your output to: ${join(tempDir, 'docs/dev/impl-v1-agy.md')}`);
+    expect(prompt).toContain(`Output path: ${join(tempDir, 'docs/dev/impl-v1-agy.md')}`);
   });
 
   it('preserves the none sentinel for optional filesystem inputs', () => {
-    const loopSpec: LoopSpec = {
-      kind: 'code-review',
-      target: '.',
-      targetKind: 'worktree',
-      planPath: 'docs/dev/plan.md',
-      checklistPath: 'none',
-      audit: 'review',
-      'follow-up': 'review-follow-up',
-      auditPattern: 'docs/dev/review-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/review-followup-v{n}-{agent}.md',
-      inputs: [
-        { label: 'Feature checklist', source: 'checklistPath' },
-        { label: 'Prior review', source: 'priorAudit' }
-      ]
-    };
+    const reviewInputs: InputSpec[] = [
+      { label: 'Feature checklist', source: 'checklistPath' },
+      { label: 'Prior review', source: 'priorArtifact' }
+    ];
 
     const prompt = composePrompt(
       'some-skill',
       'roles/auditor.md',
       'skills/some-skill/SKILL.md',
-      loopSpec,
-      { targetRoot: tempDir, version: 1, priorAuditPath: null, agentName: 'agy', kind: 'audit' },
+      reviewInputs,
+      {
+        projectRoot: tempDir,
+        target: { path: '.', kind: 'worktree' },
+        version: 1,
+        provider: 'agy',
+        priorArtifact: { kind: 'none' },
+        outputPattern: 'docs/dev/review-v{version}-{provider}.md',
+        files: { checklistPath: 'none' },
+      },
       tempDir
     );
 
@@ -167,37 +135,30 @@ describe('Prompt Composer', () => {
   });
 
   it('explicitly authorizes the auditor to create the required audit artifact', () => {
-    const loopSpec: LoopSpec = {
-      kind: 'doc-audit',
-      target: 'docs/dev/plan.md',
-      targetKind: 'file',
-      audit: 'plan-audit',
-      'follow-up': 'plan-follow-up',
-      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-      inputs: [
-        { label: 'Target document', source: 'target' },
-        { label: 'Write your output to', source: 'outputPath' }
-      ]
-    };
+    const authInputs: InputSpec[] = [
+      { label: 'Target document', source: 'target' },
+      { label: 'Output path', source: 'outputPath' }
+    ];
 
     const prompt = composePrompt(
       'plan-audit',
       'roles/auditor.md',
       'skills/21-simple-plans-audit/SKILL.md',
-      loopSpec,
+      authInputs,
       {
-        targetRoot: tempDir,
+        projectRoot: tempDir,
+        target: { path: 'docs/dev/plan.md', kind: 'file' },
         version: 1,
-        priorAuditPath: null,
-        agentName: 'codex',
-        kind: 'audit'
-      }
+        provider: 'codex',
+        priorArtifact: { kind: 'none' },
+        outputPattern: 'docs/dev/plan-audit-v{version}-{provider}.md',
+      },
+      process.cwd()
     );
 
     expect(prompt).toContain('Do not modify source code or the target plan document.');
     expect(prompt).toContain('explicitly authorized and required to create the audit document');
     expect(prompt).toContain('do not return it only in chat or stdout');
-    expect(prompt).toContain(`Write your output to: ${join(tempDir, 'docs/dev/plan-audit-v1-codex.md')}`);
+    expect(prompt).toContain(`Output path: ${join(tempDir, 'docs/dev/plan-audit-v1-codex.md')}`);
   });
 });

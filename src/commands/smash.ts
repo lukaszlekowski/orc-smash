@@ -1,29 +1,36 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
-import { scan, requireApprovedPlanAuditPath } from '../state.js';
-import { runLoop } from '../loop.js';
-import { resolveRunner, type ResolvedRunner } from '../runner.js';
-import {
-  promptLoopSelect,
-  promptMaxIterations
-} from '../interactive.js';
-import { deriveContinuity, type AuditContinuityPolicy } from '../stage-menu.js';
-import { collectRunnerOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
+import { scanGlobalSnapshot } from '../state.js';
+import { runLoop, runTask } from '../loop.js';
+import { resolveRunner, validateRunnerCapabilities, type ResolvedRunner } from '../runner.js';
+import { promptLoopSelect, promptMaxIterations } from '../interactive.js';
+import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, setActiveRunEventSink, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
-import type { LoopSpec } from '../manifest.js';
+import type { LoopBinding, TaskBinding, V1Manifest } from '../manifest.js';
 import { configureSpawnDebug, debugHarnessEvent } from '../debug-spawn.js';
 import { makeRunEvent } from '../run-event.js';
-
+import { mintRunContext, type RunContext } from '../pipeline-state.js';
 import { resolveDefaultLoop } from '../loop-selector.js';
+import type { BindingKind } from '../loops/binding-engine.js';
+import type { LoopReturn, RunOutcome } from '../loops/runtime.js';
+
+type SelectedBinding =
+  | { kind: 'loop'; id: string; binding: LoopBinding }
+  | { kind: 'task'; id: string; binding: TaskBinding };
 
 export interface SmashOptions {
   project?: string;
   loop?: string;
+  task?: string;
+  pipeline?: string;
+  config?: string;
   agent?: string;
   model?: string;
+  effort?: string;
   maxIterations?: string;
   debugSpawn?: boolean;
   debugSpawnFile?: string;
@@ -31,51 +38,105 @@ export interface SmashOptions {
   plain?: boolean;
   runner?: string[];
   runnerModel?: string[];
-  codexAuditContinuity?: boolean;
-  auditContinuity?: boolean;
-  /**
-   * Test seam (Step 5, v3-audit M1 fix): the factory used to build the
-   * agent registry. Defaults to `(cfg) => createProductionAdapterRegistry(cfg.registry)`.
-   * Production code never passes this — the test suite (Step 11) injects a
-   * spy to observe that the loaded `config.registry` actually reaches
-   * the production registry call site.
-   */
+  runnerEffort?: string[];
   createAdapterRegistry?: (cfg: Config) => AgentRegistry;
 }
 
 interface SmashRunSetup {
   projectRoot: string;
-  loopName: string;
-  loopSpec: LoopSpec;
+  bindingKind: BindingKind;
+  bindingId: string;
+  binding: LoopBinding | TaskBinding;
   config: Config;
   runners: Record<string, ResolvedRunner>;
   maxIterations: number;
-  globalOverrides: { agent?: string; model?: string };
+  globalOverrides: { agent?: string; model?: string; effort?: string };
   isInteractive: boolean;
   registry: AgentRegistry;
   runnerOverrides: RunnerOverrideMap;
-  auditContinuity: AuditContinuityPolicy;
+  runContext?: RunContext;
 }
 
-function deriveAuditContinuityPolicy(options: SmashOptions): AuditContinuityPolicy {
-  if (options.auditContinuity) {
-    return { enabled: true, requestedBy: 'audit-continuity' };
+type ResolveResult = { errorResult: CommandResult } | { setup: SmashRunSetup } | { retry: true };
+
+function allBindings(manifest: V1Manifest): Record<string, LoopBinding | TaskBinding> {
+  return {
+    ...manifest.loops,
+    ...(manifest.tasks ?? {}),
+  };
+}
+
+function selectedFromPipeline(manifest: V1Manifest, pipelineId: string): { selected: SelectedBinding; stageId: string } | null {
+  const pipeline = manifest.pipelines[pipelineId];
+  const stage = pipeline?.stages[0];
+  if (!stage) return null;
+  if (stage.loop) {
+    const binding = manifest.loops[stage.loop];
+    return binding ? { selected: { kind: 'loop', id: stage.loop, binding }, stageId: stage.stageId } : null;
   }
-  if (options.codexAuditContinuity) {
-    return { enabled: true, requestedBy: 'codex-audit-continuity' };
+  if (stage.task) {
+    const binding = manifest.tasks?.[stage.task];
+    return binding ? { selected: { kind: 'task', id: stage.task, binding }, stageId: stage.stageId } : null;
   }
-  return { enabled: false };
+  return null;
+}
+
+function selectedFromOptions(manifest: V1Manifest, options: SmashOptions): { selected: SelectedBinding; pipelineStageId?: string } | { error: string } | null {
+  const selectedCount = [options.loop, options.task, options.pipeline].filter(Boolean).length;
+  if (selectedCount > 1) {
+    return { error: '--loop, --task, and --pipeline are mutually exclusive.' };
+  }
+
+  if (options.pipeline) {
+    const result = selectedFromPipeline(manifest, options.pipeline);
+    if (!result) return { error: `pipeline '${options.pipeline}' not found or has no valid first stage.` };
+    return { selected: result.selected, pipelineStageId: result.stageId };
+  }
+  if (options.task) {
+    const binding = manifest.tasks?.[options.task];
+    return binding
+      ? { selected: { kind: 'task', id: options.task, binding } }
+      : { error: `task '${options.task}' not found in manifest.` };
+  }
+  if (options.loop) {
+    const binding = manifest.loops[options.loop];
+    return binding
+      ? { selected: { kind: 'loop', id: options.loop, binding } }
+      : { error: `loop '${options.loop}' not found in manifest.` };
+  }
+  return null;
+}
+
+function bindingMissingInputs(projectRoot: string, binding: LoopBinding | TaskBinding): string[] {
+  const missing: string[] = [];
+  if (binding.target.kind === 'file' && binding.target.path !== '.') {
+    if (!existsSync(resolve(projectRoot, binding.target.path))) {
+      missing.push(`target: ${binding.target.path}`);
+    }
+  }
+  for (const [key, projectPath] of Object.entries(binding.files ?? {})) {
+    if (!existsSync(resolve(projectRoot, projectPath))) {
+      missing.push(`file: ${key}=${projectPath}`);
+    }
+  }
+  return missing;
+}
+
+function bindingSkills(selected: SelectedBinding): string[] {
+  return selected.kind === 'task'
+    ? [selected.binding.skill]
+    : [selected.binding.evaluate.skill, selected.binding.repair.skill];
 }
 
 async function resolveSmashRunSetup(
   projectRoot: string,
-  options: SmashOptions
-): Promise<{ errorResult: CommandResult } | { setup: SmashRunSetup }> {
+  options: SmashOptions,
+): Promise<ResolveResult> {
   let config: Config;
   try {
-    config = loadConfig(projectRoot);
+    config = loadConfig(projectRoot, options.config);
     debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', result: 'pass' });
-    options.output.emit(makeRunEvent({ type: 'config.loaded', atMs: Date.now(), path: resolve(projectRoot, 'skills.yaml') }));
+    options.output.emit(makeRunEvent({ type: 'config.loaded', atMs: Date.now(), path: config.manifestPath }));
   } catch (err: any) {
     const msg = `Error: failed to load config or manifest: ${err.message}`;
     debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'config-load', detail: err.message, result: 'fail' });
@@ -84,209 +145,143 @@ async function resolveSmashRunSetup(
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  // §3: register the active project root for interrupt-time marker placement,
-  // and quarantine any in-flight/late artifact left by a prior interrupted run
-  // BEFORE any decision-path scan below can hit `unknown` or advance state.
   setActiveProjectRoot(projectRoot);
-  quarantineInterruptedResume(projectRoot, config.manifest.loops);
+  quarantineInterruptedResume(projectRoot, allBindings(config.manifest));
 
-  const loopKeys = Object.keys(config.manifest.loops);
-  if (loopKeys.length === 0) {
-    const msg = 'Error: no loops defined in manifest.';
+  const loopIds = Object.keys(config.manifest.loops);
+  const taskIds = Object.keys(config.manifest.tasks ?? {});
+  if (loopIds.length === 0 && taskIds.length === 0) {
+    const msg = 'Error: no loops or tasks defined in manifest.';
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
   const buildRegistry = options.createAdapterRegistry ?? buildDefaultAdapterRegistry;
   const registry = buildRegistry(config);
+  const isInteractive = !options.loop && !options.task && !options.pipeline;
 
-  // 1. Loop selection
-  let loopName = options.loop;
-  const isInteractive = !options.loop;
-
-  // Reject per-skill overrides without explicit --loop
-  if (isInteractive && (options.runner?.length || options.runnerModel?.length)) {
-    const msg = 'Error: --runner / --runner-model require an explicit --loop.';
+  if (isInteractive && (options.runner?.length || options.runnerModel?.length || options.runnerEffort?.length)) {
+    const msg = 'Error: --runner / --runner-model / --runner-effort require an explicit --loop, --task, or --pipeline.';
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  if (isInteractive) {
-    const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, config.manifest);
-    loopName = await promptLoopSelect(loopKeys, defaultLoop);
-  }
-
-  if (!loopName || !config.manifest.loops[loopName]) {
-    const msg = `Error: loop '${loopName}' not found in manifest.`;
+  let selected: SelectedBinding;
+  let pipelineStageId: string | undefined;
+  const explicit = selectedFromOptions(config.manifest, options);
+  if (explicit && 'error' in explicit) {
+    const msg = `Error: ${explicit.error}`;
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
-
-  const loopSpec = config.manifest.loops[loopName]!;
-  debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'loop-selected', detail: loopName, result: 'pass' });
-  options.output.emit(makeRunEvent({ type: 'loop.selected', atMs: Date.now(), loopName }));
-
-  // 1a. Mutual-exclusion check before policy derivation
-  if (options.auditContinuity && options.codexAuditContinuity) {
-    const msg = 'Error: --audit-continuity and --codex-audit-continuity are mutually exclusive.';
-    options.output.error(msg);
-    return { errorResult: { exitCode: 1, message: msg } };
-  }
-  const auditContinuity = deriveAuditContinuityPolicy(options);
-
-  // Audit-continuity is only valid for plan/review loops
-  if (auditContinuity.enabled && loopSpec.kind !== 'doc-audit' && loopSpec.kind !== 'code-review') {
-    const msg = `Error: --audit-continuity is not supported for loop '${loopName}' (kind: ${loopSpec.kind}). Only plan and review loops support continuity.`;
-    options.output.error(msg);
-    return { errorResult: { exitCode: 1, message: msg } };
-  }
-
-  // 2. Scan state
-  if (loopSpec.kind === 'implement') {
-    try {
-      const planSpec = config.manifest.loops['plan'];
-      if (!planSpec) {
-        throw new Error("Loop 'plan' not found in manifest");
-      }
-      requireApprovedPlanAuditPath(projectRoot, {
-        auditPattern: planSpec.auditPattern ?? '',
-        followUpPattern: planSpec.followUpPattern ?? ''
-      });
-      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'approved-plan-requirement', result: 'pass' });
-    } catch (err: any) {
-      const msg = `Error: ${err.message}`;
-      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'approved-plan-requirement', detail: err.message, result: 'fail' });
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
+  if (explicit) {
+    selected = explicit.selected;
+    pipelineStageId = explicit.pipelineStageId;
   } else {
-    const stateScan = scan(projectRoot, { auditPattern: loopSpec.auditPattern!, followUpPattern: loopSpec.followUpPattern! });
-    options.output.emit(makeRunEvent({ type: 'state.scanned', atMs: Date.now(), latestVerdict: stateScan.latestVerdict ?? 'none', version: stateScan.latestVersion }));
-    if (stateScan.latestVerdict === 'unknown' && stateScan.auditSteps.length > 0) {
-      const msg = 'latest audit is unparseable; resolve or delete it before smashing';
-      debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: 'latest audit unparseable', result: 'fail' });
+    if (loopIds.length === 0) {
+      const msg = 'Error: interactive selection requires at least one configured loop.';
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
-    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'state-scan-preflight', detail: `latestVerdict=${stateScan.latestVerdict}`, result: 'pass' });
+    const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, config.manifest);
+    const id = await promptLoopSelect(loopIds, defaultLoop);
+    selected = { kind: 'loop', id, binding: config.manifest.loops[id]! };
   }
 
-  // 3. Runners selection & validation
-  const loopSkills = loopSpec.kind === 'implement'
-    ? (loopSpec.implement ? [loopSpec.implement] : [])
-    : [loopSpec.audit, loopSpec['follow-up']].filter((s): s is string => !!s);
+  debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'binding-selected', detail: `${selected.kind}/${selected.id}`, result: 'pass' });
+  options.output.emit(makeRunEvent({ type: 'binding.selected', atMs: Date.now(), bindingId: selected.id, bindingKind: selected.kind }));
+
+  const missing = bindingMissingInputs(projectRoot, selected.binding);
+  if (missing.length > 0) {
+    const message = `Project inputs missing: ${missing.join(', ')}`;
+    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'input-missing', detail: message, result: 'fail' });
+    options.output.emit(makeRunEvent({ type: 'input.missing', atMs: Date.now(), missing }));
+    if (!isInteractive) {
+      options.output.error(`Error: ${message}`);
+      return { errorResult: { exitCode: 1, message } };
+    }
+    return { retry: true };
+  }
+
+  const runContext = options.pipeline
+    ? mintRunContext({ mode: 'pipeline-start', pipelineId: options.pipeline, stageId: pipelineStageId })
+    : undefined;
+
+  if (selected.kind === 'loop') {
+    const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
+    const stateSteps = snapshot.byBinding.get(selected.id) ?? [];
+    const latest = stateSteps.at(-1);
+    options.output.emit(makeRunEvent({
+      type: 'state.scanned',
+      atMs: Date.now(),
+      latestResult: latest?.decision ?? latest?.completionOutcome ?? (latest?.unclassified ? 'unknown' : 'none'),
+      version: latest?.version ?? 0,
+    }));
+  }
+
+  const skills = bindingSkills(selected);
   const runners: Record<string, ResolvedRunner> = {};
-
-  const globalOverrides = {
-    agent: options.agent,
-    model: options.model
-  };
-
-  // Collect per-skill overrides
+  const globalOverrides = { agent: options.agent, model: options.model, effort: options.effort };
   let runnerOverrides: RunnerOverrideMap = {};
   try {
-    runnerOverrides = collectRunnerOverrides(
-      options.runner ?? [],
-      options.runnerModel ?? [],
-      loopSkills
-    );
+    runnerOverrides = collectRunnerOverrides(options.runner ?? [], options.runnerModel ?? [], skills);
+    if (options.runnerEffort?.length) {
+      const effortOverrides = collectEffortOverrides(options.runnerEffort, skills);
+      for (const [skillId, override] of Object.entries(effortOverrides)) {
+        runnerOverrides[skillId] = { ...runnerOverrides[skillId], ...override };
+      }
+    }
   } catch (err: any) {
     const msg = `Error: ${err.message}`;
     options.output.error(msg);
     return { errorResult: { exitCode: 1, message: msg } };
   }
 
-  // Interactive implement: defer runner selection to runLoop's implement branch
-  // (promptRunners with forceSelect). Pre-seeding the skill default here would
-  // silence that prompt and silently use the configured default model.
-  // Non-interactive runs and explicit --agent/--model overrides still seed below.
-  const deferImplementToPrompt =
-    isInteractive && loopSpec.kind === 'implement' && !globalOverrides.agent && !globalOverrides.model;
-  const deferInteractiveStageRunners = isInteractive && loopSpec.kind !== 'implement';
-
-  for (const skillId of loopSkills) {
-    if (deferImplementToPrompt || deferInteractiveStageRunners) break;
-    try {
-      const perSkillOverride = runnerOverrides[skillId];
-      const resolved = resolveRunner(skillId, config, globalOverrides, undefined, perSkillOverride);
-      runners[skillId] = resolved;
-      options.output.emit(makeRunEvent({
-        type: 'runner.resolved',
-        atMs: Date.now(),
-        skillId,
-        agent: resolved.agent,
-        model: resolved.model,
-        agentSource: resolved.agentSource,
-        modelSource: resolved.modelSource,
-        inheritedSession: resolved.inheritedSession
-      }));
-      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${runners[skillId].agent} (${runners[skillId].model})`, result: 'pass' });
-    } catch (err: any) {
-      const msg = `Error: ${err.message}`;
-      options.output.emit(makeRunEvent({ type: 'runner.rejected', atMs: Date.now(), skillId, message: msg }));
-      debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} error: ${err.message}`, result: 'fail' });
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-
-  }
-
-  // Validate continuity against the fully resolved coupled runner pair. Raw
-  // overrides do not contain enough information when a profile or agent-only
-  // override supplies the other half of the pair.
-  if (auditContinuity.enabled && loopSpec.audit && loopSpec['follow-up']) {
-    const auditRunner = runners[loopSpec.audit];
-    const followUpRunner = runners[loopSpec['follow-up']];
-    if (!auditRunner || !followUpRunner) {
-      const msg = 'Error: --audit-continuity requires resolved audit and follow-up runners.';
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-    if (auditRunner.agent !== followUpRunner.agent || auditRunner.model !== followUpRunner.model) {
-      const msg = 'Error: --audit-continuity requires the same agent/model for both audit and follow-up skills.';
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-    if (auditContinuity.requestedBy === 'codex-audit-continuity' && auditRunner.agent !== 'codex') {
-      const msg = `Error: --codex-audit-continuity requires codex, but the resolved agent is '${auditRunner.agent}'.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
-    }
-    if (!deriveContinuity(auditRunner.agent)) {
-      const msg = `Error: --audit-continuity requires codex, opencode, or claude, but the resolved agent is '${auditRunner.agent}'.`;
-      options.output.error(msg);
-      return { errorResult: { exitCode: 1, message: msg } };
+  const deferInteractiveRunnerSelection = isInteractive && !globalOverrides.agent && !globalOverrides.model;
+  if (!deferInteractiveRunnerSelection) {
+    for (const skillId of [...new Set(skills)]) {
+      try {
+        const resolved = resolveRunner(skillId, config, globalOverrides, undefined, runnerOverrides[skillId], options.effort);
+        validateRunnerCapabilities(resolved, registry);
+        runners[skillId] = resolved;
+        options.output.emit(makeRunEvent({
+          type: 'runner.resolved',
+          atMs: Date.now(),
+          skillId,
+          agent: resolved.agent,
+          model: resolved.model,
+          agentSource: resolved.agentSource,
+          modelSource: resolved.modelSource,
+          inheritedSession: resolved.inheritedSession,
+        }));
+        debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${resolved.agent} (${resolved.model})`, result: 'pass' });
+      } catch (err: any) {
+        const msg = `Error: ${err.message}`;
+        options.output.emit(makeRunEvent({ type: 'runner.rejected', atMs: Date.now(), skillId, message: msg }));
+        options.output.error(msg);
+        return { errorResult: { exitCode: 1, message: msg } };
+      }
     }
   }
 
-  // 5. Max iterations
-  let maxIterations = 5;
-  if (isInteractive) {
-    maxIterations = await promptMaxIterations(5);
+  let maxIterations = 4;
+  if (isInteractive && selected.kind === 'loop') {
+    maxIterations = await promptMaxIterations(4);
   } else if (options.maxIterations) {
     maxIterations = parseInt(options.maxIterations, 10);
-    if (isNaN(maxIterations) || maxIterations <= 0) {
+    if (Number.isNaN(maxIterations) || maxIterations <= 0) {
       const msg = 'Error: max-iterations must be a positive integer.';
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
   }
 
-  const auditSkillId = loopSpec.audit;
-  const auditRunner = auditSkillId ? runners[auditSkillId] : undefined;
-  if (auditRunner) {
-    const agentSupportsContinuity = deriveContinuity(auditRunner.agent);
-    debugHarnessEvent({ cwd: projectRoot, category: 'preflight', event: 'continuity-support-check', detail: `${auditRunner.agent} supportsContinuity=${agentSupportsContinuity}`, result: agentSupportsContinuity ? 'pass' : 'info' });
-    if (!agentSupportsContinuity) {
-      options.output.warn(`agent ${auditRunner.agent} does not support session resume.`);
-    }
-  }
-
   return {
     setup: {
       projectRoot,
-      loopName,
-      loopSpec,
+      bindingKind: selected.kind,
+      bindingId: selected.id,
+      binding: selected.binding,
       config,
       runners,
       maxIterations,
@@ -294,9 +289,23 @@ async function resolveSmashRunSetup(
       isInteractive,
       registry,
       runnerOverrides,
-      auditContinuity
-    }
+      runContext,
+    },
   };
+}
+
+function outcomeForResult(runResult: LoopReturn): RunOutcome {
+  if (runResult.outcome) return runResult.outcome;
+  return runResult.success
+    ? { kind: 'completed', message: runResult.message, artifactPath: runResult.lastAuditPath }
+    : { kind: 'unknown', message: runResult.message, artifactPath: runResult.lastAuditPath };
+}
+
+function commandResultForOutcome(outcome: RunOutcome): CommandResult {
+  if (outcome.kind === 'completed') return { exitCode: 0, message: outcome.message };
+  if (outcome.kind === 'ownership-lost') return { exitCode: 2, message: outcome.message };
+  if (outcome.kind === 'interrupted') return { exitCode: 130, message: outcome.message };
+  return { exitCode: 1, message: outcome.message };
 }
 
 export async function smashAction(options: SmashOptions): Promise<CommandResult> {
@@ -311,29 +320,16 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     }
   };
 
-  const emitTerminal = (result: CommandResult, terminal: { success: boolean; verdict: string; errorKind?: string }): void => {
-    if (terminal.success) {
-      options.output.emit(makeRunEvent({ type: 'run.completed', atMs: Date.now(), verdict: terminal.verdict, outcome: result.message ?? 'completed' }));
-    } else {
-      options.output.emit(makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: result.message ?? 'run failed', errorKind: terminal.errorKind }));
-    }
-  };
-
   let ownership: import('../run-ownership.js').OwnershipContext | null = null;
   let ownershipFinalized = false;
-
   const finish = async (
     result: CommandResult,
-    terminal: { success: boolean; verdict: string; errorKind?: string } = {
-      success: false,
-      verdict: 'unknown',
-      errorKind: 'setup'
-    },
+    terminal: { success: boolean; verdict: string; errorKind?: string },
     ownershipOutcome: { success: boolean; verdict: string; message?: string } = {
       success: terminal.success,
       verdict: terminal.verdict,
-      message: result.message
-    }
+      message: result.message,
+    },
   ): Promise<CommandResult> => {
     let finalResult = result;
     if (ownership && !ownershipFinalized) {
@@ -346,11 +342,15 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         const message = `Finalize owned run failed: ${err?.message ?? String(err)}`;
         options.output.error(message);
         options.output.emit(makeRunEvent({ type: 'ownership.finalized', atMs: Date.now(), success: false }));
-        finalResult = { exitCode: finalResult.exitCode === 0 ? 2 : finalResult.exitCode, message };
         terminal = { success: false, verdict: 'ownership-lost', errorKind: 'ownership' };
+        finalResult = { exitCode: finalResult.exitCode === 0 ? 2 : finalResult.exitCode, message };
       }
     }
-    emitTerminal(finalResult, terminal);
+    if (terminal.success) {
+      options.output.emit(makeRunEvent({ type: 'run.completed', atMs: Date.now(), result: terminal.verdict, outcome: finalResult.message ?? 'completed' }));
+    } else {
+      options.output.emit(makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: finalResult.message ?? 'run failed', errorKind: terminal.errorKind }));
+    }
     return flushResult(finalResult);
   };
 
@@ -360,38 +360,43 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
     return finish({ exitCode: 1, message: msg }, { success: false, verdict: 'unknown', errorKind: 'config' });
   }
 
-  configureSpawnDebug({
-    enabled: options.debugSpawn,
-    filePath: options.debugSpawnFile
-  });
-
+  configureSpawnDebug({ enabled: options.debugSpawn, filePath: options.debugSpawnFile });
   const projectRoot = resolve(options.project);
 
   try {
     setActiveRunEventSink((event) => options.output.emit(makeRunEvent(event)));
     options.output.emit(makeRunEvent({ type: 'run.started', atMs: Date.now() }));
-    const setupResult = await resolveSmashRunSetup(projectRoot, options);
-    if ('errorResult' in setupResult) {
-      return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
+
+    let setupResult: ResolveResult;
+    let retryCount = 0;
+    while (true) {
+      setupResult = await resolveSmashRunSetup(projectRoot, options);
+      if ('errorResult' in setupResult) {
+        return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
+      }
+      if (!('retry' in setupResult)) break;
+      retryCount += 1;
+      if (retryCount >= 10) {
+        const message = 'Project inputs still missing after multiple retries.';
+        options.output.error(`Error: ${message}`);
+        return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'setup' });
+      }
     }
 
     const { setup } = setupResult;
     try {
       const { parseLaunchInput, openOwnedRun } = await import('./ownership-launch.js');
       ownership = await openOwnedRun(parseLaunchInput(), projectRoot);
-      if (ownership) {
-        options.output.emit(makeRunEvent({ type: 'ownership.opened', atMs: Date.now(), projectRoot }));
-      }
+      if (ownership) options.output.emit(makeRunEvent({ type: 'ownership.opened', atMs: Date.now(), projectRoot }));
     } catch (err: any) {
       const msg = `Ownership setup failed: ${err.message}`;
       options.output.error(msg);
       return finish({ exitCode: 2, message: msg }, { success: false, verdict: 'ownership-lost', errorKind: 'ownership' });
     }
 
-    let runResult: import('../loops/runtime.js').LoopReturn;
-    let thrownError: any = null;
+    let runResult: LoopReturn;
     try {
-      runResult = await runLoop(projectRoot, setup.loopName, setup.loopSpec, setup.config, setup.runners, {
+      const executorOptions = {
         maxIterations: setup.maxIterations,
         globalOverrides: setup.globalOverrides,
         interactive: setup.isInteractive,
@@ -399,60 +404,47 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         output: options.output,
         ownership,
         runnerOverrides: setup.runnerOverrides,
-        auditContinuity: setup.auditContinuity,
-        emitTerminal: false
-      });
+        runContext: setup.runContext,
+        emitTerminal: false,
+      };
+      runResult = setup.bindingKind === 'task'
+        ? await runTask(setup.projectRoot, setup.bindingId, setup.binding as TaskBinding, setup.config, setup.runners, executorOptions)
+        : await runLoop(setup.projectRoot, setup.bindingId, setup.binding as LoopBinding, setup.config, setup.runners, executorOptions);
     } catch (err: any) {
-      thrownError = err;
-      const msg = `Error running loop: ${err.message}`;
-      options.output.error(msg);
-      runResult = { success: false, verdict: 'unknown', message: msg, lastAuditPath: null, terminalEventEmitted: false };
+      const message = `Error running ${setup.bindingKind} '${setup.bindingId}': ${err.message}`;
+      options.output.error(message);
+      runResult = {
+        success: false,
+        verdict: 'unknown',
+        message,
+        lastAuditPath: null,
+        terminalEventEmitted: false,
+        outcome: { kind: 'unknown', message, artifactPath: null },
+      };
     }
 
-    if (thrownError) {
-      const result = { exitCode: 1, message: thrownError.message };
-      return finish(result, { success: false, verdict: 'unknown', errorKind: 'loop' }, runResult);
-    }
-
-    let result: CommandResult;
-    if (runResult.success) {
-      result = { exitCode: 0, message: runResult.message };
-    } else {
-      if (runResult.verdict === 'ownership-lost') {
-        result = { exitCode: 2, message: runResult.message };
-      } else {
-        result = { exitCode: runResult.verdict === 'unknown' ? 1 : 0, message: runResult.message };
-      }
-    }
-    return finish(result, {
-      success: runResult.success,
+    const outcome = outcomeForResult(runResult);
+    const result = commandResultForOutcome(outcome);
+    const terminal = {
+      success: outcome.kind === 'completed',
       verdict: runResult.verdict,
-      errorKind: runResult.verdict === 'ownership-lost' ? 'ownership' : runResult.verdict === 'unknown' ? 'unknown' : undefined
-    }, runResult);
+      errorKind: outcome.kind === 'ownership-lost' ? 'ownership' : outcome.kind === 'completed' ? undefined : outcome.kind,
+    };
+    return finish(result, terminal, {
+      success: terminal.success,
+      verdict: terminal.verdict,
+      message: outcome.message,
+    });
   } catch (err: any) {
     const message = `Error running smash setup: ${err?.message ?? String(err)}`;
     options.output.error(message);
     return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'setup' });
   } finally {
-    // §3: clear the active project root on completion (normal or error) so a
-    // later signal in the same process cannot write a stale interrupt marker.
     setActiveProjectRoot(null);
     setActiveRunEventSink(null);
   }
 }
 
-/**
- * Default factory for the agent registry (the v4-audit M3 helper).
- * Production code calls `smashAction` without `createAdapterRegistry`,
- * and `resolveSmashRunSetup` falls back to this function. The helper
- * exists so a deterministic regression test can import it directly
- * (static import, no `vi.spyOn` of a module export) and assert that
- * the default wiring passes `config.registry` to the production
- * registry. Without this helper, the only way to test the default
- * factory is a post-import spy on `createProductionAdapterRegistry`,
- * which is module-binding-sensitive and a weaker assertion than the
- * seam-based test.
- */
 export function buildDefaultAdapterRegistry(config: Config): AgentRegistry {
   return createProductionAdapterRegistry(config.registry);
 }

@@ -3,6 +3,9 @@ import { resolveRunner, isValidModelForAgent } from '../src/runner.js';
 import type { Config } from '../src/config.js';
 
 const config: Config = {
+  projectRoot: process.cwd(),
+  manifestPath: '/path/to/config/orc-smash.yaml',
+  manifestRoot: '/path/to/config',
   registry: {
     providers: {
       opencode: { models: ['opencode-go/x'], defaultModel: 'opencode-go/x' },
@@ -20,13 +23,16 @@ const config: Config = {
     }
   },
   manifest: {
+    schemaVersion: 1 as const,
     roles: { auditor: 'a' },
     skills: {
-      audit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'other' },
-      exceptionalAudit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'exceptional' },
-      invalidExceptionalAudit: { file: 'a', role: 'auditor', kind: 'audit', runnerProfile: 'invalidExceptional' }
+      audit: { file: 'a', role: 'auditor', runnerProfile: 'other' },
+      exceptionalAudit: { file: 'a', role: 'auditor', runnerProfile: 'exceptional' },
+      invalidExceptionalAudit: { file: 'a', role: 'auditor', runnerProfile: 'invalidExceptional' }
     },
-    loops: {}
+    loops: {},
+    tasks: {},
+    pipelines: {}
   }
 };
 

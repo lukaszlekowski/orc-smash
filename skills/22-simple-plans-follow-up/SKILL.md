@@ -61,13 +61,13 @@ Write your follow-up report to the exact `Write your output to` value in Inputs 
 
 Do not write a `## Verdict` section — follow-ups do not produce verdicts.
 
-Always include this section to indicate outcome:
+Always include this machine-readable section to indicate outcome:
 ```markdown
-## Follow-up Outcome
+## Outcome
 
-patched
+COMPLETED
 ```
-(use `blocked` instead of `patched` only when a finding cannot be fixed and is escalated as blocked).
+(use `BLOCKED` instead of `COMPLETED` only when a finding cannot be fixed and is escalated as blocked; include a concise reason below the token).
 
 After patching, report:
 

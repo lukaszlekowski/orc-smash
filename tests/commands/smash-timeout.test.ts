@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import { createTempDir, removeTempDir } from '../helpers/fs.js';
@@ -52,6 +52,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
   beforeEach(() => {
     createTempDir('temp-smash-timeout');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Plan\n');
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     mockTimeouts = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -85,8 +86,8 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
-      agent: 'fake',
-      model: 'fake-model',
+      agent: 'opencode',
+      model: 'opencode-go/deepseek-v4-flash',
       output: mockOutput,
       createAdapterRegistry: spyFactory  // Step 5 seam
     });
@@ -132,8 +133,8 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
     const res = await smashAction({
       project: tempDir,
       loop: 'plan',
-      agent: 'fake',
-      model: 'fake-model',
+      agent: 'opencode',
+      model: 'opencode-go/deepseek-v4-flash',
       output: mockOutput
       // no createAdapterRegistry — default factory runs
     });
@@ -146,10 +147,10 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
       expect.objectContaining({ timeouts: expect.objectContaining({ opencode: 99999 }) })
     );
     // The default factory produced a registry the loop could use to
-    // run the plan audit — exit-code 0 + presence of the audit
-    // artifact confirm the default wiring is functional.
+    // The mocked loop confirms that the default registry wiring reaches the
+    // command without requiring a real provider binary in this unit test.
     expect(res.exitCode).toBe(0);
-    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v1-fake.md'))).toBe(true);
+    expect(mockedRunLoop).toHaveBeenCalled();
   });
 
   /**

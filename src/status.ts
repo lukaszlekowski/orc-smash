@@ -90,62 +90,49 @@ export function buildPanelContext(
   };
 }
 
-export function latestAuditVersion(steps: Step[]): number {
-  let max = 0;
-  for (const s of steps) {
-    if (s.kind === 'audit' && s.version > max) max = s.version;
-  }
-  return max;
+export function latestVersion(steps: Step[]): number {
+  return steps.reduce((max, step) => Math.max(max, step.version), 0);
 }
 
 export interface LoopLabels {
-  audit?: {
+  evaluate?: {
     skillId: string;
   };
-  followUp?: {
-    skillId: string;
-  };
-  implement?: {
+  repair?: {
     skillId: string;
   };
 }
 
 export function resolveLoopLabels(loopSpec: LoopSpec, manifest: Manifest): LoopLabels {
   const labels: LoopLabels = {};
-  if (loopSpec.audit && manifest.skills[loopSpec.audit]) {
-    labels.audit = { skillId: loopSpec.audit };
+  const evalSkill = loopSpec.evaluate.skill;
+  if (evalSkill && manifest.skills[evalSkill]) {
+    labels.evaluate = { skillId: evalSkill };
   }
-  if (loopSpec['follow-up'] && manifest.skills[loopSpec['follow-up']]) {
-    labels.followUp = { skillId: loopSpec['follow-up'] };
-  }
-  if (loopSpec.implement && manifest.skills[loopSpec.implement]) {
-    labels.implement = { skillId: loopSpec.implement };
+  const repairSkill = loopSpec.repair.skill;
+  if (repairSkill && manifest.skills[repairSkill]) {
+    labels.repair = { skillId: repairSkill };
   }
   return labels;
 }
 
-export type NextStepMessageDecision =
-  | NextStepDecision
-  | { state: 'implement'; nextVersion: number };
-
 export function assembleNextStepMessage(
-  decision: NextStepMessageDecision,
+  decision: NextStepDecision,
   latestVersion: number,
   loopSpec: LoopSpec,
   manifest: Manifest
 ): string {
   const labels = resolveLoopLabels(loopSpec, manifest);
+  const nextEvaluateVersion = decision.nextEvaluateVersion ?? latestVersion + 1;
   switch (decision.state) {
     case 'fresh':
-      return `Ready to run ${labels.audit?.skillId ?? 'audit'} version ${decision.nextAuditVersion} (fresh)`;
+      return `Ready to run ${labels.evaluate?.skillId ?? 'evaluate'} version ${nextEvaluateVersion} (fresh)`;
     case 'rejected':
-      return `Proposed next: ${labels.followUp?.skillId ?? 'follow-up'} then ${labels.audit?.skillId ?? 'audit'} version ${decision.nextAuditVersion}`;
-    case 'approved':
-      return `Completed: approved at version ${latestVersion}`;
-    case 'unknown-latest-audit':
-      return `Terminal error: latest audit is unparseable`;
-    case 'implement':
-      return `Ready to run ${labels.implement?.skillId ?? 'implement'} version ${decision.nextVersion}`;
+      return `Proposed next: ${labels.repair?.skillId ?? 'repair'} then ${labels.evaluate?.skillId ?? 'evaluate'} version ${nextEvaluateVersion}`;
+    case 'accepted':
+      return `Completed: accepted at version ${latestVersion}`;
+    case 'unknown-latest-evaluation':
+      return `Terminal error: latest evaluation is unparseable`;
   }
 }
 
@@ -156,12 +143,5 @@ export function assembleNextStepMessage(
  * messages from `assembleNextStepMessage()` (no "Ready to smash" / "Completed").
  */
 export function assembleInterruptedMessage(loopName: string, version: number): string {
-  if (loopName === 'implement') {
-    return `Implementation v${version} was interrupted: partial ledgers are quarantined before state resolution, and a rerun resumes implementation rather than advancing to review.`;
-  }
-  if (loopName === 'review') {
-    return `Review v${version} was interrupted: a rerun resumes review after the partial artifact is quarantined.`;
-  }
-  // 'plan' (and any other doc-audit loop)
-  return `Planning v${version} was interrupted: a rerun resumes from the interrupted version after the partial artifact is quarantined.`;
+  return `Binding ${loopName} v${version} was interrupted: the partial artifact is quarantined before state resolution.`;
 }

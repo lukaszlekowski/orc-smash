@@ -153,9 +153,9 @@ function fixtureLoop() {
     audit: 'fixture-audit',
     'follow-up': 'fixture-follow-up',
     implement: 'fixture-implement',
-    auditPattern: 'docs/dev/fixture-audit-v{n}-{agent}.md',
-    followUpPattern: 'docs/dev/fixture-follow-up-v{n}-{agent}.md',
-    implementPattern: 'docs/dev/fixture-implement-v{n}-{agent}.md',
+    auditPattern: 'docs/dev/fixture-audit-v{version}-{provider}.md',
+    followUpPattern: 'docs/dev/fixture-follow-up-v{version}-{provider}.md',
+    implementPattern: 'docs/dev/fixture-implement-v{version}-{provider}.md',
     inputs: []
   };
 }

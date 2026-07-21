@@ -1,20 +1,16 @@
 # orc-smash
 
-> **Architecture migration:** the commands marked as current below describe the
-> pre-migration release. The target architecture and implementation contract are
-> [docs/dev/plan.md](./docs/dev/plan.md), supported by
-> [docs/dev/research.md](./docs/dev/research.md). During that implementation, the
-> plan supersedes legacy assumptions about `skills.yaml`, fixed
-> plan/implement/review stages, audit-specific verdicts and continuity flags,
-> filename heuristics, and automatic stage transitions. Existing process-safety,
-> provider, event, logging, and supervisor contracts remain mandatory.
+orc-smash is a stateless TypeScript subprocess harness for coding-agent CLIs:
+`opencode`, `codex`, `claude`, and `agy` are real provider adapters, while
+`fake` is test-only. The harness selects a provider per configured skill,
+invokes it over stdio, validates the declared artifact, and reconstructs state
+from project files. It never calls a model API directly and keeps no runtime
+database.
 
-A thin **TypeScript CLI harness** that drives coding-agent CLIs (**opencode, codex, claude, agy** —
-all real) through configured approval loops and one-off tasks. The current release instantiates
-fixed `audit ↔ follow-up` workflows; the target engine makes those workflows data. Stateless —
-all per-run state is reconstructed from target-project artifacts. No DB, no S3, no web UI.
-
-The binary is **`orc`**; the main command is **`orc smash`**.
+The active contract is [docs/dev/plan.md](./docs/dev/plan.md). The single v1
+manifest is `config/orc-smash.yaml`, optionally overridden by
+`<project>/.orc-smash.yaml` or an explicit `--config <path>` (highest
+precedence). `skills.yaml` and the old fixed workflow are not supported.
 
 ## Setup
 
@@ -23,195 +19,88 @@ pnpm install
 pnpm build
 ```
 
-`bin/orc.js` is the stable production entrypoint. Production execution requires
-`pnpm build`, which compiles `src/` to `dist/src/` and packages the provider
-configuration, manifest, roles, skills, package metadata, and process-group
-bootstrap alongside it. Development runs can use `pnpm dev`.
+`bin/orc.js` is the stable production entrypoint. Run `pnpm build` before
+production execution; it packages the manifest, provider catalogues, roles,
+skills, and process-group bootstrap. `dist/src/cli.js` is an internal build
+artifact, not the public install path.
 
-Each provider's complete catalogue lives in `config/providers/<provider>.yaml`, including its `defaultModel`; update that one file to add or remove models. `config/runners.yaml` maps opaque runner-profile names to providers, and `config/registry.yaml` contains only execution timeouts. `orc.config.yaml` and home-directory overrides are not supported.
-
-Interactive selection lets you choose from configured models or provide a validated custom model.
-
-## Current released commands
+## Commands
 
 ```bash
-orc smash --project <path>          # run the audit↔follow-up loop (interactive if flags omitted)
-orc smash --project <path> --plain  # run the loop in append-only scrollback-safe plain mode
-orc smash --project <path> \        # run-wide runner override, non-interactive
-  --loop plan --agent opencode --model opencode-go/deepseek-v4-flash --max-iterations 5
-orc smash --project <path> --audit-continuity # run in audit continuity mode (plan/review loops)
-orc smash --project <path> --loop plan --plain \  # per-skill runner overrides (headless)
-  --runner plan-audit=codex \
-  --runner-model plan-audit=gpt-5.6-terra \
-  --runner plan-follow-up=claude \
-  --runner-model 'plan-follow-up=glm-5.2[1m]'
-orc status --project <path>         # read-only: detect where we are, render the status panel
-orc supervisor-contract             # print the supervisor compatibility handshake
-orc ownership status --project <path> # read-only diagnostics for retained owned-run state
-orc ownership release --project <path> --yes # explicit, no-signal recovery release
+orc smash --project <path>                         # interactive configured loop
+orc smash --project <path> --loop <loop-id>        # ad-hoc approval loop
+orc smash --project <path> --task <task-id>        # ad-hoc one-off task
+orc smash --project <path> --pipeline <pipeline>   # explicit pipeline start
+orc smash --project <path> --plain --task <task-id>
+orc status --project <path> [--all] [--config <path>]
 ```
 
-### Execution Modes
+Runner selection is independent per skill. Global overrides are
+`--agent`, `--model`, and `--effort`; repeatable per-skill overrides are
+`--runner skill=provider`, `--runner-model skill=model`, and
+`--runner-effort skill=level`. Models are validated in their provider's own
+namespace, and changing provider re-defaults its model.
 
-- **Panel Mode (Default):** A graphical, boxen-rendered status dashboard with interactive spinners (`ora`) and auto-clearing screens.
-- **Plain Mode (`--plain`):** A scrollback-safe, append-only textual output suitable for headless CI/CD and logs, emitting clean step events and final summaries.
+The default panel uses an alternate screen. `--plain` emits an append-only,
+typed event stream suitable for logs and CI. A direct loop or task is ad hoc
+and has no inferred pipeline identity. Only an explicit pipeline start or a
+later operator-confirmed suggested-stage action can carry pipeline identity
+forward; downstream stages never start automatically.
 
-`orc smash` is restart-aware: it scans the target's `docs/dev/*-audit-v*-*.md` (ignoring
-`docs/dev/archived/`), detects the latest verdict, and proposes the next step.
+## Manifest model
 
-### Optional macOS supervisor
+The manifest declares reusable skills and roles, approval-loop bindings,
+one-off task bindings, and linear pipelines. Each binding owns its target,
+named project-file inputs, prompt inputs, output pattern, output contract, and
+runner profile. Output patterns use `{version}` and `{provider}` and resolve
+under the selected project root. Roles and skill files resolve under the
+manifest root. Missing project inputs are recorded in the global snapshot and
+fail execution preflight without admitting ownership or spawning a provider.
 
-The companion `orc-smash-supervisor` repository provides the supported independent
-supervision path for app-owned runs on macOS. It installs a per-user LaunchAgent,
-starts the reviewed `orc-smash` launcher through the owned-run protocol, renews its
-lease while the host client is alive, and remains available if that client dies.
+Decision artifacts normalize configured tokens to `accepted`, `retry`, or
+`unknown`. Completion artifacts require exactly one `## Outcome` section whose
+first non-blank line is exactly `COMPLETED` or `BLOCKED`. Unknown evidence is
+terminal; repair runs only after a concrete `retry` decision.
 
-Installing the LaunchAgent does **not** intercept ordinary `orc smash` commands. A
-normal command remains unsupervised. From an adjacent supervisor checkout, build and
-install it by pinning this repository's launcher:
+Artifacts persist pipeline/run/stage/chain identity, parent lineage, runner and
+session provenance, input fingerprints, and target result fingerprints. Legacy
+files without the v1 identity contract are unclassified and never advance a
+stage or provide resume evidence. The generic index scans every configured
+loop/task output and ignores `docs/dev/archived/`.
 
-```bash
-cd /Volumes/projects/orc-smash-supervisor
-pnpm install --frozen-lockfile
-pnpm build
-cd /Volumes/projects/orc-smash
-pnpm build
-cd /Volumes/projects/orc-smash-supervisor
-node bin/orc-smash-supervisor.js install /Volumes/projects/orc-smash/bin/orc.js
-node bin/orc-smash-supervisor.js status
-```
+## Providers and safety
 
-Start a supervised run through its current host client:
+Providers are opaque native binaries behind `AgentAdapter`. Headless writes
+use each provider's autonomy flag. Watchdogs are config-driven: opencode uses
+`OPENCODE_RUN_TIMEOUT_MS` > `timeouts.opencode` > its 10-minute default;
+claude, codex, and agy default to no watchdog unless configured.
 
-```bash
-node bin/orc-smash-supervisor.js launch /absolute/path/to/project \
-  --loop review --agent codex --max-iterations 3 --plain
-```
+`SIGINT`/`SIGTERM` writes a marker under the active project root, terminates
+active children through the authorized process-group kill gate, and exits with
+the conventional signal code. A rerun quarantines partial and late artifacts
+before scanning. App-owned runs use `ORC_RUN_ID`, `ORC_RUN_TOKEN`,
+`ORC_RUN_STATE_DIR`, lease records, and portable POSIX process groups. Every
+group signal is identity-gated; unverifiable or recycled groups are never
+signalled. Retained ownership is diagnosed with `orc ownership status` and
+released only with explicit operator verification via `orc ownership release`.
 
-The `launch` process must remain running to send heartbeats; `Ctrl-C` requests
-cancellation. This is a real `orc smash` run and can invoke providers and modify the
-target project's workflow artifacts. Provider authentication must be available from
-`HOME`-based configuration, the user keychain, or another non-environment mechanism:
-the supervisor intentionally does not forward inherited credential environment
-variables.
+The companion `orc-smash-supervisor` is a separate per-user macOS LaunchAgent.
+orc-smash does not import or depend on it, and ordinary `orc smash` invocations
+are not supervised. The supervisor launches the pinned absolute
+`bin/orc.js`; changes to the shared ownership or launcher contract require
+coordinated cross-repository verification.
 
-The supervisor installer first runs `node /Volumes/projects/orc-smash/bin/orc.js
-supervisor-contract` and validates the same-process PID and ownership schema before
-changing its config or LaunchAgent. The public install path remains `bin/orc.js`;
-`dist/src/cli.js` is an internal build artifact.
-
-The supervisor's release gate is macOS-specific and independently verifies host loss,
-bounded fresh-capability cleanup, process isolation, canary survival, and fail-closed
-restart behavior. See the companion repository's `README.md` and
-`docs/release-gate-result.md` for installation details and current evidence.
-
-## Current released workflow
-
-The following describes the runtime before the config-driven migration. It is
-useful for operating the current build, but it must not be treated as a
-restriction on implementing `docs/dev/plan.md`.
-
-- **Three-stage pipeline:** Turns the product into a pipeline of `plan` (doc-audit loop) → `implement` (one-shot transform) → `review` (code-review loop). Interactive transitions downstream advance stages automatically.
-- **Up-front interactive runner selection:** In interactive mode, selecting a start-new or continue action prompts the operator to choose the full upcoming pair of runners up front (for both steps in the segment, such as audit and follow-up). The selections are reused without mid-chain re-prompts, and any step kind with a prior resumable session skips prompting and inherits its runner automatically.
-- **Four real adapters:** opencode, codex, claude, and agy (Antigravity) all run for real; each skill picks its own agent/model, validated against the assembled model registry. `agy` runs headless via `agy -p <prompt> --model <model> --dangerously-skip-permissions`; its model ids are the exact human-readable names from `agy models` (a strict configured allow-list — no namespace fallbacks). When unauthenticated, `agy` can fall back to a default provider while exiting 0, so the adapter detects this with a bounded phrase list and surfaces a structured `auth` error; the loop then quarantines any partial artifact so no resumable file is left behind.
-- **Manifest-as-data:** loops, skills, roles, and per-loop input schemas live in `skills.yaml`. Adding a loop that uses the existing input sources = one YAML entry + two skill files (no TS).
-- **One composed prompt:** each agent run receives a single prompt assembled from three user-owned pieces — a **role** (`roles/*.md`), a **skill** (`skills/*/SKILL.md`), and the resolved **inputs**. No task content is invented by the harness.
-- **Safety:** `unknown` verdicts (missing/malformed output, transport failure) are terminal — the loop stops for human review and never mutates the target. Follow-up runs only on a concrete `REJECTED` audit.
-- **Ledger Verification & Closeout:** Before implementation, the harness makes `docs/dev/plan.md` YAML front matter canonical (`status: ready`), migrating a leading legacy `**Status:**` line while preserving the plan body. It then verifies the ledger tables and confidence declaration, updates plan status to `done` or `blocked` (0.95 threshold), and appends a versioned change log.
-- **Raw-ledger recovery:** If a complete implementation ledger exists without harness provenance after a closeout failure, an interactive implementation run offers an explicit recovery action. It re-links that same ledger to the approved audit and closes it out without spawning a provider or allocating a new version; non-interactive runs stop with recovery guidance.
-- **Artifact diagnostics:** A clean provider exit is still not success unless the exact `Write your output to` artifact exists. Missing artifacts remain terminal `unknown`; rerun with `--debug-spawn` to inspect the resolved prompt input and provider stream.
-- **Execution Watchdog:** Spawns are protected by a wall-clock watchdog timeout policy. For `opencode`, the timeout precedence is: `OPENCODE_RUN_TIMEOUT_MS` env variable > registry config `timeouts.opencode` > built-in `600000` ms default. `claude`, `codex`, and `agy` are config-only: `timeouts.<agent>` > built-in `0` (disabled by default); there are no env vars for these agents. This is an absolute run deadline, not an inactivity detector, so it can expire during active tool use. A timeout fires `error.kind === 'timeout'` and a failed lifecycle event.
-- **Interrupted-run handling:** `SIGINT`/`SIGTERM` writes a durable interrupted marker under the active project root, terminates in-flight provider children (SIGTERM → SIGKILL after a grace period), and exits with the conventional signal code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run never resolves to a terminal `unknown` and `orc status` shows the interrupted stage (`plan`/`review`/`implement`) via marker-first loop selection.
-- **Second opinion:** on APPROVED, choose `stop`, `run-second-opinion` (re-prompts the audit runner, offered only when a different configured+runnable agent exists), or `implement` (transitions directly to implementation).
-- **Audit Continuity (Opt-in):** By passing `--audit-continuity`, subsequent audit steps in the `plan` or `review` loop primary rejected chain will resume the session ID of the first run. Supported for `codex`, `opencode`, and `claude` providers. Resumption is artifact-driven (using the `sessionMode` and `sessionId` metadata stamped in front matter), never `--last`-driven or history-driven, and second-opinion audits are kept fresh and independent. The legacy `--codex-audit-continuity` remains supported as a temporary alias for Codex runs, but is mutually exclusive with `--audit-continuity`.
-
-## Target architecture
-
-The committed implementation plan replaces the fixed workflow with these
-contracts:
-
-- **One clean manifest:** packaged `config/orc-smash.yaml`, optional project
-  `.orc-smash.yaml`, and explicit `--config` precedence replace `skills.yaml`.
-  There is no compatibility loader or parallel legacy engine.
-- **Generic bindings:** reusable approval loops and one-off tasks declare their
-  targets, prompt inputs, output patterns, output contracts, configurable
-  decision tokens, and per-skill runner profiles. Linear pipelines contain
-  uniquely identified stage instances referencing those reusable bindings.
-- **Operator-controlled progression:** the tool may display evidence-backed next
-  stage suggestions, but it never starts a downstream stage automatically.
-  Direct loop/task starts are ad hoc; only an explicit pipeline start or confirmed
-  suggested-stage continuation carries pipeline identity.
-- **Artifact-derived state:** a generic global artifact index reconstructs
-  binding, chain, pipeline, stage, provider, model, effort, session, fingerprint,
-  and lineage state from validated provenance. Legacy artifacts lacking the v1
-  identity contract are shown as unclassified.
-- **Per-skill continuity:** provider, model, effort, and session strategy are
-  selected for each skill. Unsupported capabilities remain visible with an
-  explanation; second opinions use fresh independent chains.
-- **Safe recovery:** unavailable actions stay visible with reasons. Recoverable
-  failures return to the appropriate interactive menu or fail clearly in
-  headless mode; critical ownership and identity failures remain fail-closed.
-
-The implementation also retains these structural principles:
-
-- **Single-source-of-truth rules:** artifact-path rendering/parsing, next-step resolution, and
-  shared runtime contracts should each live in one clearly named place.
-- **Purposeful module boundaries:** new files are added only when they own a stable
-  responsibility. Avoid generic buckets such as `helpers.ts`, `common.ts`, or `misc.ts`.
-- **Thin orchestration:** generic loop/task executors orchestrate, while stable runtime seams own process
-  execution, artifact conventions, and decision logic.
-- **Provider-specific behavior behind adapters:** shared runtime code should consume normalized
-  signals; provider-specific parsing and remediation stay in the adapter layer.
-- **Execution completeness as an explicit contract:** in the current repo direction, `opencode`
-  is the only provider with a verified completion signal (`stopReason`). `codex` and `claude`
-  still rely on exit code + structured error handling until equivalent support is explicitly
-  proven and implemented. A clean OpenCode exit without a recognized terminal stream event is a distinct missing-completion failure, not an inferred interruption.
-- **App-owned run supervision:** out-of-band `ORC_RUN_ID` + `ORC_RUN_TOKEN` enables a lease-backed
-  run. Providers execute beneath the source-shipped detached
-  `src/adapters/process-group-bootstrap.mjs`; the CLI registers a fresh runtime capability
-  before provider spawn. Lease loss uses the same authorized `src/kill-gate.ts` boundary for
-  fresh capabilities, while stale macOS records never authorize unattended signalling.
-  Ambiguous cleanup retains admission for `orc ownership status` and the explicit,
-  no-signal `orc ownership release` workflow. A deliberately detached descendant remains
-  outside the portable process-group guarantee. See
-  [docs/architecture/overview.md](./docs/architecture/overview.md#app-owned-run-supervision-portable-pgid-termination)
-  and [docs/dev/plan.md](./docs/dev/plan.md). The separate macOS
-  `orc-smash-supervisor` LaunchAgent is the current operator-facing issuer of this
-  contract; ordinary `orc smash` invocations do not opt into it automatically.
-
-See [docs/architecture/overview.md](./docs/architecture/overview.md) for the canonical overview,
-[docs/dev/research.md](./docs/dev/research.md) for product rationale, and
-[docs/dev/plan.md](./docs/dev/plan.md) for the active implementation contract.
-
-## Verification and CI
-
-Continuous Integration (CI) runs automatically on push and pull requests, executing typecheck and deterministic unit/e2e tests (using the `fake` adapter) to gate harness logic without requiring network or credentials:
+## Verification
 
 ```bash
 pnpm typecheck
-pnpm test                                       # run deterministic unit/e2e tests locally
+pnpm test
 ```
 
-In contrast, **real-provider verification** remains a separate sign-off requirement before releases. The contract-gated providers use env-gated suites, while `agy` is verified manually from an already-authenticated shell because its login flow is browser-interactive:
+Deterministic tests use the test-only `fake` adapter. `opencode`, `codex`, and
+`claude` have env-gated real-provider contract suites. `agy` has deterministic
+adapter/seam coverage and is manually verified from an authenticated shell.
 
-```bash
-OPENCODE_CONTRACT=1 CODEX_CONTRACT=1 \
-  CLAUDE_CONTRACT=1 pnpm test   # env-gated contract tests
-
-agy -p "return hi" --model "Gemini 3.5 Flash (Medium)" --dangerously-skip-permissions
-```
-
-The repo-local e2e (`tests/e2e/smash.test.ts` via the `fake` adapter) covers every exit branch,
-mixed-runner loops, and dual-target isolation without external credentials or network. `opencode`,
-`codex`, and `claude` remain contract-gated; `agy` is covered by deterministic contracts plus
-manual operator verification.
-
-## Project layout
-
-Use these docs with different expectations:
-
-- [docs/architecture/overview.md](./docs/architecture/overview.md): canonical architecture overview
-- [docs/roadmap.md](./docs/roadmap.md): staged roadmap and architectural direction
-- [docs/dev/research.md](./docs/dev/research.md): product direction and design rationale
-- [docs/dev/plan.md](./docs/dev/plan.md): active config-driven implementation contract
-- [AGENTS.md](./AGENTS.md): repository rules and invariants
+See [docs/architecture/overview.md](./docs/architecture/overview.md) for the
+architecture, [docs/dev/research.md](./docs/dev/research.md) for rationale,
+and [AGENTS.md](./AGENTS.md) for repository invariants.

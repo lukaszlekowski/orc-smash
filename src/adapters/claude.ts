@@ -21,6 +21,7 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'claude',
+    capabilities: { resumeSession: true, effort: true },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
       const args = [
@@ -29,7 +30,10 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
         '--model',
         input.model
       ];
-      if (input.kind !== 'implement') {
+      if (input.effort) {
+        args.push('--effort', input.effort);
+      }
+      if (input.kind !== 'task') {
         args.push('--output-format', 'json');
       }
       args.push(
@@ -66,7 +70,7 @@ export function createClaudeAdapter(opts: CreateClaudeAdapterOptions = {}): Agen
       }, processRunner);
 
       if (!result.error && result.exitCode === 0) {
-        if (input.kind === 'implement') {
+        if (input.kind === 'task') {
           return result;
         }
         try {

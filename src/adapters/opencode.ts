@@ -29,6 +29,7 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'opencode',
+    capabilities: { resumeSession: true, effort: true },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
       const args = [
@@ -41,6 +42,9 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
         '--format',
         'json'
       ];
+      if (input.effort) {
+        args.push('--effort', input.effort);
+      }
       if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
         args.push('-c', input.continuity.sessionId);
       }

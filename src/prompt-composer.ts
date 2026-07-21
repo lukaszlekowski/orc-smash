@@ -1,96 +1,89 @@
 import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { LoopSpec } from './manifest.js';
+import { resolve } from 'node:path';
 import { renderPattern } from './patterns.js';
+import {
+  isPriorArtifactNone,
+  inputLabelFor,
+  type PriorArtifactResolution,
+} from './binding-inputs.js';
+import type { InputSpec, TargetSpec } from './manifest.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const defaultToolRoot = resolve(__dirname, '..');
+export interface PromptContext {
+  /** Project root for resolving targets, files, and outputs */
+  projectRoot: string;
+  /** Target info from the binding */
+  target: TargetSpec;
+  /** The version number for this step */
+  version: number;
+  /** Provider/agent name (for output path rendering) */
+  provider: string;
+  /** Resolved prior-artifact snapshot from binding-inputs */
+  priorArtifact: PriorArtifactResolution;
+  /** The output pattern to render */
+  outputPattern: string;
+  /** Additional project-file inputs (key -> relative path) */
+  files?: Record<string, string>;
+}
 
-function resolvePromptPath(targetRoot: string, value: string | null | undefined): string {
-  return !value || value === 'none' ? 'none' : resolve(targetRoot, value);
+function resolveFileValue(projectRoot: string, value: string | null | undefined): string {
+  return !value || value === 'none' ? 'none' : resolve(projectRoot, value);
 }
 
 export function resolveInput(
   source: string,
-  context: {
-    targetRoot: string;
-    target: string;
-    targetKind: 'file' | 'worktree';
-    version: number;
-    priorAuditPath: string | null;
-    agentName: string;
-    auditPattern?: string;
-    followUpPattern?: string;
-    implementPattern?: string;
-    kind: 'audit' | 'follow-up' | 'implement';
-    planPath?: string;
-    checklistPath?: string;
-  }
+  context: PromptContext,
 ): string {
   switch (source) {
     case 'target':
-      return context.targetKind === 'worktree'
-        ? context.targetRoot
-        : resolve(context.targetRoot, context.target);
+      return context.target.kind === 'worktree'
+        ? context.projectRoot
+        : resolve(context.projectRoot, context.target.path);
     case 'version':
       return String(context.version);
-    case 'priorAudit':
-      return resolvePromptPath(context.targetRoot, context.priorAuditPath);
-    case 'outputPath': {
-      const pattern =
-        context.kind === 'follow-up' ? (context.followUpPattern ?? '') :
-        context.kind === 'implement' ? (context.implementPattern ?? '') :
-        (context.auditPattern ?? '');
-      return resolve(context.targetRoot, renderPattern(pattern, { n: context.version, agent: context.agentName }));
-    }
-    case 'planPath':
-      return resolvePromptPath(context.targetRoot, context.planPath);
-    case 'checklistPath':
-      return resolvePromptPath(context.targetRoot, context.checklistPath);
+    case 'priorArtifact':
+      return isPriorArtifactNone(context.priorArtifact)
+        ? 'none'
+        : resolveFileValue(context.projectRoot, context.priorArtifact.path);
+    case 'outputPath':
+      return resolve(
+        context.projectRoot,
+        renderPattern(context.outputPattern, {
+          version: context.version,
+          provider: context.provider,
+        }),
+      );
     default:
+      if (context.files && Object.prototype.hasOwnProperty.call(context.files, source)) {
+        return resolveFileValue(context.projectRoot, context.files[source]!);
+      }
       return 'none';
   }
 }
 
+/**
+ * Compose a prompt from a skill's role, skill file, and declared inputs.
+ * Role/skill files are resolved from `manifestRoot`; targets, files, and
+ * outputs are resolved from `projectRoot`.
+ */
 export function composePrompt(
   skillId: string,
-  roleFileRelativePath: string,
-  skillFileRelativePath: string,
-  loopSpec: LoopSpec,
-  context: {
-    targetRoot: string;
-    version: number;
-    priorAuditPath: string | null;
-    agentName: string;
-    kind: 'audit' | 'follow-up' | 'implement';
-  },
-  toolRoot: string = defaultToolRoot
+  roleFile: string,
+  skillFile: string,
+  inputs: InputSpec[],
+  context: PromptContext,
+  manifestRoot: string,
 ): string {
-  const rolePath = resolve(toolRoot, roleFileRelativePath);
-  const skillPath = resolve(toolRoot, skillFileRelativePath);
+  const rolePath = resolve(manifestRoot, roleFile);
+  const skillPath = resolve(manifestRoot, skillFile);
 
   const roleContent = readFileSync(rolePath, 'utf-8').trim();
   const skillContent = readFileSync(skillPath, 'utf-8').trim();
 
   const inputsSection: string[] = [];
-  for (const input of loopSpec.inputs) {
-    const resolvedValue = resolveInput(input.source, {
-      targetRoot: context.targetRoot,
-      target: loopSpec.target,
-      targetKind: loopSpec.targetKind,
-      version: context.version,
-      priorAuditPath: context.priorAuditPath,
-      agentName: context.agentName,
-      auditPattern: loopSpec.auditPattern,
-      followUpPattern: loopSpec.followUpPattern,
-      implementPattern: loopSpec.implementPattern,
-      kind: context.kind,
-      planPath: loopSpec.planPath,
-      checklistPath: loopSpec.checklistPath
-    });
-    inputsSection.push(`${input.label}: ${resolvedValue}`);
+  for (const input of inputs) {
+    const resolvedValue = resolveInput(input.source, context);
+    const label = input.label ?? inputLabelFor(input.source);
+    inputsSection.push(`${label}: ${resolvedValue}`);
   }
 
   return `# Role\n${roleContent}\n\n# Skill: ${skillId}\n${skillContent}\n\n# Inputs\n${inputsSection.join('\n')}\n`;

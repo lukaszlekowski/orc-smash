@@ -16,7 +16,7 @@ export interface RunInput {
   cwd: string;
   skillId?: string;
   version?: number;
-  kind?: 'audit' | 'follow-up' | 'implement';
+  kind?: 'audit' | 'follow-up' | 'implement' | 'evaluate' | 'repair' | 'task';
   onLifecycle?: (e: LifecycleEvent) => void;
   continuity?: {
     mode: 'fresh' | 'resumed';
@@ -24,6 +24,7 @@ export interface RunInput {
   };
   ownership?: OwnershipContext;
   spawnRuntime?: SpawnRuntime;
+  effort?: string;
 }
 
 export type RunErrorKind =
@@ -65,6 +66,10 @@ export interface RunResult {
 
 export interface AgentAdapter {
   name: string;
+  capabilities: {
+    resumeSession: boolean;
+    effort: boolean;
+  };
   buildRun(input: RunInput): { command: string; args: string[] };
   run(input: RunInput): Promise<RunResult>;
 }

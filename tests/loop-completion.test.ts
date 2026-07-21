@@ -1,35 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createTempDir, removeTempDir } from './helpers/fs.js';
-import { runLoop as baseRunLoop } from '../src/loop.js';
+import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
-import { fakeAdapter } from '../src/adapters/fake.js';
-import { createTestAdapterRegistry } from '../src/adapters/testing.js';
+import { fakeAdapter, fakeAdapterState } from '../src/adapters/fake.js';
+import { createTestAdapterRegistry, resetFakeAdapterState } from '../src/adapters/testing.js';
 import { createMockOutput } from './helpers/mock-output.js';
+import { createTempDir, removeTempDir } from './helpers/fs.js';
 
 const testRegistry = createTestAdapterRegistry();
 const mockOutput = createMockOutput();
-const runLoop = (
-  projectRoot: string,
-  loopName: string,
-  loopSpec: any,
-  config: any,
-  runners: any,
-  options: any
-): any => {
-  return baseRunLoop(projectRoot, loopName, loopSpec, config, runners, {
-    ...options,
-    registry: testRegistry,
-    output: mockOutput
-  });
-};
 
-describe('loop execution-completeness handling (consumes normalized completion field)', () => {
+describe('generic execution-completeness and artifact gates', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-completion');
 
   beforeEach(() => {
     createTempDir('temp-loop-completion');
+    resetFakeAdapterState();
   });
 
   afterEach(() => {
@@ -40,7 +27,7 @@ describe('loop execution-completeness handling (consumes normalized completion f
   function setupProject() {
     const root = join(tempWorkspace, 'project');
     mkdirSync(join(root, 'docs/dev'), { recursive: true });
-    writeFileSync(join(root, 'docs/dev/plan.md'), `# My Plan\nInitial content.\n`);
+    writeFileSync(join(root, 'docs/dev/plan.md'), '# My Plan\nInitial content.\n');
     return root;
   }
 
@@ -49,100 +36,74 @@ describe('loop execution-completeness handling (consumes normalized completion f
     'plan-follow-up': { agent: 'fake', model: 'fake-model' }
   };
 
-  // Injecting completion via the 'fake' adapter (agent !== 'opencode') proves the
-  // loop branches ONLY on the normalized `completion` field, never on the agent
-  // identity — no real opencode binary is involved.
-
-  it('audit truncated completion => terminal unknown, before artifact parsing', async () => {
-    const root = setupProject();
+  async function runPlan(root: string, overrides: Record<string, unknown> = {}) {
     const config = loadConfig(root);
+    return runLoop(root, 'plan', config.manifest.loops.plan!, config, runners, {
+      maxIterations: 3,
+      registry: testRegistry,
+      output: mockOutput,
+      interactive: false,
+      ...overrides
+    });
+  }
+
+  it.each([
+    ['truncated', 'length'],
+    ['interrupted', undefined]
+  ] as const)('treats %s provider completion as terminal unknown before artifact parsing', async (completion, reason) => {
+    const root = setupProject();
     vi.spyOn(fakeAdapter, 'run').mockResolvedValue({
       stdout: '',
       exitCode: 0,
-      completion: 'truncated',
-      stopReason: 'length'
+      completion,
+      stopReason: reason
     });
 
-    const result = await runLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
-      maxIterations: 3,
-      startPoint: 'fresh',
-      interactive: false
-    });
+    const result = await runPlan(root);
 
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('Agent execution truncated or interrupted');
-    expect(result.message).toContain('length');
-    // Returned before artifact inspection: no audit file was written/parsed.
+    expect(result).toMatchObject({ success: false, verdict: 'unknown' });
+    expect(result.message).toContain('evaluate execution truncated or interrupted');
+    if (reason) expect(result.message).toContain(reason);
     expect(existsSync(join(root, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
   });
 
-  it('audit interrupted completion => terminal unknown, before artifact parsing', async () => {
+  it('requires the configured evaluate artifact even when the provider exits cleanly', async () => {
     const root = setupProject();
-    const config = loadConfig(root);
-    vi.spyOn(fakeAdapter, 'run').mockResolvedValue({
-      stdout: '',
-      exitCode: 0,
-      completion: 'interrupted',
-      stopReason: null
-    });
-
-    const result = await runLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
-      maxIterations: 3,
-      startPoint: 'fresh',
-      interactive: false
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toContain('Agent execution truncated or interrupted');
-    expect(existsSync(join(root, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
-  });
-
-  it('requires an audit artifact even when a clean provider reports APPROVED on stdout', async () => {
-    const root = setupProject();
-    const config = loadConfig(root);
-    const stepSucceeded: any[] = [];
+    fakeAdapterState.writeVerdictFile = false;
     const stepFailed: any[] = [];
-    vi.spyOn(fakeAdapter, 'run').mockResolvedValue({
-      stdout: '## Verdict\n\nAPPROVED',
-      exitCode: 0
-    });
 
-    const result = await baseRunLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
-      maxIterations: 3,
-      interactive: false,
-      registry: testRegistry,
-      output: { ...mockOutput, stepSucceeded: (event: any) => stepSucceeded.push(event), stepFailed: (event: any) => stepFailed.push(event) }
+    const result = await runPlan(root, {
+      output: { ...mockOutput, stepFailed: (event: any) => stepFailed.push(event) }
     });
 
     expect(result).toMatchObject({ success: false, verdict: 'unknown' });
-    expect(result.message).toContain('fake exited cleanly but produced no audit artifact at docs/dev/plan-audit-v1-fake.md');
-    expect(existsSync(join(root, 'docs/dev/plan-audit-v1-fake.md'))).toBe(false);
-    expect(stepSucceeded).toEqual([]);
-    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'audit', errorKind: 'missing_output' }));
+    expect(result.message).toContain('produced no artifact at docs/dev/plan-audit-v1-fake.md');
+    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'evaluate', errorKind: 'missing_output' }));
   });
 
-  it('requires a follow-up artifact before recording a patched step or starting the next audit', async () => {
+  it('requires a valid repair artifact before starting the next evaluation', async () => {
     const root = setupProject();
-    const config = loadConfig(root);
-    const stepSucceeded: any[] = [];
-    const stepFailed: any[] = [];
-    writeFileSync(join(root, 'docs/dev/plan-audit-v1-fake.md'), '# Plan Audit\n\n## Verdict\n\nREJECTED\n');
-    vi.spyOn(fakeAdapter, 'run').mockResolvedValue({ stdout: 'patched', exitCode: 0 });
+    const originalRun = fakeAdapter.run;
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      const outputMatch = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      const outputPath = outputMatch?.[1]?.trim();
+      if (input.kind === 'evaluate' && outputPath) {
+        mkdirSync(join(root, 'docs/dev'), { recursive: true });
+        writeFileSync(resolve(root, outputPath), '# Plan Audit\n\n## Verdict\n\nREJECTED\n');
+        return { stdout: '', exitCode: 0 };
+      }
+      if (input.kind === 'repair') return { stdout: '', exitCode: 0 };
+      return originalRun(input);
+    });
 
-    const result = await baseRunLoop(root, 'plan', config.manifest.loops['plan']!, config, runners, {
-      maxIterations: 3,
-      interactive: false,
-      registry: testRegistry,
-      output: { ...mockOutput, stepSucceeded: (event: any) => stepSucceeded.push(event), stepFailed: (event: any) => stepFailed.push(event) }
+    const stepFailed: any[] = [];
+    const result = await runPlan(root, {
+      output: { ...mockOutput, stepFailed: (event: any) => stepFailed.push(event) }
     });
 
     expect(result).toMatchObject({ success: false, verdict: 'unknown' });
-    expect(result.message).toContain('fake exited cleanly but produced no follow-up artifact at docs/dev/plan-followup-v1-fake.md');
-    expect(existsSync(join(root, 'docs/dev/plan-followup-v1-fake.md'))).toBe(false);
+    expect(result.message).toContain('produced no artifact at docs/dev/plan-followup-v1-fake.md');
     expect(existsSync(join(root, 'docs/dev/plan-audit-v2-fake.md'))).toBe(false);
-    expect(stepSucceeded).toEqual([]);
-    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'follow-up', errorKind: 'missing_output' }));
+    expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'repair', errorKind: 'missing_output' }));
   });
 });

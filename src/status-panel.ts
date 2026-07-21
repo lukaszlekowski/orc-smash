@@ -94,23 +94,16 @@ function renderTimelineSection(context: PanelContext): string {
     let resultStr = '';
     if (s.status === 'interrupted') {
       resultStr = '—';
-    } else if (s.kind === 'audit') {
-      const v = s.verdict;
-      if (v === 'APPROVED') {
-        resultStr = chalk.bold.green(v);
-      } else if (v === 'REJECTED') {
-        resultStr = chalk.bold.red(v);
-      } else {
-        resultStr = chalk.bold.yellow(v ?? 'unknown');
-      }
     } else {
-      const o = s.outcome;
-      if (o === 'patched') {
-        resultStr = chalk.green(o);
-      } else if (o === 'blocked') {
-        resultStr = chalk.yellow(o);
+      const result = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome;
+      if (result === 'accepted' || result === 'completed') {
+        resultStr = chalk.bold.green(result);
+      } else if (result === 'retry') {
+        resultStr = chalk.bold.red(result);
+      } else if (result === 'blocked') {
+        resultStr = chalk.bold.yellow(result);
       } else {
-        resultStr = o ?? '';
+        resultStr = result ? chalk.bold.yellow(result) : '';
       }
     }
 
