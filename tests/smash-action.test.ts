@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync, existsSync, chmodSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import crypto from 'node:crypto';
 import { smashAction } from '../src/commands/smash.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { AgentRegistry } from '../src/adapters/registry.js';
+import type { RunEvent } from '../src/run-event.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery } from '../src/interactive.js';
+import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
+import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 
 vi.mock('../src/interactive.js', () => {
   return {
@@ -14,6 +18,12 @@ vi.mock('../src/interactive.js', () => {
     promptMaxIterations: vi.fn(),
     promptPostRunRecovery: vi.fn(),
     promptRunners: vi.fn(),
+  };
+});
+
+vi.mock('../src/owned-runtime-registry.js', () => {
+  return {
+    terminateOwnedRuntimes: vi.fn(),
   };
 });
 
@@ -63,6 +73,7 @@ describe('generic smash dispatch', () => {
   const output = createMockOutput();
 
   beforeEach(() => {
+    vi.mocked(terminateOwnedRuntimes).mockResolvedValue([]);
     createTempDir('temp-smash-action');
     mkdirSync(join(project, 'docs/dev'), { recursive: true });
     writeFileSync(join(project, 'docs/dev/plan.md'), '# Plan\n');
@@ -273,6 +284,122 @@ describe('generic smash dispatch', () => {
       } as any);
 
       expect(result.exitCode).toBe(1);
+      expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
+
+    it('Blocked finalization: blocked ownership loss retains admission fail-closed', async () => {
+      vi.mocked(promptLoopSelect).mockResolvedValue('plan');
+      vi.mocked(promptMaxIterations).mockResolvedValue(4);
+
+      // Setup supervisor ownership
+      const runId = 'run-test-blocked';
+      const token = 'secret-token';
+      const stateDir = join(project, 'runstate');
+      const runDir = join(stateDir, 'orc-smash', 'runs', runId);
+      mkdirSync(runDir, { recursive: true });
+      chmodSync(runDir, 0o700);
+
+      const leaseIssuedMs = Date.now();
+      const control = {
+        schemaVersion: 1,
+        runId,
+        ownerTokenHash: crypto.createHash('sha256').update(token).digest('hex'),
+        projectRoot: project,
+        hostInstanceId: 'host-1',
+        leaseIssuedMs,
+        leaseTtlMs: 60_000,
+        leaseExpiresMs: leaseIssuedMs + 60_000,
+        issuerRevision: 1
+      };
+      writeFileSync(join(runDir, 'control.json'), JSON.stringify(control), { mode: 0o600 });
+      writeFileSync(join(runDir, 'active.json'), JSON.stringify({
+        schemaVersion: 1,
+        cliIdentity: {
+          pid: process.pid,
+          startMs: getProcessStartTime(process.pid),
+          command: getProcessCommand(process.pid)
+        },
+        groups: [{
+          pgid: 12345,
+          leaderPid: 12346,
+          sessionId: 12347,
+          leaderStartMs: Date.now(),
+          command: 'node'
+        }],
+        state: 'running',
+        cliRevision: 1
+      }), { mode: 0o600 });
+
+      const projectHash = crypto.createHash('sha256').update(resolve(project)).digest('hex');
+      const actualLockPath = join(stateDir, 'orc-smash', 'projects', projectHash, 'project.lock');
+
+      process.env['ORC_RUN_ID'] = runId;
+      process.env['ORC_RUN_TOKEN'] = token;
+      process.env['ORC_RUN_STATE_DIR'] = stateDir;
+
+      // Mock terminateOwnedRuntimes to return a rejected termination (blocked process group)
+      vi.mocked(terminateOwnedRuntimes).mockResolvedValueOnce([
+        {
+          capability: { pgid: 12345, leaderPid: 12346 } as any,
+          result: {
+            outcome: 'rejected',
+            sent: false,
+            signal: 'SIGTERM',
+            target: { pgid: 12345, leaderPid: 12346, source: 'fresh' },
+            decision: { outcome: 'rejected', kind: 'leader-gone', reason: 'unkillable leader' },
+            reason: 'unkillable leader',
+          },
+          retired: false
+        }
+      ]);
+
+      const events: RunEvent[] = [];
+      const eventOutput = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output: eventOutput,
+        task: 'implement',
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      // 1. Returns exit code 2 (representing ownership/finalization failure)
+      expect(result.exitCode).toBe(2);
+
+      // 2. ownership.finalized is emitted with success: false (blocked
+      //    finalization cannot be converted to a clean release)
+      const finalizedEvents = events.filter(e => e.type === 'ownership.finalized');
+      expect(finalizedEvents).toHaveLength(1);
+      expect((finalizedEvents[0] as any).success).toBe(false);
+
+      // 3. Admission is retained (fail-closed, i.e., project.lock is NOT removed)
+      expect(existsSync(actualLockPath)).toBe(true);
+
+      // 4. active.json is updated to state 'failed' with reason
+      const active = JSON.parse(readFileSync(join(runDir, 'active.json'), 'utf-8'));
+      expect(active.state).toBe('failed');
+      expect(active.reason).toContain('terminal ownership-failure');
+    });
+
+    it('Non-interactive mode: output flush failure overrides exit code to 1 and does not prompt recovery', async () => {
+      const adapter = scriptedAdapter();
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output: createMockOutput({
+          emit: () => {},
+          flush: async () => { throw new Error('writer broken'); },
+        }),
+        task: 'implement',
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('Output flush failed');
       expect(promptPostRunRecovery).not.toHaveBeenCalled();
     });
   });

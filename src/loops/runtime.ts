@@ -15,5 +15,4 @@ export type RunOutcome =
   | { kind: 'unknown'; message: string; detail?: string; artifactPath: string | null }
   | { kind: 'provider-failed'; message: string; errorKind: string; artifactPath: string | null }
   | { kind: 'budget-exhausted'; message: string; artifactPath: string | null }
-  | { kind: 'ownership-lost'; message: string; artifactPath: string | null }
-  | { kind: 'interrupted'; message: string; artifactPath: string | null };
+  | { kind: 'ownership-lost'; message: string; artifactPath: string | null };

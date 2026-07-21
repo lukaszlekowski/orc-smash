@@ -1,10 +1,13 @@
 ---
 confidence: 0.95
-status: draft
+status: r1-complete
 source: docs/dev/research.md
 ---
 
 # Plan: Config-Driven Approval Loops, Tasks, Pipelines, and Continuity
+
+> **Release status:** R1 is implemented, verified, and approved. Current work
+> now focuses on R2 (F7–F8 and the R2 portion of F11). R3 remains deferred.
 
 ## Architectural Decision
 
@@ -923,11 +926,13 @@ for safe execution. Task inputs are composed from the binding's declared `inputs
 runner is resolved per F2. Per the Pipeline Run Identity contract, an explicit
 pipeline start mints a `pipelineRunId`, a confirmed continuation reuses it, and a
 direct `--task` start is ad hoc with no pipeline identity. The task executor and
-the loop executor share one terminal-result type
-— `RunOutcome` in `src/loops/runtime.ts`, generalizing
-today's `LoopReturn` — consumed by `smashAction`, which maps every task outcome
-to exactly one canonical terminal event, ownership finalization, and exit code
-(asserted in Verification).
+the loop executor share one terminal-result type — `RunOutcome` in
+`src/loops/runtime.ts`, generalizing today's `LoopReturn` — consumed by
+`smashAction`, which maps every **returned executor outcome** to one canonical
+terminal event, the appropriate ownership disposition, and an exit code
+(asserted in Verification). Asynchronous operating-system signals remain an
+intentional exception: the existing signal boundary terminates children and
+exits immediately rather than waiting for the executor to return.
 
 The exhaustive executor terminal contract is:
 
@@ -938,15 +943,25 @@ The exhaustive executor terminal contract is:
 | `unknown` | missing/malformed artifact, unknown decision, or failed output contract/validator | emit the specific `artifact.missing`, `artifact.unknown`, or `decision.unknown`, then `run.failed`; no mutation, completion, continuation, or resume evidence; finalize ownership; interactive recovery menu or non-interactive exit 1 |
 | `provider-failed` | auth, timeout, spawn, transport, non-zero exit, or unverified provider completion | provider-specific failure event, then `run.failed`; quarantine any partial artifact; finalize ownership when safe; interactive recovery menu or non-interactive exit 1 |
 | `budget-exhausted` | the final permitted evaluation is `retry` and the operator declines/has no interactive extension | emit `stage.incomplete`, then `run.failed`; preserve the retry artifact for a later Continue; finalize ownership; menu return or non-interactive exit 1 |
-| `ownership-lost` | the ownership fence cannot verify the run | emit `ownership.lost`, then `run.failed`; retain admission as required by the kill-gate contract; restricted recovery or exit 2 |
-| `interrupted` | SIGINT/SIGTERM interrupts an active provider | emit `run.interrupted`, write the durable marker, terminate through the existing gate, and exit with the conventional signal code |
+| `ownership-lost` | the ownership fence cannot verify the run | emit `ownership.lost`, then `run.failed`; release admission only after fresh-capability cleanup is proven complete, otherwise retain it fail-closed; restricted recovery or exit 2 |
 
-This union is exhaustive at `smashAction` once loop/task execution begins;
-adding an executor outcome requires an explicit event, ownership, and exit
-mapping. Command validation and project-input preflight occur earlier and use
-their explicitly defined command-failure behavior (F1/F11), not a synthetic
-executor outcome. Lower-level parsers return facts and never emit a competing
-terminal event.
+This union is exhaustive for values returned by the loop/task executor to
+`smashAction`; adding a returned executor outcome requires an explicit terminal
+event, ownership, and exit mapping. It deliberately does **not** model
+SIGINT/SIGTERM. `handleInterruptSignal` owns that direct signal boundary: emit
+`run.interrupted` once, persist the full durable marker, terminate only through
+the existing fresh-capability gate, and exit with the conventional signal code.
+It must not route a signal through ordinary finalization or turn it into a
+provider failure. Command validation and project-input preflight occur earlier
+and use their explicitly defined command-failure behavior (F1/F11), not a
+synthetic executor outcome. Lower-level parsers return facts and never emit a
+competing terminal event.
+
+`RunOutcome.artifactPath` is executor-internal evidence used to populate
+`LoopReturn.lastAuditPath` and summaries. R1 does not add artifact paths to the
+public `CommandResult` or terminal `run.*` events; artifact-specific events and
+the persisted index remain the operator-visible source for paths. Do not create
+command-layer plumbing solely to echo this internal field.
 
 ### Files affected
 
@@ -975,9 +990,12 @@ terminal event.
 
 - Unit: a task runs exactly once per `--task` invocation and returns a
   `RunOutcome`.
-- Unit: every row of the `RunOutcome` table maps to exactly the listed terminal
-  event sequence, ownership disposition, reported artifact path where one exists,
-  and exit code — no duplicated or missing `run.completed`/`run.failed`.
+- Unit: a compact command-mapping table covers every **returned** `RunOutcome`
+  kind and asserts its canonical terminal event, exit code, and ordinary
+  finalization behavior — no duplicated or missing `run.completed`/`run.failed`.
+  Executor tests separately assert stage/provider-specific events and internal
+  `artifactPath`; those events need not be recreated by a mocked `smashAction`
+  table.
 - Unit: a `--runner`/`--runner-model`/`--runner-effort` entry for a skill not in
   the selected task is rejected.
 - Unit: a raw skill not bound to a task is not executable via `--task`.
@@ -986,8 +1004,13 @@ terminal event.
 - Unit: a completion task yielding `COMPLETED`, `BLOCKED`, or malformed/missing
   Outcome returns `completed`, `blocked`, or `unknown` respectively; approval-loop
   repair exercises the same classifier and mapping.
-- Unit: ownership loss, interruption, and timeout during a task surface through
-  the same boundaries as a loop step.
+- Unit: ownership loss and timeout during a task surface through the same
+  executor boundaries as a loop step. Ownership-loss coverage proves both clean
+  fresh-capability cleanup (admission released) and ambiguous/blocked cleanup
+  (admission retained).
+- Signal-boundary test: SIGINT/SIGTERM emits exactly one `run.interrupted`, writes
+  the full marker, terminates through the gate, and requests the conventional
+  signal exit without ordinary `RunOutcome` finalization.
 
 ### Non-goals
 
@@ -1273,13 +1296,17 @@ which intentionally throw to signal configuration or ownership failure).
 
 ### Verification
 
-- Unit (R1): each recoverable failure kind maps to a visible error event with
-  ownership handled; in interactive mode it returns to the appropriate menu, and
-  in non-interactive `--pipeline`/`--loop`/`--task` mode it returns the specified `RunOutcome`
-  /exit code without opening a menu. Matrix-tested in `tests/smash-action.test.ts`
-  for both invocation modes.
-- Unit (R1): each safety-critical failure kind exits non-zero or enters the
-  restricted path; none leaves the terminal un-restored.
+- Unit (R1): test each **distinct command-boundary branch**, not the Cartesian
+  product of every provider error label and invocation mode. At minimum cover
+  pre-admission input/setup failure, post-admission recoverable provider/artifact
+  failure, clean ownership loss, blocked ownership loss, and output/terminal
+  failure. Interactive representatives return to the appropriate menu;
+  non-interactive representatives return the specified exit without opening a
+  menu. Provider-specific auth/timeout/spawn distinctions remain covered at the
+  adapter/executor layer where they are produced.
+- Unit (R1): representative safety-critical branches exit non-zero or enter the
+  restricted path; none leaves the terminal un-restored. Equivalent errors that
+  share the same production branch do not require duplicate command tests.
 - Boundary test (R1): `smashAction` and `statusAction` with injected failures
   assert terminal restoration, a visible event/error, correct ownership
   disposition, and the exit/restricted-recovery outcome. Static checks are

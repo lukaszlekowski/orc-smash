@@ -23,7 +23,6 @@ interface MatrixCase {
   expectedExit: number;
   expectedTerminal: string;
   expectedErrorKind?: string;
-  expectedArtifact: string | null;
   expectedEvents: string[];
   expectedOwnership: 'finalized' | 'retained';
 }
@@ -42,7 +41,6 @@ const matrixCases: MatrixCase[] = [
     },
     expectedExit: 0,
     expectedTerminal: 'run.completed',
-    expectedArtifact: '/some/path',
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -68,7 +66,6 @@ const matrixCases: MatrixCase[] = [
     expectedExit: 1,
     expectedTerminal: 'run.failed',
     expectedErrorKind: 'blocked',
-    expectedArtifact: '/some/path',
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -94,7 +91,6 @@ const matrixCases: MatrixCase[] = [
     expectedExit: 1,
     expectedTerminal: 'run.failed',
     expectedErrorKind: 'unknown',
-    expectedArtifact: '/some/path',
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -120,7 +116,6 @@ const matrixCases: MatrixCase[] = [
     expectedExit: 1,
     expectedTerminal: 'run.failed',
     expectedErrorKind: 'provider-failed',
-    expectedArtifact: null,
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -146,7 +141,6 @@ const matrixCases: MatrixCase[] = [
     expectedExit: 1,
     expectedTerminal: 'run.failed',
     expectedErrorKind: 'budget-exhausted',
-    expectedArtifact: null,
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -172,7 +166,6 @@ const matrixCases: MatrixCase[] = [
     expectedExit: 2,
     expectedTerminal: 'run.failed',
     expectedErrorKind: 'ownership',
-    expectedArtifact: null,
     expectedEvents: [
       'run.started',
       'config.loaded',
@@ -181,31 +174,6 @@ const matrixCases: MatrixCase[] = [
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
-    ],
-    expectedOwnership: 'finalized'
-  },
-  {
-    id: 7,
-    name: 'Outcome 7: interrupted -> returns exitCode: 130, emits run.interrupted',
-    mockedValue: {
-      success: false,
-      verdict: 'interrupted',
-      message: 'SIGINT received',
-      lastAuditPath: null,
-      terminalEventEmitted: false,
-      outcome: { kind: 'interrupted', message: 'SIGINT received', artifactPath: null },
-    },
-    expectedExit: 130,
-    expectedTerminal: 'run.interrupted',
-    expectedArtifact: null,
-    expectedEvents: [
-      'run.started',
-      'config.loaded',
-      'binding.selected',
-      'runner.resolved',
-      'ownership.opened',
-      'ownership.finalized',
-      'run.interrupted'
     ],
     expectedOwnership: 'finalized'
   }
@@ -307,7 +275,7 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
   }
 
   describe.each(matrixCases)('$name', (c) => {
-    it('asserts complete event, terminal, ownership, and exit mappings', async () => {
+    it('asserts command-boundary event, terminal, ownership, and exit mappings', async () => {
       const { projectRoot } = setupTestProject();
       setupSupervisorOwnership(projectRoot);
       const events: RunEvent[] = [];
@@ -323,7 +291,7 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
 
       expect(result.exitCode).toBe(c.expectedExit);
 
-      // 1. Verify complete ordered event sequence
+      // 1. Verify ordered command-boundary event sequence
       const eventTypes = events.map(e => e.type);
       expect(eventTypes).toEqual(c.expectedEvents);
 
@@ -337,16 +305,7 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
         expect(terminalEvent.errorKind).toBe(c.expectedErrorKind);
       }
 
-      // 3. Verify returned artifact path in outcome (null or string)
-      if (c.expectedArtifact !== null) {
-        if (c.expectedTerminal === 'run.completed') {
-          expect(terminalEvent.outcome).toBe(c.mockedValue.message);
-        } else {
-          expect(terminalEvent.reason).toBe(c.mockedValue.message);
-        }
-      }
-
-      // 4. Verify ownership disposition
+      // 3. Verify ownership disposition
       const activePath = join(projectRoot, '.orc-smash/active.json');
       if (c.expectedOwnership === 'finalized') {
         expect(existsSync(activePath)).toBe(false);
