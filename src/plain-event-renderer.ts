@@ -50,7 +50,7 @@ function fmtEvent(event: RunEvent): string {
     case 'binding.selected':
       return `${ts} ${lvl} binding.selected binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
     case 'runner.resolved': {
-      let line = `${ts} ${lvl} runner.resolved skillId=${quote(event.skillId)} agent=${quote(event.agent)} model=${quote(event.model)} effort=${quote(event.effort ?? 'provider default')} agentSource=${event.agentSource} modelSource=${event.modelSource}`;
+      let line = `${ts} ${lvl} runner.resolved skillId=${quote(event.skillId)} agent=${quote(event.agent)} model=${quote(event.model)} effort=${quote(event.effort ?? 'provider default')}${event.effortSource ? ` effortSource=${event.effortSource}` : ''} agentSource=${event.agentSource} modelSource=${event.modelSource}`;
       if (event.inheritedSession) {
         line += ` inheritedSession=${quote(`${event.inheritedSession.agent}/${event.inheritedSession.model}/${event.inheritedSession.sessionId}`)}`;
       }

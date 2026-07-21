@@ -25,6 +25,8 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
 
   beforeEach(() => {
     createTempDir('temp-lease-execution');
+    mkdirSync(join(tmp, 'docs/dev'), { recursive: true });
+    writeFileSync(join(tmp, 'docs/dev/plan.md'), '# Plan\n');
     runDir = join(tmp, 'runs', 'run-a');
     // Speed up the watcher so expiry is detected within a few ms.
     prevInterval = process.env['ORC_LEASE_WATCH_INTERVAL_MS'];
@@ -96,6 +98,7 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
     return {
       projectRoot: tmp,
       loopName: 'plan',
+      bindingKind: 'loop',
       loopSpec: config.manifest.loops['plan']!,
       config,
       registry: { adapters: new Map() } as AgentRegistry,
@@ -126,7 +129,8 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
       kind: 'audit',
       skillId: 'plan-audit',
       version: 1,
-      iteration: 1
+      iteration: 1,
+      inputFingerprint: 'hash'
     });
 
     // The decisive assertion: expiry resolves to an ownership outcome, not a
@@ -151,7 +155,8 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
       kind: 'audit',
       skillId: 'plan-audit',
       version: 1,
-      iteration: 1
+      iteration: 1,
+      inputFingerprint: 'hash'
     });
 
     expect(outcome.kind).toBe('ran');

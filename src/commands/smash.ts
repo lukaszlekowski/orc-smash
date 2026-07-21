@@ -250,6 +250,8 @@ async function resolveSmashRunSetup(
           skillId,
           agent: resolved.agent,
           model: resolved.model,
+          effort: resolved.effort,
+          effortSource: resolved.effortSource,
           agentSource: resolved.agentSource,
           modelSource: resolved.modelSource,
           inheritedSession: resolved.inheritedSession,

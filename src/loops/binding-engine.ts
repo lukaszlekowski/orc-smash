@@ -184,8 +184,8 @@ export async function runBinding(
     const parentIdentityForLookup = request.parentArtifactIdentity;
     const predecessor = lastArtifact
       ?? history.find(item => item.meta.artifactIdentity === parentIdentityForLookup);
-    const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? (predecessor ? 'resume-per-skill' : 'fresh-per-invocation');
-    const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy);
+    const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? (bindingKind === 'loop' && predecessor ? 'resume-per-skill' : 'fresh-per-invocation');
+    const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy, request.skillId);
     // Prompt-semantic inputs are captured before the provider can mutate the
     // target or the referenced predecessor artifact.
     let inputFingerprint: string;
@@ -202,6 +202,7 @@ export async function runBinding(
         {
           projectRoot,
           loopName: bindingId,
+          bindingKind,
           loopSpec: executionSpec,
           config,
           registry: options.registry,
@@ -209,6 +210,7 @@ export async function runBinding(
           steps,
           maxIterations: options.maxIterations,
           ownership: options.ownership,
+          runContext: context,
         },
         {
           runner,
@@ -219,6 +221,8 @@ export async function runBinding(
           version: request.version,
           iteration: evaluationCount,
           continuity,
+          sessionStrategy,
+          inputFingerprint,
         },
       );
       if (execution.kind === 'ownership-lost') {
@@ -338,6 +342,7 @@ export async function runBinding(
       durationMs,
       sessionMode,
       sessionId,
+      sessionStrategy,
       parentArtifactIdentity,
       artifactIdentity,
       inputFingerprint,
@@ -461,6 +466,8 @@ async function resolveBindingRunners(
       skillId,
       agent: runner.agent,
       model: runner.model,
+      effort: runner.effort,
+      effortSource: runner.effortSource,
       agentSource: runner.agentSource,
       modelSource: runner.modelSource,
     }));
@@ -707,9 +714,11 @@ function resolveContinuity(
   runner: Runner,
   registry: AgentRegistry,
   sessionStrategy: string = 'fresh-per-invocation',
+  skillId: string,
 ): { mode: 'fresh' | 'resumed'; sessionId?: string } {
   if (sessionStrategy === 'fresh-per-invocation') return { mode: 'fresh' };
   if (!predecessor) return { mode: 'fresh' };
+  if (predecessor.meta.skill !== skillId) return { mode: 'fresh' };
   const sessionId = predecessor.meta.sessionId;
   if (!sessionId || sessionId === 'none') return { mode: 'fresh' };
   if (predecessor.meta.agent !== runner.agent

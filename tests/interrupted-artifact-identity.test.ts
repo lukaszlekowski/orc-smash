@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import {
   writeInterruptedMarker,
   readInterruptedMarker,
@@ -80,5 +80,9 @@ describe('Interrupted Artifact Full R1 Identity (M5 Verification)', () => {
 
     const snapshot = scanGlobalSnapshot(testDir, manifest);
     expect(snapshot.steps.length).toBe(0); // Quarantined file is ignored by active snapshot scan
+  });
+
+  afterAll(() => {
+    rmSync(testDir, { recursive: true, force: true });
   });
 });

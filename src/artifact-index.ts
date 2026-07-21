@@ -5,7 +5,7 @@ import { patternToRegex } from './patterns.js';
 import type { V1Manifest } from './manifest.js';
 import { classifyArtifact } from './artifact-contract.js';
 import { validateImplementLedger } from './implement-ledger.js';
-import type { Step, GlobalSnapshot } from './state.js';
+import { roleForKind, type Step, type GlobalSnapshot } from './state.js';
 
 const EXCLUDED_DIRS = new Set([
   '.git',
@@ -24,8 +24,18 @@ const EXCLUDED_DIRS = new Set([
 export function walkProjectDirectory(projectRoot: string): string[] {
   const realRoot = existsSync(projectRoot) ? realpathSync(projectRoot) : resolve(projectRoot);
   const results: string[] = [];
+  const visited = new Set<string>();
 
   function walk(currentDir: string): void {
+    let realCurrentDir: string;
+    try {
+      realCurrentDir = realpathSync(currentDir);
+    } catch {
+      return;
+    }
+    if (visited.has(realCurrentDir)) return;
+    visited.add(realCurrentDir);
+
     if (!existsSync(currentDir)) return;
     let entries: string[];
     try {
@@ -254,8 +264,30 @@ export function scanGlobalSnapshot(
       bindingSteps.push(step);
       byBinding.set(bindingId, bindingSteps);
       steps.push(step);
-    } catch {
-      // ignore parse errors
+    } catch (err: any) {
+      const patternInfo = matchingPatterns[0]!;
+      const mtime = existsSync(file) ? lstatSync(file).mtimeMs : Date.now();
+      const step: Step = {
+        kind: patternInfo.phase,
+        bindingId: patternInfo.bindingId,
+        bindingKind: patternInfo.bindingKind,
+        role: roleForKind(patternInfo.phase),
+        agent: provider,
+        model: 'unknown',
+        version,
+        status: 'done',
+        artifactPath: file,
+        mtime,
+        unclassified: true,
+        contractValid: false,
+        provider,
+      };
+      const bindingId = patternInfo.bindingId;
+      const bindingSteps = byBinding.get(bindingId) ?? [];
+      bindingSteps.push(step);
+      byBinding.set(bindingId, bindingSteps);
+      steps.push(step);
+      unclassified.push(step);
     }
   }
 

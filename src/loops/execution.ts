@@ -15,9 +15,13 @@ import type { OwnershipContext } from '../run-ownership.js';
 import { OwnedSpawnRuntime } from '../adapters/process-group.js';
 import { makeRunEvent, MAX_PROGRESS_EVENTS, PROGRESS_MAX_LENGTH, TOOL_CALL_DISPLAY_CAP } from '../run-event.js';
 
+import { computeArtifactIdentity, type RunContext } from '../pipeline-state.js';
+import { captureTargetFingerprint } from '../target-snapshot.js';
+
 export interface LoopExecutionDeps {
   projectRoot: string;
   loopName: string;
+  bindingKind: 'loop' | 'task';
   loopSpec: LoopSpec;
   config: Config;
   registry: AgentRegistry;
@@ -25,6 +29,7 @@ export interface LoopExecutionDeps {
   steps: Step[];
   maxIterations: number;
   ownership?: OwnershipContext | null;
+  runContext?: RunContext;
 }
 
 export interface ExecuteLoopStep {
@@ -36,6 +41,8 @@ export interface ExecuteLoopStep {
   version: number;
   iteration: number;
   continuity?: { mode: 'fresh' | 'resumed'; sessionId?: string };
+  sessionStrategy?: string;
+  inputFingerprint: string;
 }
 
 export type ExecuteLoopStepOutcome =
@@ -198,10 +205,55 @@ export async function executeLoopStep(
       }
     }
 
-    deps.output.stepStarted({ kind, skillId, agent: runner.agent, model: runner.model, iteration, version, message: spawnLabel });
+    deps.output.stepStarted({
+      kind,
+      skillId,
+      agent: runner.agent,
+      model: runner.model,
+      effort: runner.effort,
+      iteration,
+      version,
+      message: spawnLabel,
+    });
     deps.output.emit(makeRunEvent({ type: 'provider.started', atMs: Date.now(), agent: runner.agent }));
     const adapter = getAdapter(deps.registry, runner.agent);
     debugLoopSpawn({ loopName: deps.loopName, skillId, kind, agent: runner.agent, model: runner.model, version, cwd: deps.projectRoot, prompt });
+    
+    const parentArtifactIdentity = deps.runContext?.parentArtifactIdentity ?? null;
+    const targetFingerprintBefore = captureTargetFingerprint(
+      deps.projectRoot,
+      deps.loopSpec.target ?? { path: '.', kind: 'worktree' },
+      deps.config.manifest,
+    );
+    const chainId = deps.runContext?.chainId ?? `interrupted-${Date.now()}`;
+    const chainMode = deps.runContext?.chainMode ?? 'ad-hoc';
+    const pipelineId = deps.runContext?.pipelineId ?? null;
+    const pipelineRunId = deps.runContext?.pipelineRunId ?? null;
+    const stageId = deps.runContext?.stageId ?? null;
+    const sessionMode = continuity?.mode ?? 'fresh';
+    const sessionId = continuity?.sessionId ?? 'interrupted';
+
+    const draftArtifactIdentity = computeArtifactIdentity({
+      schemaVersion: 1,
+      pipelineId,
+      pipelineRunId,
+      stageId,
+      bindingKind: deps.bindingKind,
+      bindingId: deps.loopName,
+      chainId,
+      chainMode,
+      step: kind,
+      version,
+      provider: runner.agent,
+      model: runner.model,
+      effort: runner.effort,
+      sessionMode,
+      sessionId,
+      parentArtifactIdentity,
+      inputFingerprint: request.inputFingerprint,
+      resultFingerprint: targetFingerprintBefore,
+    });
+
     setStepCtx({
       loop: deps.loopName,
       kind,
@@ -210,6 +262,13 @@ export async function executeLoopStep(
       model: runner.model,
       skillId,
       effort: runner.effort,
+      sessionStrategy: request.sessionStrategy,
+      chainId,
+      pipelineId,
+      pipelineRunId,
+      stageId,
+      artifactIdentity: draftArtifactIdentity,
+      parentArtifactIdentity,
     });
     
     // Pre-spawn check
