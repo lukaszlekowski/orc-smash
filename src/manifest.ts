@@ -39,6 +39,20 @@ export const OutputSchema = z.object({
 
 export type OutputSpec = z.infer<typeof OutputSchema>;
 
+export const TaskOutputContractSchema = z.enum([
+  'completion-artifact',
+  'required-artifact',
+]);
+export type TaskOutputContract = z.infer<typeof TaskOutputContractSchema>;
+
+export const TaskOutputSchema = z.object({
+  pattern: z.string(),
+  contract: TaskOutputContractSchema,
+  validator: z.string().optional(),
+}).strict();
+
+export type TaskOutputSpec = z.infer<typeof TaskOutputSchema>;
+
 export const FileMapValueSchema = z.string();
 export const FilesSchema = z.record(z.string(), FileMapValueSchema);
 
@@ -88,7 +102,7 @@ export const TaskBindingSchema = z.object({
   target: TargetSchema,
   inputs: z.array(InputSpecSchema),
   files: FilesSchema.optional(),
-  output: OutputSchema,
+  output: TaskOutputSchema,
 }).strict();
 
 export type TaskBinding = z.infer<typeof TaskBindingSchema>;
@@ -225,13 +239,6 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
       });
     }
     validatePatternForContext(ctx, ['tasks', taskId, 'output', 'pattern'], task.output.pattern);
-    if (task.output.contract === 'decision-artifact') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['tasks', taskId, 'output', 'contract'],
-        message: `Task '${taskId}' cannot use 'decision-artifact' contract. Tasks only support 'completion-artifact' and 'required-artifact'.`,
-      });
-    }
     for (let i = 0; i < task.inputs.length; i++) {
       const input = task.inputs[i]!;
       validateInputSource(ctx, ['tasks', taskId, 'inputs', i], input.source, task.files ?? {});
