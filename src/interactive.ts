@@ -170,7 +170,11 @@ export async function promptRunners(
     }
 
     const adapter = agentRegistry.adapters.get(agent);
-    const effortLevels = config.registry.providers[agent]?.modelEfforts?.[selectedModel] ?? config.registry.providers[agent]?.efforts ?? [];
+    const catalogue = config.registry.providers[agent];
+    const isCustomModel = catalogue ? !catalogue.models.includes(selectedModel) : true;
+    const effortLevels = isCustomModel
+      ? []
+      : (catalogue?.modelEfforts?.[selectedModel] ?? catalogue?.efforts ?? []);
     let selectedEffort: string | undefined;
     if (adapter?.capabilities.effort && effortLevels.length > 0) {
       const configuredDefault = agent === defaultAgent
