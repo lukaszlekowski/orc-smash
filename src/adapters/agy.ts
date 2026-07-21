@@ -89,7 +89,7 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'agy',
-    capabilities: { resumeSession: false, effort: true },
+    capabilities: { resumeSession: false, effort: false },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
       return {
@@ -100,7 +100,7 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
           '--model',
           input.model,
           '--dangerously-skip-permissions'
-        ].concat(input.effort ? ['--effort', input.effort] : [])
+        ]
       };
     },
 

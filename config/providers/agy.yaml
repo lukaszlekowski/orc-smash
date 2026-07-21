@@ -1,6 +1,4 @@
 defaultModel: Gemini 3.5 Flash (Medium)
-efforts: [low, medium, high, xhigh]
-defaultEffort: medium
 models:
   - Gemini 3.5 Flash (Medium)
   - Gemini 3.5 Flash (High)

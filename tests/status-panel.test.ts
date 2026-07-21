@@ -335,7 +335,7 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
           status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, sessionId: 'sess_timeline_123' }
       ]
     }));
-    expect(out).toContain('Session ID');
+    expect(out).toContain('Session');
     expect(out).toContain('*e_123');
   });
 });

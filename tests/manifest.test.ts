@@ -86,4 +86,41 @@ describe('v1 manifest contract', () => {
     };
     expect(() => buildManifestSchema(DEFAULT_REGISTRY).parse(parsed)).toThrow(/Duplicate stageId/);
   });
+
+  it('rejects unsafe identifiers and invalid decision tokens', () => {
+    const schema = buildManifestSchema(DEFAULT_REGISTRY);
+    // Unsafe ID
+    expect(() => schema.parse({
+      schemaVersion: 1,
+      roles: { 'bad role name!': 'roles/auditor.md' },
+      skills: {},
+      loops: {},
+    })).toThrow(/Invalid role ID/);
+
+    // Empty / non-distinct decision tokens
+    expect(() => schema.parse({
+      schemaVersion: 1,
+      roles: { auditor: 'roles/auditor.md' },
+      skills: { audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' } },
+      loops: {
+        check: {
+          type: 'approval-loop',
+          target: { path: '.', kind: 'worktree' },
+          inputs: [],
+          evaluate: {
+            skill: 'audit',
+            output: {
+              pattern: 'docs/eval-v{version}-{provider}.md',
+              contract: 'decision-artifact',
+              decision: { heading: 'Decision', accepted: 'SAME', retry: 'same' },
+            },
+          },
+          repair: {
+            skill: 'audit',
+            output: { pattern: 'docs/repair-v{version}-{provider}.md', contract: 'completion-artifact' },
+          },
+        },
+      },
+    })).toThrow(/case-insensitively distinct/);
+  });
 });

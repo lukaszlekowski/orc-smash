@@ -1,4 +1,4 @@
-export type Runner = { agent: string; model: string; effort?: string };
+export type Runner = { agent: string; model: string; effort?: string; sessionStrategy?: string };
 
 export type LoopReturn = {
   success: boolean;

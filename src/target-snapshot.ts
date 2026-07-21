@@ -33,10 +33,87 @@ export function captureTargetSnapshot(
   }
 
   const outputMatchers = outputPatterns(manifest).map(patternToRegex);
+  const gitSnapshot = getGitWorktreeSnapshot(projectRoot, outputMatchers);
+  if (gitSnapshot) return gitSnapshot;
+
   const entries: string[] = [];
   walk(projectRoot, projectRoot, outputMatchers, entries);
   entries.sort();
   return `worktree\n${entries.join('\n')}`;
+}
+
+import { execSync } from 'node:child_process';
+
+function getGitWorktreeSnapshot(projectRoot: string, outputMatchers: RegExp[]): string | null {
+  try {
+    const isGit = execSync('git rev-parse --is-inside-work-tree', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() === 'true';
+    if (!isGit) return null;
+
+    const head = execSync('git rev-parse HEAD', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+
+    const stagedRaw = execSync('git diff-index --cached HEAD', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const stagedLines = stagedRaw
+      ? stagedRaw.split('\n').filter(line => {
+          const parts = line.split('\t');
+          const file = parts[parts.length - 1];
+          return file && !outputMatchers.some(m => m.test(file)) && !file.startsWith('.orc-smash');
+        })
+      : [];
+
+    const unstagedRaw = execSync('git diff-files', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const unstagedLines = unstagedRaw
+      ? unstagedRaw.split('\n').filter(line => {
+          const parts = line.split('\t');
+          const file = parts[parts.length - 1];
+          return file && !outputMatchers.some(m => m.test(file)) && !file.startsWith('.orc-smash');
+        })
+      : [];
+
+    const untrackedRaw = execSync('git ls-files --others --exclude-standard', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const untrackedEntries: string[] = [];
+    if (untrackedRaw) {
+      for (const rel of untrackedRaw.split('\n')) {
+        if (!rel || outputMatchers.some(m => m.test(rel)) || rel.startsWith('.orc-smash') || rel.startsWith('.git')) continue;
+        const abs = resolve(projectRoot, rel);
+        if (existsSync(abs)) {
+          const stat = lstatSync(abs);
+          if (stat.isFile()) {
+            untrackedEntries.push(`${rel}:${sha256(readFileSync(abs))}`);
+          }
+        }
+      }
+    }
+
+    return [
+      'worktree:git',
+      `head:${head}`,
+      `staged:${stagedLines.sort().join(';')}`,
+      `unstaged:${unstagedLines.sort().join(';')}`,
+      `untracked:${untrackedEntries.sort().join(';')}`,
+    ].join('\n');
+  } catch {
+    return null;
+  }
 }
 
 /** Return a digest rather than exposing the serialized snapshot in provenance. */

@@ -43,10 +43,10 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
         'json'
       ];
       if (input.effort) {
-        args.push('--effort', input.effort);
+        args.push('--variant', input.effort);
       }
       if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
-        args.push('-c', input.continuity.sessionId);
+        args.push('-s', input.continuity.sessionId);
       }
       args.push(input.prompt);
       return {

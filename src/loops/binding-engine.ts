@@ -1,10 +1,10 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import type { CliOutput } from '../cli-output.js';
 import type { Config } from '../config.js';
 import { parseCompletionContent, parseDecisionContent, type DecisionOutcome } from '../artifact-contract.js';
 import { composePrompt } from '../prompt-composer.js';
-import { parseArtifactMeta, parseArtifactMetaClassified, writeArtifactWithMeta, type ArtifactMeta } from '../provenance.js';
+import { writeArtifactWithMeta, type ArtifactMeta } from '../provenance.js';
 import { renderPattern } from '../patterns.js';
 import type {
   LoopBinding,
@@ -29,7 +29,7 @@ import { quarantineArtifact, quarantineInterruptedResume } from '../interrupted-
 import { validateImplementLedger } from '../implement-ledger.js';
 import { promptRunners } from '../interactive.js';
 import { makeRunEvent } from '../run-event.js';
-import { patternToRegex } from '../patterns.js';
+import { scanGlobalSnapshot } from '../artifact-index.js';
 
 export type Binding = LoopBinding | TaskBinding;
 export type BindingKind = 'loop' | 'task';
@@ -144,7 +144,7 @@ export async function runBinding(
     : [loopBinding!.evaluate.skill, loopBinding!.repair.skill];
   await resolveBindingRunners(skillIds, config, options, runners);
 
-  const history = discoverArtifacts(projectRoot, binding);
+  const history = discoverArtifacts(projectRoot, bindingId, config);
   const latestClassified = history.filter(item => item.classified).at(-1);
   if (latestClassified && !latestClassified.valid) {
     const message = `latest ${latestClassified.phase} artifact is invalid at ${relative(projectRoot, latestClassified.path)}; resolve or quarantine it before continuing`;
@@ -156,9 +156,9 @@ export async function runBinding(
     } as any));
     return finish({ kind: 'unknown', message, artifactPath: latestClassified.path }, 'unknown', message);
   }
-  const context = options.runContext ?? recoverBindingContext(history) ?? mintRunContext({ mode: 'ad-hoc' });
+  const context = options.runContext ?? mintRunContext({ mode: 'ad-hoc' });
   const version = allocateVersion(projectRoot, binding, history, runners, bindingKind);
-  const initial = initialRequest(binding, bindingKind, history, version, config);
+  const initial = initialRequest(binding, bindingKind, history, version, config, context);
   let request: StepRequest | null = initial;
   let evaluationCount = 0;
 
@@ -184,7 +184,8 @@ export async function runBinding(
     const parentIdentityForLookup = request.parentArtifactIdentity;
     const predecessor = lastArtifact
       ?? history.find(item => item.meta.artifactIdentity === parentIdentityForLookup);
-    const continuity = resolveContinuity(predecessor, runner, options.registry);
+    const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? (predecessor ? 'resume-per-skill' : 'fresh-per-invocation');
+    const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy);
     // Prompt-semantic inputs are captured before the provider can mutate the
     // target or the referenced predecessor artifact.
     let inputFingerprint: string;
@@ -370,9 +371,14 @@ export async function runBinding(
     emit(makeRunEvent({ type: 'artifact.verified', atMs: Date.now(), path: relative(projectRoot, outputPath), result: contract.kind }));
 
     if (bindingKind === 'task') {
-      if (contract.kind === 'blocked') {
-        const message = `${bindingId} is blocked: ${contract.detail ?? 'the task reported BLOCKED'}`;
+      const contractKind = contract.kind as string;
+      if (contractKind === 'blocked' || contractKind === 'retry') {
+        const message = `${bindingId} ended with non-completed decision/outcome (${contractKind}): ${contract.detail ?? 'task output did not pass contract'}`;
         return finish({ kind: 'blocked', message, artifactPath: lastPath }, 'blocked', message);
+      }
+      if (contractKind === 'unknown') {
+        const message = `${bindingId} task artifact is invalid at ${relative(projectRoot, outputPath)}.`;
+        return finish({ kind: 'unknown', message, artifactPath: lastPath }, 'unknown', message);
       }
       return finish({ kind: 'completed', message: `${bindingId} completed successfully.`, artifactPath: lastPath }, 'accepted', `${bindingId} completed successfully.`);
     }
@@ -512,6 +518,7 @@ function buildMeta(params: {
   durationMs: number;
   sessionMode: 'fresh' | 'resumed' | 'none';
   sessionId: string;
+  sessionStrategy?: string;
   parentArtifactIdentity: string | null;
   artifactIdentity: string;
   inputFingerprint: string;
@@ -538,7 +545,7 @@ function buildMeta(params: {
     durationMs: params.durationMs,
     sessionMode: params.sessionMode,
     sessionId: params.sessionId,
-    sessionStrategy: params.sessionMode,
+    sessionStrategy: params.sessionStrategy ?? 'fresh-per-invocation',
     schemaVersion: 1,
     bindingKind: params.bindingKind,
     bindingId: params.bindingId,
@@ -598,23 +605,76 @@ function initialRequest(
   history: PersistedArtifact[],
   version: number,
   config: Config,
+  context: RunContext,
 ): StepRequest {
   if (bindingKind === 'task') {
     const task = binding as TaskBinding;
+    let priorArtifact = priorArtifactNone();
+    if (context.chainMode === 'stage-continuation' && context.parentArtifactIdentity) {
+      const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
+      const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
+      if (predStep) {
+        try {
+          priorArtifact = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
+        } catch {
+          priorArtifact = priorArtifactNone();
+        }
+      }
+    }
     return {
       phase: 'task',
       version,
       skillId: task.skill,
       skill: config.manifest.skills[task.skill]!,
       output: task.output,
+      priorArtifact,
+      parentArtifactIdentity: context.parentArtifactIdentity ?? null,
+    };
+  }
+
+  const loop = binding as LoopBinding;
+
+  if (context.chainMode === 'ad-hoc' || context.chainMode === 'pipeline-start' || context.chainMode === 'second-opinion') {
+    return {
+      phase: 'evaluate',
+      version,
+      skillId: loop.evaluate.skill,
+      skill: config.manifest.skills[loop.evaluate.skill]!,
+      output: loop.evaluate.output,
       priorArtifact: priorArtifactNone(),
       parentArtifactIdentity: null,
     };
   }
-  const loop = binding as LoopBinding;
-  const latestEvaluate = history.filter((item) => item.phase === 'evaluate' && item.classified && item.valid).at(-1);
-  const latestRepair = history.filter((item) => item.phase === 'repair' && item.classified && item.valid).at(-1);
+
+  if (context.chainMode === 'stage-continuation') {
+    let prior = priorArtifactNone();
+    if (context.parentArtifactIdentity) {
+      const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
+      const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
+      if (predStep) {
+        try {
+          prior = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
+        } catch {
+          prior = priorArtifactNone();
+        }
+      }
+    }
+    return {
+      phase: 'evaluate',
+      version,
+      skillId: loop.evaluate.skill,
+      skill: config.manifest.skills[loop.evaluate.skill]!,
+      output: loop.evaluate.output,
+      priorArtifact: prior,
+      parentArtifactIdentity: context.parentArtifactIdentity ?? null,
+    };
+  }
+
+  const chainHistory = history.filter((item) => item.meta.chainId === context.chainId);
+  const latestEvaluate = chainHistory.filter((item) => item.phase === 'evaluate' && item.classified && item.valid).at(-1);
+  const latestRepair = chainHistory.filter((item) => item.phase === 'repair' && item.classified && item.valid).at(-1);
   const pendingRepair = latestEvaluate?.decision === 'retry' && (!latestRepair || latestRepair.version !== latestEvaluate.version || !latestRepair.valid);
+
   if (pendingRepair && latestEvaluate) {
     return {
       phase: 'repair',
@@ -642,27 +702,13 @@ function initialRequest(
   };
 }
 
-function recoverBindingContext(history: PersistedArtifact[]): RunContext | null {
-  const latestEvaluate = history.filter(item => item.phase === 'evaluate' && item.classified && item.valid).at(-1);
-  const latestRepair = history.filter(item => item.phase === 'repair' && item.classified && item.valid).at(-1);
-  if (!latestEvaluate || latestEvaluate.decision !== 'retry') return null;
-  const source = latestRepair?.version === latestEvaluate.version ? latestRepair : latestEvaluate;
-  if (!source?.meta.chainId || !source.meta.chainMode) return null;
-  return {
-    pipelineId: source.meta.pipelineId ?? null,
-    pipelineRunId: source.meta.pipelineRunId ?? null,
-    stageId: source.meta.stageId ?? null,
-    chainId: source.meta.chainId,
-    chainMode: source.meta.chainMode,
-    parentArtifactIdentity: source.meta.artifactIdentity ?? null,
-  };
-}
-
 function resolveContinuity(
   predecessor: PersistedArtifact | undefined,
   runner: Runner,
   registry: AgentRegistry,
+  sessionStrategy: string = 'fresh-per-invocation',
 ): { mode: 'fresh' | 'resumed'; sessionId?: string } {
+  if (sessionStrategy === 'fresh-per-invocation') return { mode: 'fresh' };
   if (!predecessor) return { mode: 'fresh' };
   const sessionId = predecessor.meta.sessionId;
   if (!sessionId || sessionId === 'none') return { mode: 'fresh' };
@@ -709,47 +755,45 @@ function priorForPersisted(item: PersistedArtifact): PriorArtifactResolution {
   }
 }
 
-function discoverArtifacts(projectRoot: string, binding: Binding): PersistedArtifact[] {
-  const specs: Array<{ phase: PersistedArtifact['phase']; output: OutputSpec }> = bindingKindOutputs(binding);
-  const found: PersistedArtifact[] = [];
-  for (const spec of specs) {
-    const regex = patternRegex(spec.output.pattern);
-    for (const file of allFiles(projectRoot)) {
-      const match = relative(projectRoot, file).match(regex);
-      if (!match) continue;
-      const version = Number(match[1]);
-      try {
-        const body = readFileSync(file, 'utf8');
-        const classification = parseArtifactMetaClassified(body, { agent: match[2]!, version, kind: spec.phase });
-        const meta = classification.meta as ArtifactMeta;
-        const result = validateOutput(spec.output, body, file);
-        found.push({
-          path: file,
-          version,
-          phase: spec.phase,
-          mtime: statSync(file).mtimeMs,
-          meta,
-          decision: result.kind === 'accepted' || result.kind === 'retry' ? result.kind : undefined,
-          completion: result.kind === 'completed' || result.kind === 'blocked' ? result.kind : undefined,
-          classified: classification.status === 'classified',
-          valid: classification.status === 'classified' && result.kind !== 'unknown',
-        });
-      } catch {
-        // A malformed artifact is retained as an invalid candidate so the
-        // current run cannot mistake it for completion evidence.
-        found.push({
-          path: file,
-          version,
-          phase: spec.phase,
-          mtime: statSync(file).mtimeMs,
-          meta: parseArtifactMeta('', { agent: match[2]!, version, kind: spec.phase }),
-          classified: false,
-          valid: false,
-        });
-      }
-    }
-  }
-  return found.sort((a, b) => a.mtime - b.mtime || a.version - b.version);
+function discoverArtifacts(projectRoot: string, bindingId: string, config: Config): PersistedArtifact[] {
+  const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
+  const bindingSteps = snapshot.byBinding.get(bindingId) ?? [];
+  return bindingSteps.map(step => ({
+    path: step.artifactPath,
+    version: step.version,
+    phase: step.kind === 'repair' ? 'repair' : step.kind === 'task' ? 'task' : 'evaluate',
+    mtime: step.mtime,
+    meta: {
+      loop: step.bindingId ?? bindingId,
+      skill: step.role,
+      kind: step.kind,
+      role: step.role,
+      agent: step.agent,
+      model: step.model,
+      version: step.version,
+      target: '.',
+      priorAudit: 'none',
+      timestamp: new Date(step.mtime).toISOString(),
+      durationMs: step.durationMs,
+      sessionMode: step.sessionMode,
+      sessionId: step.sessionId,
+      pipelineId: step.pipelineId,
+      pipelineRunId: step.pipelineRunId,
+      stageId: step.stageId,
+      chainId: step.chainId,
+      chainMode: step.chainMode as any,
+      artifactIdentity: step.artifactIdentity,
+      inputFingerprint: step.inputFingerprint,
+      resultFingerprint: step.resultFingerprint,
+      parentArtifactIdentity: step.parentArtifactIdentity,
+      effort: step.effort,
+      provider: step.provider,
+    },
+    decision: step.decision as any,
+    completion: step.completionOutcome as any,
+    classified: !step.unclassified,
+    valid: step.contractValid !== false && !step.unclassified,
+  }));
 }
 
 function bindingKindOutputs(binding: Binding): Array<{ phase: PersistedArtifact['phase']; output: OutputSpec }> {
@@ -760,25 +804,6 @@ function bindingKindOutputs(binding: Binding): Array<{ phase: PersistedArtifact[
     ];
   }
   return [{ phase: 'task', output: binding.output }];
-}
-
-function patternRegex(pattern: string): RegExp {
-  return patternToRegex(pattern);
-}
-
-function allFiles(root: string): string[] {
-  const result: string[] = [];
-  const walk = (current: string): void => {
-    if (!existsSync(current)) return;
-    for (const entry of readdirSync(current)) {
-      if (entry === 'archived' || entry === '.git' || entry === '.orc-smash') continue;
-      const path = join(current, entry);
-      if (statSync(path).isDirectory()) walk(path);
-      else result.push(path);
-    }
-  };
-  walk(root);
-  return result;
 }
 
 function allocateVersion(

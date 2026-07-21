@@ -202,7 +202,15 @@ export async function executeLoopStep(
     deps.output.emit(makeRunEvent({ type: 'provider.started', atMs: Date.now(), agent: runner.agent }));
     const adapter = getAdapter(deps.registry, runner.agent);
     debugLoopSpawn({ loopName: deps.loopName, skillId, kind, agent: runner.agent, model: runner.model, version, cwd: deps.projectRoot, prompt });
-    setStepCtx({ loop: deps.loopName, kind, version, agent: runner.agent, model: runner.model, skillId });
+    setStepCtx({
+      loop: deps.loopName,
+      kind,
+      version,
+      agent: runner.agent,
+      model: runner.model,
+      skillId,
+      effort: runner.effort,
+    });
     
     // Pre-spawn check
     if (deps.ownership) {

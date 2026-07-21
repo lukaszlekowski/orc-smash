@@ -61,7 +61,7 @@ describe('Adapter arguments builders', () => {
       '--dangerously-skip-permissions',
       '--format',
       'json',
-      '-c',
+      '-s',
       'ses_abc123',
       'My test prompt'
     ]);
