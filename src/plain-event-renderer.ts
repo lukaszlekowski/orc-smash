@@ -11,7 +11,8 @@ function level(event: RunEvent): string {
     case 'config.failed':
     case 'runner.rejected':
     case 'artifact.missing':
-    case 'verdict.unknown':
+    case 'artifact.unknown':
+    case 'decision.unknown':
     case 'provider.failed':
     case 'ownership.lost':
     case 'run.failed':
@@ -21,7 +22,6 @@ function level(event: RunEvent): string {
     case 'warning':
       return 'WARN';
     case 'artifact.verified':
-    case 'implementation.ledger-validated':
     case 'run.completed':
       return 'PASS';
     default:
@@ -47,8 +47,8 @@ function fmtEvent(event: RunEvent): string {
       return `${ts} ${lvl} config.loaded path=${quote(event.path)}`;
     case 'config.failed':
       return `${ts} ${lvl} config.failed message=${quote(event.message)}`;
-    case 'loop.selected':
-      return `${ts} ${lvl} loop.selected loop=${quote(event.loopName)}`;
+    case 'binding.selected':
+      return `${ts} ${lvl} binding.selected binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
     case 'runner.resolved': {
       let line = `${ts} ${lvl} runner.resolved skillId=${quote(event.skillId)} agent=${quote(event.agent)} model=${quote(event.model)} agentSource=${event.agentSource} modelSource=${event.modelSource}`;
       if (event.inheritedSession) {
@@ -59,7 +59,7 @@ function fmtEvent(event: RunEvent): string {
     case 'runner.rejected':
       return `${ts} ${lvl} runner.rejected skillId=${quote(event.skillId)} message=${quote(event.message)}`;
     case 'state.scanned':
-      return `${ts} ${lvl} state.scanned latestVerdict=${event.latestVerdict} version=${event.version}`;
+      return `${ts} ${lvl} state.scanned latestResult=${event.latestResult} version=${event.version}`;
     case 'iteration.started':
       return `${ts} ${lvl} iteration.started iteration=${event.iteration} maxIterations=${event.maxIterations}`;
     case 'step.started':
@@ -73,21 +73,27 @@ function fmtEvent(event: RunEvent): string {
     case 'provider.failed':
       return `${ts} ${lvl} provider.failed agent=${quote(event.agent)}${event.errorKind ? ` errorKind=${event.errorKind}` : ''} toolCalls=${event.toolCalls} progressEmitted=${event.progressEmitted} progressSuppressed=${event.progressSuppressed}`;
     case 'artifact.verified':
-      return `${ts} ${lvl} artifact.verified path=${quote(event.path)}${event.verdict ? ` verdict=${event.verdict}` : ''}`;
+      return `${ts} ${lvl} artifact.verified path=${quote(event.path)}${event.result ? ` result=${event.result}` : ''}`;
     case 'artifact.missing':
       return `${ts} ${lvl} artifact.missing path=${quote(event.path)} reason=${quote(event.reason)}`;
-    case 'verdict.parsed':
-      return `${ts} ${lvl} verdict.parsed verdict=${event.verdict}`;
-    case 'verdict.unknown':
-      return `${ts} ${lvl} verdict.unknown path=${quote(event.path)}`;
-    case 'follow-up.outcome':
-      return `${ts} ${lvl} follow-up.outcome outcome=${event.outcome}`;
+    case 'artifact.unknown':
+      return `${ts} ${lvl} artifact.unknown path=${quote(event.path)} reason=${quote(event.reason)}`;
+    case 'input.missing':
+      return `${ts} ${lvl} input.missing items=${event.missing.join(', ')}`;
+    case 'decision.parsed':
+      return `${ts} ${lvl} decision.parsed decision=${event.decision}`;
+    case 'decision.unknown':
+      return `${ts} ${lvl} decision.unknown path=${quote(event.path)}${event.reason ? ` reason=${quote(event.reason)}` : ''}`;
+    case 'completion.parsed':
+      return `${ts} ${lvl} completion.parsed outcome=${event.outcome}`;
+    case 'stage.completed':
+      return `${ts} ${lvl} stage.completed binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
+    case 'stage.blocked':
+      return `${ts} ${lvl} stage.blocked binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
+    case 'stage.incomplete':
+      return `${ts} ${lvl} stage.incomplete binding=${quote(`${event.bindingKind}/${event.bindingId}`)} reason=${quote(event.reason)}`;
     case 'stage.action':
       return `${ts} ${lvl} stage.action action=${event.action} phase=${event.phase}`;
-    case 'implementation.ledger-validated':
-      return `${ts} ${lvl} implementation.ledger-validated isComplete=${event.isComplete}`;
-    case 'plan.closeout':
-      return `${ts} ${lvl} plan.closeout status=${event.status}`;
     case 'ownership.opened':
       return `${ts} ${lvl} ownership.opened projectRoot=${quote(event.projectRoot)}`;
     case 'ownership.finalized':
@@ -97,7 +103,7 @@ function fmtEvent(event: RunEvent): string {
     case 'run.interrupted':
       return `${ts} ${lvl} run.interrupted${event.reason ? ` reason=${quote(event.reason)}` : ''}`;
     case 'run.completed':
-      return `${ts} ${lvl} run.completed verdict=${event.verdict} outcome=${quote(event.outcome)}`;
+      return `${ts} ${lvl} run.completed result=${event.result} outcome=${quote(event.outcome)}`;
     case 'run.failed':
       return `${ts} ${lvl} run.failed reason=${quote(event.reason)}${event.errorKind ? ` errorKind=${event.errorKind}` : ''}`;
     case 'note':

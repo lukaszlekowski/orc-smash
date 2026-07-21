@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { latestAuditVersion, buildPanelContext } from '../src/status.js';
+import { latestVersion, buildPanelContext } from '../src/status.js';
 import type { Step } from '../src/state.js';
 
 function makeStep(overrides: Partial<Step>): Step {
   return {
-    kind: 'audit',
+    kind: 'evaluate',
     role: 'auditor',
     agent: 'fake',
     model: 'fake-model',
@@ -16,43 +16,43 @@ function makeStep(overrides: Partial<Step>): Step {
   };
 }
 
-describe('latestAuditVersion (shared helper)', () => {
+describe('latestVersion (shared helper)', () => {
   it('returns 0 for an empty steps array', () => {
-    expect(latestAuditVersion([])).toBe(0);
+    expect(latestVersion([])).toBe(0);
   });
 
   it('returns the max audit version for a mixed steps array', () => {
     const steps: Step[] = [
-      makeStep({ kind: 'audit', version: 1 }),
-      makeStep({ kind: 'follow-up', version: 1 }),
-      makeStep({ kind: 'audit', version: 2 }),
-      makeStep({ kind: 'implement', version: 2 })
+      makeStep({ kind: 'evaluate', version: 1 }),
+      makeStep({ kind: 'repair', version: 1 }),
+      makeStep({ kind: 'evaluate', version: 2 }),
+      makeStep({ kind: 'task', version: 2 })
     ];
-    expect(latestAuditVersion(steps)).toBe(2);
+    expect(latestVersion(steps)).toBe(2);
   });
 
   it('matches the audit-only max for an audit-only timeline', () => {
     const steps: Step[] = [
-      makeStep({ kind: 'audit', version: 3 }),
-      makeStep({ kind: 'audit', version: 5 }),
-      makeStep({ kind: 'audit', version: 2 })
+      makeStep({ kind: 'evaluate', version: 3 }),
+      makeStep({ kind: 'evaluate', version: 5 }),
+      makeStep({ kind: 'evaluate', version: 2 })
     ];
-    expect(latestAuditVersion(steps)).toBe(5);
+    expect(latestVersion(steps)).toBe(5);
   });
 
-  it('ignores follow-up and implement versions (only audit counts)', () => {
+  it('uses the highest artifact version across configured step kinds', () => {
     const steps: Step[] = [
-      makeStep({ kind: 'follow-up', version: 99 }),
-      makeStep({ kind: 'implement', version: 99 })
+      makeStep({ kind: 'repair', version: 99 }),
+      makeStep({ kind: 'task', version: 99 })
     ];
-    expect(latestAuditVersion(steps)).toBe(0);
+    expect(latestVersion(steps)).toBe(99);
   });
 });
 
 describe('buildPanelContext (data model extension)', () => {
   it('builds a context with the documented field shape (inFlight/latestVersion/readOnly)', () => {
     const inFlight = {
-      kind: 'audit' as const,
+      kind: 'evaluate' as const,
       role: 'auditor',
       skillId: 'plan-audit',
       agent: 'opencode',

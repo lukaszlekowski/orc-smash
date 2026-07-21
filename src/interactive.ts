@@ -1,6 +1,6 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
-import { isValidModelForAgent, resolveRunner } from './runner.js';
+import { isValidEffortForAgent, isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { StageAction } from './stage-menu.js';
 
@@ -19,12 +19,10 @@ export async function promptLoopSelect(loops: string[], defaultLoop: string): Pr
  * namespace-style ids like gpt-5.5 / opencode/... / claude-...
  */
 function invalidModelMessage(agent: string, val: string, registry: Config['registry']): string {
-  if (agent === 'opencode') {
-    return `model '${val}' must be an opencode id in provider/model form (e.g. opencode-go/deepseek-v4-flash)`;
-  }
-  if (agent === 'agy') {
-    const example = registry.providers.agy?.models[0] ?? 'Gemini 3.5 Flash (Medium)';
-    return `model '${val}' is not a configured agy model; agy accepts only the exact names listed in providers.agy (e.g. ${example})`;
+  const catalogue = registry.providers[agent];
+  if (catalogue) {
+    const example = catalogue.models[0] ?? 'default';
+    return `model '${val}' is not a valid model for agent '${agent}' (e.g. ${example})`;
   }
   return `model '${val}' is not a valid model for agent '${agent}'`;
 }
@@ -74,11 +72,11 @@ export async function promptRunners(
   skills: string[],
   config: Config,
   agentRegistry: AgentRegistry,
-  globalOverrides: { agent?: string; model?: string } = {},
+  globalOverrides: { agent?: string; model?: string; effort?: string } = {},
   opts?: { forceSelect?: boolean }
-): Promise<Record<string, { agent: string; model: string }>> {
-  const runners: Record<string, { agent: string; model: string }> = {};
-  const defaultRunners = new Map<string, { agent: string; model: string }>();
+): Promise<Record<string, { agent: string; model: string; effort?: string }>> {
+  const runners: Record<string, { agent: string; model: string; effort?: string }> = {};
+  const defaultRunners = new Map<string, { agent: string; model: string; effort?: string }>();
 
   for (const skillId of skills) {
     if (config.manifest.skills[skillId]) {
@@ -115,7 +113,11 @@ export async function promptRunners(
     let defaultModel = resolved.model;
 
     if (!customize) {
-      runners[skillId] = { agent: defaultAgent, model: defaultModel };
+      runners[skillId] = {
+        agent: defaultAgent,
+        model: defaultModel,
+        ...(resolved.effort ? { effort: resolved.effort } : {}),
+      };
       continue;
     }
 
@@ -167,7 +169,30 @@ export async function promptRunners(
       })).trim();
     }
 
-    runners[skillId] = { agent, model: selectedModel };
+    const adapter = agentRegistry.adapters.get(agent);
+    const effortLevels = config.registry.providers[agent]?.efforts ?? [];
+    let selectedEffort: string | undefined;
+    if (adapter?.capabilities.effort && effortLevels.length > 0) {
+      const configuredDefault = agent === defaultAgent
+        ? resolved.effort
+        : config.registry.providers[agent]?.defaultEffort;
+      const effortDefault = configuredDefault && isValidEffortForAgent(agent, configuredDefault, config.registry)
+        ? configuredDefault
+        : effortLevels[0]!;
+      selectedEffort = await select({
+        message: `Select effort for agent '${agent}' (skill '${skillId}'):` ,
+        choices: effortLevels.map(level => ({ name: level, value: level })),
+        default: effortDefault,
+      });
+    } else if (adapter && !adapter.capabilities.effort) {
+      console.log(`  ${skillId}: effort selection unavailable for ${agent} (provider capability disabled)`);
+    }
+
+    runners[skillId] = {
+      agent,
+      model: selectedModel,
+      ...(selectedEffort ? { effort: selectedEffort } : {}),
+    };
   }
 
   return runners;

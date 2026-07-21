@@ -4,94 +4,86 @@ import { DEFAULT_REGISTRY } from '../src/config.js';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const toolRoot = resolve(__dirname, '..');
+const toolRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const manifestPath = resolve(toolRoot, 'config/orc-smash.yaml');
 
-describe('Manifest validation', () => {
-  it('successfully loads and validates the standard skills.yaml', () => {
-    const yamlPath = resolve(toolRoot, 'skills.yaml');
-    const manifest = loadManifest(yamlPath, DEFAULT_REGISTRY);
-    expect(manifest.roles).toBeDefined();
-    expect(manifest.skills).toBeDefined();
-    expect(manifest.loops).toBeDefined();
-
-    // Verify loops
-    expect(manifest.loops['plan']).toBeDefined();
-    expect(manifest.loops['implement']).toBeDefined();
-
-    // Verify properties
-    expect(manifest.loops['plan']?.audit).toBe('plan-audit');
-    expect(manifest.loops['plan']?.['follow-up']).toBe('plan-follow-up');
-    expect(manifest.loops['plan']?.followUpPattern).toBe('docs/dev/plan-followup-v{n}-{agent}.md');
+describe('v1 manifest contract', () => {
+  it('loads loops, tasks, and the linear pipeline from the packaged manifest', () => {
+    const manifest = loadManifest(manifestPath, DEFAULT_REGISTRY);
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.loops.plan).toBeDefined();
+    expect(manifest.loops.review).toBeDefined();
+    expect(manifest.tasks?.implement).toBeDefined();
+    expect(manifest.loops.implement).toBeUndefined();
+    expect(manifest.pipelines.default?.stages.map(stage => stage.stageId)).toEqual(['plan', 'implement', 'review']);
+    expect(manifest.pipelines.default?.stages[1]).toEqual({ stageId: 'implement', task: 'implement' });
   });
 
-  it('rejects a loop pattern that omits {n} or {agent}', () => {
-    const invalidManifest = {
+  it('rejects unsupported schema versions and malformed output patterns', () => {
+    const schema = buildManifestSchema(DEFAULT_REGISTRY);
+    expect(() => schema.parse({
+      schemaVersion: 2,
+      roles: {},
+      skills: {},
+      loops: {},
+    })).toThrow();
+    expect(() => schema.parse({
+      schemaVersion: 1,
       roles: { auditor: 'roles/auditor.md' },
       skills: {
-        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit' },
-        'plan-follow-up': { file: 'skills/SKILL.md', role: 'auditor', kind: 'follow-up', runnerProfile: 'follow-up' }
+        audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' },
       },
       loops: {
-        plan: {
-          kind: 'doc-audit',
-          target: 'docs/dev/plan.md',
-          targetKind: 'file',
-          audit: 'plan-audit',
-          'follow-up': 'plan-follow-up',
-          auditPattern: 'invalid-pattern-without-vars.md',
-          followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-          inputs: []
-        }
-      }
-    };
-    const parsed = buildManifestSchema(DEFAULT_REGISTRY).safeParse(invalidManifest);
-    expect(parsed.success).toBe(false);
-  });
-
-  it('requires runnerProfile and rejects embedded provider/model policy', () => {
-    const parsed = buildManifestSchema(DEFAULT_REGISTRY).safeParse({
-      roles: { auditor: 'roles/auditor.md' },
-      skills: {
-        audit: { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' }
-      },
-      loops: {}
-    });
-    expect(parsed.success).toBe(false);
-  });
-
-  it('allows a manifest that defines plan and implement without a review loop (manifest remains generic)', () => {
-    const validManifest = {
-      roles: { auditor: 'roles/auditor.md', planner: 'roles/planner.md', implementer: 'roles/implementer.md' },
-      skills: {
-        'plan-audit': { file: 'skills/SKILL.md', role: 'auditor', kind: 'audit', runnerProfile: 'audit' },
-        'plan-follow-up': { file: 'skills/SKILL.md', role: 'planner', kind: 'follow-up', runnerProfile: 'follow-up' },
-        '30-simple-implement': { file: 'skills/SKILL.md', role: 'implementer', kind: 'implement', runnerProfile: 'implement' }
-      },
-      loops: {
-        plan: {
-          kind: 'doc-audit',
-          target: 'docs/dev/plan.md',
-          targetKind: 'file',
-          audit: 'plan-audit',
-          'follow-up': 'plan-follow-up',
-          auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-          followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md',
-          inputs: []
+        check: {
+          type: 'approval-loop',
+          target: { path: '.', kind: 'worktree' },
+          inputs: [],
+          evaluate: {
+            skill: 'audit',
+            output: {
+              pattern: 'docs/out.md',
+              contract: 'decision-artifact',
+              decision: { heading: 'Decision', accepted: 'PASS', retry: 'FAIL' },
+            },
+          },
+          repair: {
+            skill: 'audit',
+            output: { pattern: 'docs/out-v{version}-{provider}.md', contract: 'completion-artifact' },
+          },
         },
-        implement: {
-          kind: 'implement',
-          target: '.',
-          targetKind: 'worktree',
-          planPath: 'docs/dev/plan.md',
-          implement: '30-simple-implement',
-          implementPattern: 'docs/dev/impl-v{n}-{agent}.md',
-          inputs: []
-        }
-      }
+      },
+    })).toThrow(/version|provider/i);
+  });
+
+  it('rejects duplicate stage ids and accepts reusable bindings across pipelines', () => {
+    const parsed = {
+      schemaVersion: 1 as const,
+      roles: { auditor: 'roles/auditor.md' },
+      skills: { audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' } },
+      loops: {
+        check: {
+          type: 'approval-loop' as const,
+          target: { path: '.', kind: 'worktree' as const },
+          inputs: [],
+          evaluate: {
+            skill: 'audit',
+            output: {
+              pattern: 'docs/eval-v{version}-{provider}.md',
+              contract: 'decision-artifact' as const,
+              decision: { heading: 'Decision', accepted: 'PASS', retry: 'FAIL' },
+            },
+          },
+          repair: {
+            skill: 'audit',
+            output: { pattern: 'docs/repair-v{version}-{provider}.md', contract: 'completion-artifact' as const },
+          },
+        },
+      },
+      pipelines: {
+        one: { stages: [{ stageId: 'a', loop: 'check' }, { stageId: 'a', loop: 'check' }] },
+        two: { stages: [{ stageId: 'a', loop: 'check' }] },
+      },
     };
-    const parsed = buildManifestSchema(DEFAULT_REGISTRY).safeParse(validManifest);
-    expect(parsed.success).toBe(true);
+    expect(() => buildManifestSchema(DEFAULT_REGISTRY).parse(parsed)).toThrow(/Duplicate stageId/);
   });
 });

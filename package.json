@@ -1,14 +1,14 @@
 {
   "name": "orc-smash",
   "version": "1.0.0",
-  "description": "A thin TypeScript CLI harness that drives coding-agent CLIs through skill-based audit ↔ follow-up loops",
+  "description": "A thin TypeScript CLI harness that drives coding-agent CLIs through config-driven approval loops, tasks, and pipelines",
   "main": "dist/src/cli.js",
   "type": "module",
   "bin": {
     "orc": "./bin/orc.js"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/src/adapters && cp -R config roles skills skills.yaml package.json dist/ && cp src/adapters/process-group-bootstrap.mjs dist/src/adapters/process-group-bootstrap.mjs",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/src/adapters && cp -R config roles skills package.json dist/ && cp src/adapters/process-group-bootstrap.mjs dist/src/adapters/process-group-bootstrap.mjs",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

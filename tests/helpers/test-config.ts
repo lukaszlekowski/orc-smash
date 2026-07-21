@@ -1,7 +1,8 @@
 import { DEFAULT_REGISTRY, type Config, type ModelRegistry } from '../../src/config.js';
 import { loadManifest } from '../../src/manifest.js';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export interface CreateTestConfigOptions {
   projectRoot?: string;
@@ -13,8 +14,7 @@ export interface CreateTestConfigOptions {
 
 export function createTestConfig(options: CreateTestConfigOptions = {}): Config {
   const registry: ModelRegistry = structuredClone(DEFAULT_REGISTRY);
-  
-  // Inject fake provider
+
   const fakeModels = options.fakeModels ?? ['fake-model'];
   registry.providers['fake'] = {
     models: fakeModels,
@@ -24,7 +24,6 @@ export function createTestConfig(options: CreateTestConfigOptions = {}): Config 
   if (options.profiles) {
     registry.profiles = { ...registry.profiles, ...options.profiles };
   } else {
-    // If not specified, map all profiles to fake provider for testing
     for (const profileName of Object.keys(registry.profiles)) {
       registry.profiles[profileName] = { provider: 'fake' };
     }
@@ -39,16 +38,26 @@ export function createTestConfig(options: CreateTestConfigOptions = {}): Config 
   }
 
   const projectRoot = options.projectRoot ?? process.cwd();
-  let manifestPath = resolve(projectRoot, 'skills.yaml');
+  let manifestPath = resolve(projectRoot, 'config', 'orc-smash.yaml');
   if (!existsSync(manifestPath)) {
-    // Check if in project root or tool root
-    manifestPath = resolve(process.cwd(), 'skills.yaml');
+    manifestPath = resolve(projectRoot, '.orc-smash.yaml');
+  }
+  if (!existsSync(manifestPath)) {
+    manifestPath = resolve(process.cwd(), 'config', 'orc-smash.yaml');
   }
 
+  let manifestRoot = dirname(manifestPath);
+  const TOOL_ROOT = resolve(import.meta.dirname ?? dirname(fileURLToPath(import.meta.url)), '..', '..');
+  if (manifestPath === resolve(TOOL_ROOT, 'config', 'orc-smash.yaml')) {
+    manifestRoot = TOOL_ROOT;
+  }
   const manifest = loadManifest(manifestPath, registry);
 
   return {
+    projectRoot,
+    manifestPath,
+    manifestRoot,
     registry,
-    manifest
+    manifest,
   };
 }

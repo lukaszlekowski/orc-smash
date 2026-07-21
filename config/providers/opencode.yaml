@@ -1,4 +1,6 @@
 defaultModel: opencode-go/deepseek-v4-flash
+efforts: [low, medium, high, xhigh]
+defaultEffort: medium
 models:
   - opencode-go/deepseek-v4-flash
   - opencode-go/deepseek-v4-pro

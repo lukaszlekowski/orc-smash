@@ -1,15 +1,16 @@
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
-import { scan, scanForStatus, scanAllForStatus } from '../state.js';
+import { scanAllForStatus } from '../state.js';
 import { resolveNextStep } from '../next-step.js';
 import { assembleNextStepMessage, assembleInterruptedMessage, buildPanelContext } from '../status.js';
-import { readInterruptedMarker, setActiveProjectRoot } from '../interrupted-artifact.js';
+import { setActiveProjectRoot } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
 import type { CommandResult } from './types.js';
 import { resolveDefaultLoop } from '../loop-selector.js';
 
 export interface StatusOptions {
   project?: string;
+  config?: string;
   output: CliOutput;
   all?: boolean;
 }
@@ -24,15 +25,13 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
   const projectRoot = resolve(options.project);
   let config: Config;
   try {
-    config = loadConfig(projectRoot);
+    config = loadConfig(projectRoot, options.config);
   } catch (err: any) {
     const msg = `Error: failed to load config or manifest: ${err.message}`;
     options.output.error(msg);
     return { exitCode: 1, message: msg };
   }
 
-  // §3: register the active project root (read-only command; no subprocess is
-  // spawned, so this is defensive — cleared on completion below).
   setActiveProjectRoot(projectRoot);
   try {
     return await renderStatus(projectRoot, config, options);
@@ -43,53 +42,51 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
 
 async function renderStatus(projectRoot: string, config: Config, options: StatusOptions): Promise<CommandResult> {
   const loopKeys = Object.keys(config.manifest.loops);
-  if (loopKeys.length === 0) {
-    const msg = 'Error: no loops defined in manifest.';
+  const taskKeys = Object.keys(config.manifest.tasks ?? {});
+  if (loopKeys.length === 0 && taskKeys.length === 0) {
+    const msg = 'Error: no loops or tasks defined in manifest.';
     options.output.error(msg);
     return { exitCode: 1, message: msg };
   }
 
-  // --- Loop selection: marker-first precedence, then progression/heuristic.
-  const { loopName: detectedLoop, implementFacts } = resolveDefaultLoop(projectRoot, config.manifest);
-  const loopSpec = config.manifest.loops[detectedLoop]!;
-  const marker = readInterruptedMarker(projectRoot);
+  const { loopName: detectedLoop } = loopKeys.length > 0
+    ? resolveDefaultLoop(projectRoot, config.manifest)
+    : { loopName: '' };
+  const loopSpec = config.manifest.loops[detectedLoop];
 
-  // Display-only timeline: merges the interrupted marker with artifact facts.
-  const statusScan = options.all
-    ? scanAllForStatus(projectRoot, config.manifest)
-    : scanForStatus(projectRoot, detectedLoop, loopSpec, config.manifest);
+  const globalStatusScan = scanAllForStatus(projectRoot, config.manifest);
+  const statusScan = options.all || !detectedLoop
+    ? globalStatusScan
+    : {
+      ...globalStatusScan,
+      timeline: globalStatusScan.timeline.filter(step => step.bindingId === detectedLoop),
+    };
 
   let nextStepMessage: string;
   if (statusScan.interruptedStep) {
-    const loopOfInterrupt = marker ? marker.loop : detectedLoop;
-    nextStepMessage = assembleInterruptedMessage(loopOfInterrupt, statusScan.interruptedStep.version);
+    nextStepMessage = assembleInterruptedMessage(detectedLoop, statusScan.interruptedStep.version);
   } else {
-    if (loopSpec.kind === 'implement') {
-      const nextVersion = implementFacts?.nextVersion ?? 1;
-      nextStepMessage = assembleNextStepMessage(
-        { state: 'implement', nextVersion },
-        0,
-        loopSpec,
-        config.manifest
-      );
-    } else {
-      const stateScan = scan(projectRoot, {
-        auditPattern: loopSpec.auditPattern ?? '',
-        followUpPattern: loopSpec.followUpPattern ?? ''
-      });
+    if (loopSpec && loopSpec.type === 'approval-loop') {
+      const loopSteps = statusScan.timeline.filter(step => step.bindingId === detectedLoop);
+      const evaluations = loopSteps.filter(step => step.kind === 'evaluate');
+      const latest = evaluations.at(-1);
       const decision = resolveNextStep({
-        latestVerdict: stateScan.latestVerdict,
-        latestVersion: stateScan.latestVersion,
-        hasAudits: stateScan.auditSteps.length > 0,
-        latestAuditPath: stateScan.auditSteps[stateScan.auditSteps.length - 1]?.artifactPath ?? null
+        latestDecision: latest?.decision ?? (latest?.unclassified ? 'unknown' : null),
+        latestVersion: latest?.version ?? 0,
+        hasEvaluations: evaluations.length > 0,
+        latestArtifactPath: latest?.artifactPath ?? null,
       });
-      nextStepMessage = assembleNextStepMessage(decision, stateScan.latestVersion, loopSpec, config.manifest);
+      nextStepMessage = assembleNextStepMessage(decision, latest?.version ?? 0, loopSpec, config.manifest);
+    } else {
+      nextStepMessage = detectedLoop
+        ? 'No active approval loop detected.'
+        : 'No approval loop selected; task artifacts are shown in the global snapshot.';
     }
   }
 
   const panelCtx = buildPanelContext(
     projectRoot,
-    options.all ? 'all' : detectedLoop,
+    options.all || !detectedLoop ? 'all' : detectedLoop,
     0,
     5,
     null,
@@ -97,7 +94,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
     nextStepMessage,
     null,
     statusScan.latestVersion,
-    true
+    true,
   );
 
   options.output.renderPanel(panelCtx);

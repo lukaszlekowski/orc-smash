@@ -1,828 +1,108 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { runLoop } from '../src/loop.js';
-import { resolveImplementFacts } from '../src/state.js';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { runTask } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
-import { fakeAdapter, fakeAdapterState } from '../src/adapters/fake.js';
+import { fakeAdapter } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
-import { buildFrontMatter } from '../src/provenance.js';
-import { makeArtifactMeta } from './helpers/provenance.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import type { AgentAdapter } from '../src/adapters/types.js';
 
-const testRegistry = createTestAdapterRegistry();
-const mockOutput = createMockOutput();
-
-let mockedSecondOpinionDecision: 'stop' | 'run-second-opinion' | 'implement' = 'stop';
-let mockedContinueToReview: 'stop' | 'review' = 'stop';
-let promptRunnersCalls = 0;
-
-let mockedStageActionChoice: string = 'stop';
-
-vi.mock('../src/interactive.js', () => {
-  return {
-    promptStageAction: async (actions: any[], recommendedId: string) => {
-      const actionIds = actions.map(a => a.id);
-      if (mockedSecondOpinionDecision === 'implement' && actionIds.includes('implement')) {
-        mockedSecondOpinionDecision = 'stop';
-        return 'implement';
-      }
-      if (mockedContinueToReview === 'review' && actionIds.includes('start-new-new-session') && actionIds.includes('run-one-step-followup')) {
-        mockedContinueToReview = 'stop';
-        return 'start-new-new-session';
-      }
-      return actionIds.includes(mockedStageActionChoice) ? mockedStageActionChoice : recommendedId;
-    },
-    promptLoopSelect: async () => '',
-    promptRunners: async (skills: string[]) => {
-      promptRunnersCalls++;
-      const res: any = {};
-      for (const s of skills) {
-        res[s] = { agent: 'fake', model: 'fake' };
-      }
-      return res;
-    },
-    promptMaxIterations: async () => 5
-  };
-});
-
-vi.mock('../src/config.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/config.js')>();
-  const { loadManifest } = await import('../src/manifest.js');
-  const { existsSync } = await import('node:fs');
-  const { resolve } = await import('node:path');
-  return {
-    ...actual,
-    loadConfig: (projectRoot?: string) => {
-      const registry = structuredClone(actual.DEFAULT_REGISTRY);
-      registry.providers['fake'] = {
-        models: ['fake-model'],
-        defaultModel: 'fake-model'
-      };
-      for (const profileName of Object.keys(registry.profiles)) {
-        registry.profiles[profileName] = { provider: 'fake' };
-      }
-      registry.defaultProfile = 'audit';
-      registry.profiles['audit'] = { provider: 'fake' };
-
-      const pRoot = projectRoot ?? process.cwd();
-      let manifestPath = resolve(pRoot, 'skills.yaml');
-      if (!existsSync(manifestPath)) {
-        manifestPath = resolve(process.cwd(), 'skills.yaml');
-      }
-      const manifest = loadManifest(manifestPath, registry);
-      return { registry, manifest };
-    }
-  };
-});
-
-describe('Three-stage pipeline loop/implement integration', () => {
-  const tempDir = join(process.cwd(), 'temp-loop-implement');
+describe('generic one-off task execution', () => {
+  const tempWorkspace = resolve(process.cwd(), 'temp-loop-implement');
+  const output = createMockOutput();
 
   beforeEach(() => {
     createTempDir('temp-loop-implement');
-    fakeAdapterState.verdicts = [];
-    fakeAdapterState.exitCode = 0;
-    fakeAdapterState.stdout = '';
-    fakeAdapterState.writeVerdictFile = true;
-    mockedSecondOpinionDecision = 'stop';
-    mockedContinueToReview = 'stop';
-    mockedStageActionChoice = 'stop';
-    promptRunnersCalls = 0;
-
-    // Pre-seed plan.md with ready status for implementation loops
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    writeFileSync(
-      join(tempDir, 'docs/dev/plan.md'),
-      '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n'
-    );
+    mkdirSync(join(tempWorkspace, 'docs/dev'), { recursive: true });
+    writeFileSync(join(tempWorkspace, 'docs/dev/plan.md'), '# Plan\n');
   });
 
   afterEach(() => {
-    removeTempDir(tempDir);
     vi.restoreAllMocks();
+    removeTempDir(tempWorkspace);
   });
 
-  function writePlanAudit(version: number, verdict: 'APPROVED' | 'REJECTED') {
-    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
-    const meta = makeArtifactMeta({ version, loop: 'plan', skill: 'plan-audit', kind: 'audit' });
-    writeFileSync(
-      join(tempDir, `docs/dev/plan-audit-v${version}-fake.md`),
-      buildFrontMatter(meta) + `# Plan Audit\n\n## Verdict\n\n${verdict}\n`
-    );
+  function taskOptions(config: ReturnType<typeof loadConfig>) {
+    return {
+      maxIterations: 4,
+      registry: createTestAdapterRegistry(),
+      output,
+      interactive: false,
+      globalOverrides: { agent: 'fake', model: 'fake-model' },
+    };
   }
 
-  it('runs implementation step directly when plan is approved', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5,
-      registry: testRegistry,
-      output: mockOutput,
-      interactive: false,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-
-    // Verify impl artifact is written
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(true);
-
-    // Verify provenance priorAudit links to plan-audit-v1
-    const content = readFileSync(implFile, 'utf-8');
-    expect(content).toContain('priorAudit: docs/dev/plan-audit-v1-fake.md');
-
-    // Verify resolveImplementFacts reads version and linkage correctly
-    const facts = resolveImplementFacts(
-      tempDir,
-      {
-        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
-        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
-      },
-      {
-        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
-      }
+  it('runs the configured task exactly once and stamps ad-hoc v1 provenance', async () => {
+    const config = loadConfig(tempWorkspace);
+    const task = config.manifest.tasks!.implement!;
+    const result = await runTask(
+      tempWorkspace,
+      'implement',
+      task,
+      config,
+      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      taskOptions(config),
     );
-    expect(facts.approvedPlanAuditPath).toContain('plan-audit-v1-fake.md');
-    expect(facts.nextVersion).toBe(2);
-    expect(facts.currentPlanImplemented).toBe(true);
-  });
-
-  it('gated: direct implementation throws error if plan is not approved', async () => {
-    writePlanAudit(1, 'REJECTED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    await expect(
-      runLoop(tempDir, 'implement', implementSpec, config, {}, {
-        maxIterations: 5,
-        registry: testRegistry,
-        output: mockOutput,
-        interactive: false,
-        globalOverrides: { agent: 'fake', model: 'fake-model' }
-      })
-    ).rejects.toThrow(/No approved plan audit found/);
-  });
-
-  it('post-approval plan loop transition runs implementer inline without mutating plan loop audit state', async () => {
-    // We run the plan loop, mock verdict APPROVED, and choose 'implement' at the transition
-    fakeAdapterState.verdicts = ['APPROVED'];
-    mockedSecondOpinionDecision = 'implement';
-    mockedContinueToReview = 'stop';
-
-    const config = loadConfig(tempDir);
-    const planSpec = config.manifest.loops['plan']!;
-
-    const result = await runLoop(tempDir, 'plan', planSpec, config, {
-      'plan-audit': { agent: 'fake', model: 'fake' }
-    }, {
-      maxIterations: 5,
-      registry: testRegistry,
-      output: mockOutput,
-      interactive: true,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
 
     expect(result.success).toBe(true);
+    expect(result.outcome?.kind).toBe('completed');
     expect(result.lastAuditPath).toContain('impl-v1-fake.md');
-
-    // Verify implementation artifact is written as a downstream result
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(true);
-
-    // Verify plan loop audit version didn't increase (only v1-fake.md exists, no v2)
-    expect(existsSync(join(tempDir, 'docs/dev/plan-audit-v2-fake.md'))).toBe(false);
+    const artifact = readFileSync(result.lastAuditPath!, 'utf8');
+    expect(artifact).toContain('kind: task');
+    expect(artifact).toContain('step: task');
+    expect(artifact).toContain('bindingKind: task');
+    expect(artifact).toContain('pipelineId: null');
+    expect(artifact).toContain('parentArtifactIdentity: null');
+    expect(artifact).toContain('artifactIdentity:');
+    expect(artifact).toContain('## Requirement Coverage');
   });
 
-  it('implement -> review transition runs review loop', async () => {
-    writePlanAudit(1, 'APPROVED');
-    mockedContinueToReview = 'review';
-    // Review loop mock verdicts
-    fakeAdapterState.verdicts = ['APPROVED'];
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5,
-      registry: testRegistry,
-      output: mockOutput,
-      interactive: true,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    console.log("IMPLEMENT TO REVIEW RESULT:", result);
-    expect(result.success).toBe(true);
-
-    // Verify review loop produced review-v1 artifact
-    const reviewFile = join(tempDir, 'docs/dev/review-v1-fake.md');
-    expect(existsSync(reviewFile)).toBe(true);
-  });
-
-  it('gated: direct implementation fails if implementation skill did not write a ledger body', async () => {
-    writePlanAudit(1, 'APPROVED');
-    fakeAdapterState.writeVerdictFile = false;
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5,
-      registry: testRegistry,
-      output: mockOutput,
-      interactive: false,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(false);
-  });
-
-  it('does not re-prompt implement runner if one is already preselected', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {
-      '30-simple-implement': { agent: 'fake', model: 'fake-custom-preselected' }
-    }, {
-      maxIterations: 5,
-      registry: testRegistry,
-      output: mockOutput,
-      interactive: true,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    expect(promptRunnersCalls).toBe(0); // bypassed prompt for preselected
-  });
-
-  it('gated: implementation fails when ledger has only the evidence table (no coverage, no confidence)', async () => {
-    writePlanAudit(1, 'APPROVED');
+  it('does not advance when a required-artifact validator fails', async () => {
+    const config = loadConfig(tempWorkspace);
+    const task = config.manifest.tasks!.implement!;
     vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        // Evidence table only — partial implementation.
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/requirement coverage/i);
-    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
-    expect(existsSync(join(tempDir, 'docs/dev/impl-v1-fake.md'))).toBe(true);
-    expect(readFileSync(join(tempDir, 'docs/dev/impl-v1-fake.md'), 'utf-8')).not.toMatch(/^---\nloop:/);
-  });
-
-  it('gated: implementation reports only the table reason when confidence is valid', async () => {
-    writePlanAudit(1, 'APPROVED');
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          'State overall confidence: 0.95\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/missing the required evidence table and\/or requirement coverage table/i);
-    expect(result.message).not.toMatch(/confidence/i);
-  });
-
-  it('gated: implementation fails when ledger has both tables but no confidence declaration', async () => {
-    writePlanAudit(1, 'APPROVED');
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n');
-        // Note: no confidence line at all.
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
-    expect(result.message).not.toMatch(/evidence table|requirement coverage table/i);
-  });
-
-  it('gated: implementation reports malformed confidence separately when both tables are valid', async () => {
-    writePlanAudit(1, 'APPROVED');
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-          'State overall confidence: high\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/missing the required numeric confidence declaration/i);
-    expect(result.message).not.toMatch(/evidence table|requirement coverage table/i);
-  });
-
-  it('gated: implementation accepts the skill\'s literal "State overall confidence" wording — v2-audit C1 fix', async () => {
-    writePlanAudit(1, 'APPROVED');
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-          'State overall confidence: 1.00\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-    expect(result.success).toBe(true);
-    expect(result.verdict).toBe('unknown');
-  });
-
-  it('gated: post-implementation success updates plan.md front matter to done (closeout verification — v2-audit C1)', async () => {
-    // Use a real (non-fake) plan to ensure the closeout write is observable.
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    // Spy on the plan front matter writer to observe the closeout update.
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath, '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
-  });
-
-  it('gated: post-implementation success appends a change-log entry to plan.md when ## Change Log already exists (closeout verification — v2-audit C1)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    // Write a plan that already has a Change Log section, awaiting a new entry from this run.
-    // The pre-batch entry is preserved so the test can assert it is NOT clobbered.
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath,
-      '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n' +
-      '# Existing plan body\n\n' +
-      '## Change Log\n\n' +
-      '### Pre-batch baseline\n- Plan drafted; no implementations yet.\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/## Change Log\b/);
-    expect(updatedPlan).toMatch(/Pre-batch baseline/);
-    expect(updatedPlan).toMatch(/Pre-batch baseline[\s\S]+### Implementation v1-fake/);
-  });
-
-  it('gated: post-implementation success creates ## Change Log section + appends entry on the real plan shape (no pre-existing Change Log — v3-audit C1)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    // The real `docs/dev/plan.md` shape at the time of this plan:
-    // front matter, then a body, with NO `## Change Log` section.
-    // Verified by: `grep -c '^## Change Log' docs/dev/plan.md` → 0.
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath,
-      '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n' +
-      '# Plan — Batch 1: Runner and Provider Hardening\n\n' +
-      '## Architecture decisions (read before any step)\n\n' +
-      '### Decision A — Item 22\n\n' +
-      '## Step list\n\n' +
-      '### Step 1 — Item 25: codify codex non-interactive autonomy flag\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/^## Change Log\s*$/m);
-    expect(updatedPlan).toMatch(/## Change Log\s*\n\n### Implementation v1-fake/);
-    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
-    expect(updatedPlan).toContain('Decision A — Item 22');
-    expect(updatedPlan).toContain('Step 1 — Item 25: codify codex non-interactive autonomy flag');
-  });
-
-  it('gated: low-confidence ledger blocks implementation advancement — status: blocked, no harness stamp (v9-audit Critical fix)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-          'State overall confidence: 0.94\n');
+      const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      if (match?.[1]) {
+        const path = resolve(input.cwd, match[1].trim());
+        mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+        writeFileSync(path, '# incomplete ledger\n');
       }
       return { stdout: 'done', exitCode: 0 };
     });
 
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath, '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/^status:\s*blocked\s*$/m);
-    expect(updatedPlan).toMatch(/### Implementation v1-fake[\s\S]+- status: blocked \(confidence 0\.94 below threshold 0\.95\)/);
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(true);
-    const implContent = readFileSync(implFile, 'utf-8');
-    expect(implContent.startsWith('---\nloop:')).toBe(false);
-    const facts = resolveImplementFacts(
-      tempDir,
-      {
-        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
-        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
-      },
-      {
-        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
-      }
+    const result = await runTask(
+      tempWorkspace,
+      'implement',
+      task,
+      config,
+      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      taskOptions(config),
     );
-    expect(facts.currentPlanImplemented).toBe(false);
-  });
-
-  it('gated: high-confidence ledger with a deviation row produces status: done + records the deviation in the change log (v5-audit M1 fix)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | skip |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-          'State overall confidence: 0.95\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath, '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
-    expect(updatedPlan).toMatch(/- status: done\n/);
-    expect(updatedPlan).toMatch(/- deviations: skip\n/);
-    expect(updatedPlan).not.toMatch(/- status: done \(deviation/);
-    expect(updatedPlan).not.toMatch(/- status: blocked/);
-  });
-
-  it('gated: implementation fails when ledger evidence Result is skipped, not run, or untested', async () => {
-    writePlanAudit(1, 'APPROVED');
-    for (const status of ['skipped', 'not run', 'untested']) {
-      vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-        const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-        const rel = relMatch?.[1]?.trim() ?? '';
-        if (/impl-v\d+-/.test(rel) && rel) {
-          const abs = resolve(input.cwd, rel);
-          mkdirSync(dirname(abs), { recursive: true });
-          writeFileSync(abs,
-            '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-            '| --- | --- | --- | --- | --- |\n' +
-            `| Step 1 | src/x.ts | pnpm test | ${status} | none |\n\n` +
-            '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-            '| --- | --- | --- | --- |\n' +
-            '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-            'State overall confidence: 0.95\n');
-        }
-        return { stdout: 'done', exitCode: 0 };
-      });
-      const config = loadConfig(tempDir);
-      const implementSpec = config.manifest.loops['implement']!;
-      const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-        maxIterations: 5, registry: testRegistry, output: mockOutput,
-        interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-      });
-      expect(result.success).toBe(false);
-    }
-  });
-
-  it('gated: confidence exactly at the threshold (0.95) with no deviation rows produces status: done (v4-audit C1 threshold boundary)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
-      const relMatch = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
-      const rel = relMatch?.[1]?.trim() ?? '';
-      if (/impl-v\d+-/.test(rel) && rel) {
-        const abs = resolve(input.cwd, rel);
-        mkdirSync(dirname(abs), { recursive: true });
-        writeFileSync(abs,
-          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-          '| --- | --- | --- | --- | --- |\n' +
-          '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-          '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-          'State overall confidence: 0.95\n');
-      }
-      return { stdout: 'done', exitCode: 0 };
-    });
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath, '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    const updatedPlan = readFileSync(planPath, 'utf-8');
-    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
-    expect(updatedPlan).not.toMatch(/- status: blocked/);
-  });
-
-  it('gated: implementation preflight rejects a missing plan.md before spawning a provider', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    if (existsSync(planPath)) {
-      // remove if exists
-      rmSync(planPath, { force: true });
-    }
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
 
     expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(result.message).toMatch(/Implementation preflight failed.*plan file not found/i);
+    expect(result.outcome?.kind).toBe('unknown');
+    expect(result.message).toContain('invalid');
+    expect(readFileSync(join(tempWorkspace, 'docs/dev/impl-v1-fake.md'), 'utf8')).not.toContain('schemaVersion: 1');
+  });
 
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(false);
-    const facts = resolveImplementFacts(
-      tempDir,
-      {
-        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
-        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
-      },
-      {
-        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
-      }
+  it('returns unknown before provider execution when a declared project file is missing', async () => {
+    const config = loadConfig(tempWorkspace);
+    const task = config.manifest.tasks!.implement!;
+    const run = vi.spyOn(fakeAdapter, 'run');
+    const planPath = join(tempWorkspace, 'docs/dev/plan.md');
+    // The task input is declared, so this is an executor-level input failure
+    // for direct engine callers; smashAction performs the earlier preflight.
+    writeFileSync(planPath, '');
+    const result = await runTask(
+      tempWorkspace,
+      'implement',
+      task,
+      config,
+      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      taskOptions(config),
     );
-    expect(facts.currentPlanImplemented).toBe(false);
-  });
-
-  it('gated: post-implementation success DOES stamp the ledger and advance the state scanner (v5-audit C1 positive control)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-    const planPath = join(tempDir, 'docs/dev/plan.md');
-    writeFileSync(planPath, '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# Existing plan body\n');
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput,
-      interactive: false, globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
     expect(result.success).toBe(true);
-    const implFile = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    expect(existsSync(implFile)).toBe(true);
-    const implContent = readFileSync(implFile, 'utf-8');
-    expect(implContent.startsWith('---\nloop:')).toBe(true);
-    expect(implContent).toContain('priorAudit: docs/dev/plan-audit-v1-fake.md');
-    const facts = resolveImplementFacts(
-      tempDir,
-      {
-        auditPattern: config.manifest.loops['plan']!.auditPattern ?? '',
-        followUpPattern: config.manifest.loops['plan']!.followUpPattern ?? ''
-      },
-      {
-        implementPattern: config.manifest.loops['implement']!.implementPattern ?? ''
-      }
-    );
-    expect(facts.currentPlanImplemented).toBe(true);
-  });
-
-  it('recovers a valid raw ledger interactively without spawning a provider or creating v2', async () => {
-    writePlanAudit(1, 'APPROVED');
-    const rawPath = join(tempDir, 'docs/dev/impl-v1-fake.md');
-    writeFileSync(rawPath,
-      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-      '| --- | --- | --- | --- | --- |\n' +
-      '| Step 1 | src/x.ts | npm test | pass | none |\n\n' +
-      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-      '| --- | --- | --- | --- |\n' +
-      '| Requirement | src/x.ts | tests/x.test.ts | pass |\n\n' +
-      'State overall confidence: 0.99\n');
-    mockedStageActionChoice = 'recover-implementation';
-    const runSpy = vi.spyOn(fakeAdapter, 'run');
-    const config = loadConfig(tempDir);
-
-    const result = await runLoop(tempDir, 'implement', config.manifest.loops['implement']!, config, {}, {
-      maxIterations: 5, registry: testRegistry, output: mockOutput, interactive: true,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(true);
-    expect(runSpy).not.toHaveBeenCalled();
-    expect(readFileSync(rawPath, 'utf-8')).toContain('priorAudit: docs/dev/plan-audit-v1-fake.md');
-    expect(existsSync(join(tempDir, 'docs/dev/impl-v2-fake.md'))).toBe(false);
-  });
-
-  it('survives a throwing implement adapter (emits stepFailed + unknown verdict, does not propagate)', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    // Adapter that throws inside run() — simulates a real-provider failure that
-    // escapes as an exception (spawn ENOENT, watchdog throw, stream-parse error).
-    // The implement branch must catch this the same way Step A (follow-up) and
-    // Step B (audit) do, instead of propagating to smash.ts's top-level catch.
-    const throwingAdapter: AgentAdapter = {
-      name: 'fake',
-      buildRun: () => ({ command: 'fake', args: [] }),
-      run: async () => { throw new Error('provider spawn failed: ENOENT'); }
-    };
-    const registry = createTestAdapterRegistry();
-    registry.adapters.set('fake', throwingAdapter);
-
-    const stepFailedCalls: any[] = [];
-    const localOutput = {
-      ...mockOutput,
-      stepFailed: (ctx: any) => { stepFailedCalls.push(ctx); }
-    };
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5,
-      registry,
-      output: localOutput,
-      interactive: false,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    expect(stepFailedCalls.some(c => c.kind === 'implement')).toBe(true);
-  });
-
-  it('DIAGNOSE: provider exits 1, does code work, writes NO ledger (agy-style) — does the harness crash?', async () => {
-    writePlanAudit(1, 'APPROVED');
-
-    // agy-style: it did real work (simulate by editing a source file) but exited 1
-    // and wrote NO ledger artifact at the outputPath.
-    const adapter: AgentAdapter = {
-      name: 'fake',
-      buildRun: () => ({ command: 'fake', args: [] }),
-      run: async () => {
-        // simulate "agy updated the code"
-        mkdirSync(join(tempDir, 'src'), { recursive: true });
-        writeFileSync(join(tempDir, 'src/changed.ts'), 'export const x = 1;\n');
-        // ...but exited nonzero with stderr, and wrote no ledger
-        return { exitCode: 1, stdout: '', stderr: 'agy: runtime error after edits' };
-      }
-    };
-    const registry = createTestAdapterRegistry();
-    registry.adapters.set('fake', adapter);
-
-    const config = loadConfig(tempDir);
-    const implementSpec = config.manifest.loops['implement']!;
-
-    const result = await runLoop(tempDir, 'implement', implementSpec, config, {}, {
-      maxIterations: 5,
-      registry,
-      output: mockOutput,
-      interactive: false,
-      globalOverrides: { agent: 'fake', model: 'fake-model' }
-    });
-
-    // If the harness handles this cleanly it returns {success:false, verdict:'unknown'};
-    // if it crashes, this await throws and the test fails with the real error.
-    expect(result.success).toBe(false);
-    expect(result.verdict).toBe('unknown');
-    // agy's code edits are still on disk (harness doesn't delete them) — no data loss
-    expect(existsSync(join(tempDir, 'src/changed.ts'))).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

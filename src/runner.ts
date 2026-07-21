@@ -1,19 +1,16 @@
 import type { Config, ModelRegistry } from './config.js';
 import type { Runner } from './loops/runtime.js';
 import type { PerSkillOverride } from './runner-overrides.js';
+import type { AgentRegistry } from './adapters/registry.js';
 
-/**
- * opencode's own model-id contract: `opencode run -m` requires the form
- * `provider/model` (verified via `opencode run --help`). The `provider/`
- * segment is opencode's transport/endpoint namespace (e.g. `opencode-go`),
- * owned by opencode — orc-smash treats the whole string as opaque and
- * validates only that it has exactly one `provider/model` slash.
- */
+/** opencode model ids are provider/model names in opencode's own namespace. */
 const OPENCODE_MODEL_ID = /^[A-Za-z0-9.-]+\/[A-Za-z0-9._-]+$/;
 
 export interface ResolvedRunner extends Runner {
   agentSource: 'interactive' | 'skill' | 'global' | 'profile' | 'default' | 'session';
   modelSource: 'interactive' | 'skill' | 'agent-default' | 'global' | 'profile' | 'default' | 'session';
+  effort?: string;
+  effortSource?: 'interactive' | 'skill' | 'global' | 'profile' | 'default';
   inheritedSession?: { agent: string; model: string; sessionId: string };
 }
 
@@ -23,38 +20,19 @@ export function isOpencodeModelId(model: string): boolean {
 
 export function isValidModelForAgent(agent: string, model: string, registry: ModelRegistry): boolean {
   const catalogue = registry.providers[agent];
-  if (!catalogue) {
-    return false;
-  }
-  const allowedModels = catalogue.models;
-  if (allowedModels.includes(model)) {
-    return true;
-  }
-  // Per-provider shape rules for models outside the registry allow-list.
-  if (agent === 'opencode') {
-    return isOpencodeModelId(model);
-  }
-  if (agent === 'claude') {
-    return model.startsWith('claude-');
-  }
-  if (agent === 'codex') {
-    return !model.startsWith('opencode/') && !model.startsWith('claude-');
-  }
-  if (agent === 'agy') {
-    // agy models are the exact human-readable names from `agy models`. This batch
-    // accepts ONLY the configured `providers.agy` allow-list (with input
-    // trimming), never namespace-style fallbacks like gpt-5.5 / opencode/... /
-    // claude-... / any unconfigured human-readable label.
-    return allowedModels.includes(model.trim());
-  }
-  if (agent === 'fake') {
-    return true;
-  }
+  if (!catalogue) return false;
+  if (catalogue.models.includes(model)) return true;
+  if (agent === 'opencode') return isOpencodeModelId(model);
+  if (agent === 'claude') return model.startsWith('claude-');
+  if (agent === 'codex') return !model.startsWith('opencode/') && !model.startsWith('claude-');
+  if (agent === 'agy') return catalogue.models.includes(model.trim());
+  if (agent === 'fake') return true;
   return false;
 }
 
-export function normalizeModelForAgent(agent: string, model: string): string {
-  return agent === 'agy' ? model.trim() : model;
+export function isValidEffortForAgent(agent: string, effort: string, registry: ModelRegistry): boolean {
+  const levels = registry.providers[agent]?.efforts;
+  return !levels || levels.includes(effort);
 }
 
 export function validateAgentAndModel(agent: string, model: string, registry: ModelRegistry): void {
@@ -67,146 +45,179 @@ export function validateAgentAndModel(agent: string, model: string, registry: Mo
   }
 }
 
+export function validateRunnerCapabilities(runner: Runner, registry: AgentRegistry): void {
+  const adapter = registry.adapters.get(runner.agent);
+  if (!adapter) {
+    throw new Error(`unknown agent '${runner.agent}' in adapter registry`);
+  }
+  if (runner.effort && !adapter.capabilities.effort) {
+    throw new Error(`agent '${runner.agent}' does not support effort selection`);
+  }
+}
+
 export function resolveRunner(
   skillId: string,
   config: Config,
-  globalOverrides: { agent?: string; model?: string } = {},
-  interactiveOverride?: { agent: string; model: string },
-  perSkillOverride?: PerSkillOverride
+  globalOverrides: { agent?: string; model?: string; effort?: string } = {},
+  interactiveOverride?: { agent: string; model: string; effort?: string },
+  perSkillOverride?: PerSkillOverride,
+  globalEffortOverride?: string,
 ): ResolvedRunner {
-  // 1. Interactive override
+  const globalEffort = globalOverrides.effort ?? globalEffortOverride;
+
   if (interactiveOverride) {
     validateAgentAndModel(interactiveOverride.agent, interactiveOverride.model, config.registry);
-    return {
-      agent: interactiveOverride.agent,
-      model: normalizeModelForAgent(interactiveOverride.agent, interactiveOverride.model),
-      agentSource: 'interactive',
-      modelSource: 'interactive'
-    };
+    return makeRunner(
+      interactiveOverride.agent,
+      interactiveOverride.model,
+      'interactive',
+      'interactive',
+      resolveEffort(interactiveOverride.agent, interactiveOverride.effort ?? perSkillOverride?.effort ?? globalEffort, undefined, 'interactive', config.registry),
+      config.registry,
+    );
   }
 
-  // 2. Per-skill CLI override
   if (perSkillOverride) {
-    return resolveWithPerSkillOverride(skillId, config, globalOverrides, perSkillOverride);
+    return resolveWithPerSkillOverride(skillId, config, globalOverrides, perSkillOverride, globalEffort);
   }
 
-  // 3. Global CLI overrides
   if (globalOverrides.agent || globalOverrides.model) {
-    return resolveWithGlobalOverrides(config, globalOverrides);
+    return resolveWithGlobalOverrides(config, globalOverrides, globalEffort);
   }
 
-  // 4. Skill runner profile, then its provider catalogue default.
   const skill = config.manifest.skills[skillId];
-  if (skill) {
-    const profile = config.registry.profiles[skill.runnerProfile];
-    if (!profile) throw new Error(`unknown runner profile '${skill.runnerProfile}'`);
-    const agent = profile.provider;
-    const catalogue = config.registry.providers[agent];
-    if (!catalogue) throw new Error(`unknown agent '${agent}'; expected ${Object.keys(config.registry.providers).join(' | ')}`);
-    const model = profile.model ?? catalogue.defaultModel;
-    validateAgentAndModel(agent, model, config.registry);
-    return {
-      agent,
-      model: normalizeModelForAgent(agent, model),
-      agentSource: 'profile',
-      modelSource: profile.model ? 'profile' : 'default'
-    };
-  }
-
-  throw new Error(`Skill '${skillId}' not found in manifest, and no overrides provided.`);
+  if (!skill) throw new Error(`Skill '${skillId}' not found in manifest, and no overrides provided.`);
+  const profile = config.registry.profiles[skill.runnerProfile];
+  if (!profile) throw new Error(`unknown runner profile '${skill.runnerProfile}'`);
+  const catalogue = config.registry.providers[profile.provider];
+  if (!catalogue) throw new Error(`unknown agent '${profile.provider}'; expected ${Object.keys(config.registry.providers).join(' | ')}`);
+  const model = profile.model ?? catalogue.defaultModel;
+  validateAgentAndModel(profile.provider, model, config.registry);
+  const effort = resolveEffort(profile.provider, globalEffort, profile.effort, globalEffort ? 'global' : 'profile', config.registry);
+  return makeRunner(
+    profile.provider,
+    model,
+    'profile',
+    profile.model ? 'profile' : 'default',
+    effort,
+    config.registry,
+  );
 }
 
 function resolveWithPerSkillOverride(
   skillId: string,
   config: Config,
-  globalOverrides: { agent?: string; model?: string },
-  perSkillOverride: PerSkillOverride
+  globalOverrides: { agent?: string; model?: string; effort?: string },
+  override: PerSkillOverride,
+  globalEffort?: string,
 ): ResolvedRunner {
-  const defaultProfile = config.registry.profiles[config.registry.defaultProfile];
-  if (!defaultProfile) throw new Error(`unknown default runner profile '${config.registry.defaultProfile}'`);
-
-  if (perSkillOverride.agent && perSkillOverride.model) {
-    validateAgentAndModel(perSkillOverride.agent, perSkillOverride.model, config.registry);
-    return {
-      agent: perSkillOverride.agent,
-      model: normalizeModelForAgent(perSkillOverride.agent, perSkillOverride.model),
-      agentSource: 'skill',
-      modelSource: 'skill'
-    };
+  if (override.agent && override.model) {
+    validateAgentAndModel(override.agent, override.model, config.registry);
+    return makeRunner(
+      override.agent,
+      override.model,
+      'skill',
+      'skill',
+      resolveEffort(override.agent, override.effort ?? globalEffort, undefined, 'skill', config.registry),
+      config.registry,
+    );
   }
 
-  if (perSkillOverride.agent) {
-    const defaultModel = config.registry.providers[perSkillOverride.agent]?.defaultModel;
-    if (!defaultModel) throw new Error(`no default model for agent '${perSkillOverride.agent}'`);
-    validateAgentAndModel(perSkillOverride.agent, defaultModel, config.registry);
-    return {
-      agent: perSkillOverride.agent,
-      model: normalizeModelForAgent(perSkillOverride.agent, defaultModel),
-      agentSource: 'skill',
-      modelSource: 'agent-default'
-    };
+  if (override.agent) {
+    const model = config.registry.providers[override.agent]?.defaultModel;
+    if (!model) throw new Error(`no default model for agent '${override.agent}'`);
+    validateAgentAndModel(override.agent, model, config.registry);
+    return makeRunner(
+      override.agent,
+      model,
+      'skill',
+      'agent-default',
+      resolveEffort(override.agent, override.effort ?? globalEffort, undefined, 'skill', config.registry),
+      config.registry,
+    );
   }
 
-  if (perSkillOverride.model) {
-    const baseRunner = resolveRunner(skillId, config, globalOverrides);
-    validateAgentAndModel(baseRunner.agent, perSkillOverride.model, config.registry);
-    return {
-      agent: baseRunner.agent,
-      model: normalizeModelForAgent(baseRunner.agent, perSkillOverride.model),
-      agentSource: baseRunner.agentSource,
-      modelSource: 'skill'
-    };
+  if (override.model) {
+    const base = resolveRunner(skillId, config, globalOverrides, undefined, undefined, globalEffort);
+    validateAgentAndModel(base.agent, override.model, config.registry);
+    return makeRunner(
+      base.agent,
+      override.model,
+      base.agentSource,
+      'skill',
+      resolveEffort(base.agent, override.effort ?? globalEffort, base.effort, override.effort || globalEffort ? 'skill' : base.effortSource ?? 'profile', config.registry),
+      config.registry,
+    );
   }
 
-  return resolveRunner(skillId, config, globalOverrides);
+  return resolveRunner(skillId, config, globalOverrides, undefined, undefined, globalEffort);
 }
 
 function resolveWithGlobalOverrides(
   config: Config,
-  globalOverrides: { agent?: string; model?: string }
+  overrides: { agent?: string; model?: string; effort?: string },
+  globalEffort?: string,
 ): ResolvedRunner {
   const defaultProfile = config.registry.profiles[config.registry.defaultProfile];
   if (!defaultProfile) throw new Error(`unknown default runner profile '${config.registry.defaultProfile}'`);
 
-  if (globalOverrides.agent && globalOverrides.model) {
-    validateAgentAndModel(globalOverrides.agent, globalOverrides.model, config.registry);
-    return {
-      agent: globalOverrides.agent,
-      model: normalizeModelForAgent(globalOverrides.agent, globalOverrides.model),
-      agentSource: 'global',
-      modelSource: 'global'
-    };
+  if (overrides.agent && overrides.model) {
+    validateAgentAndModel(overrides.agent, overrides.model, config.registry);
+    return makeRunner(overrides.agent, overrides.model, 'global', 'global', resolveEffort(overrides.agent, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
   }
 
-  if (globalOverrides.agent) {
-    const defaultModel = config.registry.providers[globalOverrides.agent]?.defaultModel;
-    if (!defaultModel) throw new Error(`no default model for agent '${globalOverrides.agent}'`);
-    return {
-      agent: globalOverrides.agent,
-      model: normalizeModelForAgent(globalOverrides.agent, defaultModel),
-      agentSource: 'global',
-      modelSource: 'agent-default'
-    };
+  if (overrides.agent) {
+    const model = config.registry.providers[overrides.agent]?.defaultModel;
+    if (!model) throw new Error(`no default model for agent '${overrides.agent}'`);
+    validateAgentAndModel(overrides.agent, model, config.registry);
+    return makeRunner(overrides.agent, model, 'global', 'agent-default', resolveEffort(overrides.agent, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
   }
 
-  if (globalOverrides.model) {
-    const resolvedAgent = defaultProfile.provider;
-    validateAgentAndModel(resolvedAgent, globalOverrides.model, config.registry);
-    return {
-      agent: resolvedAgent,
-      model: normalizeModelForAgent(resolvedAgent, globalOverrides.model),
-      agentSource: 'profile',
-      modelSource: 'global'
-    };
+  const agent = defaultProfile.provider;
+  if (overrides.model) {
+    validateAgentAndModel(agent, overrides.model, config.registry);
+    return makeRunner(agent, overrides.model, 'profile', 'global', resolveEffort(agent, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
   }
 
-  const resolvedAgent = defaultProfile.provider;
-  const resolvedModel = defaultProfile.model ?? config.registry.providers[resolvedAgent]?.defaultModel;
-  if (!resolvedModel) throw new Error(`no model resolved for agent '${resolvedAgent}'`);
+  const model = defaultProfile.model ?? config.registry.providers[agent]?.defaultModel;
+  if (!model) throw new Error(`no model resolved for agent '${agent}'`);
+  return makeRunner(agent, model, 'profile', defaultProfile.model ? 'profile' : 'default', resolveEffort(agent, overrides.effort ?? globalEffort, defaultProfile.effort, overrides.effort || globalEffort ? 'global' : 'profile', config.registry), config.registry);
+}
+
+function resolveEffort(
+  agent: string,
+  explicit: string | undefined,
+  profileEffort: string | undefined,
+  source: ResolvedRunner['effortSource'],
+  registry: ModelRegistry,
+): { value: string; source: ResolvedRunner['effortSource'] } | null {
+  const value = explicit ?? profileEffort ?? registry.providers[agent]?.defaultEffort;
+  if (!value) return null;
+  if (!isValidEffortForAgent(agent, value, registry)) {
+    throw new Error(`effort '${value}' is not supported by agent '${agent}'`);
+  }
+  const resolvedSource = explicit
+    ? source
+    : profileEffort
+      ? 'profile'
+      : 'default';
+  return { value, source: resolvedSource };
+}
+
+function makeRunner(
+  agent: string,
+  model: string,
+  agentSource: ResolvedRunner['agentSource'],
+  modelSource: ResolvedRunner['modelSource'],
+  effort: { value: string; source: ResolvedRunner['effortSource'] } | null,
+  registry: ModelRegistry,
+): ResolvedRunner {
+  validateAgentAndModel(agent, model, registry);
   return {
-    agent: resolvedAgent,
-    model: normalizeModelForAgent(resolvedAgent, resolvedModel),
-    agentSource: 'profile',
-    modelSource: defaultProfile.model ? 'profile' : 'default'
+    agent,
+    model: agent === 'agy' ? model.trim() : model,
+    agentSource,
+    modelSource,
+    ...(effort ? { effort: effort.value, effortSource: effort.source } : {}),
   };
 }

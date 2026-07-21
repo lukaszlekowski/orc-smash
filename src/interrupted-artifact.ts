@@ -20,11 +20,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, readdirSync, statSync, rmSync } from 'node:fs';
 import { resolve, join, relative, basename, dirname } from 'node:path';
 import type { StepKind } from './provenance.js';
-import type { LoopSpec } from './manifest.js';
 import { renderPattern, patternToRegex } from './patterns.js';
 import { terminateActiveChildren } from './adapters/utils.js';
 import type { RunEventInput } from './run-event.js';
 import { terminateOwnedRuntimes } from './owned-runtime-registry.js';
+import type { LoopBinding, TaskBinding } from './manifest.js';
 
 /** Directory (under the project root) holding the durable marker. */
 export const INTERRUPTED_MARKER_DIR = '.orc-smash';
@@ -57,6 +57,70 @@ export interface StepCtx {
   agent: string;
   model: string;
   skillId: string;
+}
+
+type BindingDefinition = LoopBinding | TaskBinding | Record<string, unknown>;
+type BindingPhase = 'evaluate' | 'repair' | 'task';
+
+/** Normalize only the marker vocabulary; execution uses canonical v1 phases. */
+function markerPhase(kind: StepKind): BindingPhase {
+  const phaseMap: Record<string, BindingPhase> = {
+    evaluate: 'evaluate',
+    repair: 'repair',
+    task: 'task',
+    audit: 'evaluate',
+    'follow-up': 'repair',
+    implement: 'task',
+  };
+  return phaseMap[kind] ?? 'evaluate';
+}
+
+function isLoopBinding(binding: BindingDefinition): binding is LoopBinding {
+  return binding !== null && typeof binding === 'object' && 'type' in binding;
+}
+
+function bindingPatterns(binding: BindingDefinition, phase?: BindingPhase): string[] {
+  if (isLoopBinding(binding)) {
+    const legacy = binding as LoopBinding & {
+      auditPattern?: unknown;
+      followUpPattern?: unknown;
+      implementPattern?: unknown;
+    };
+    if (!phase) {
+      const patterns = [
+        typeof legacy.auditPattern === 'string' ? legacy.auditPattern : binding.evaluate.output.pattern,
+        typeof legacy.followUpPattern === 'string' ? legacy.followUpPattern : binding.repair.output.pattern,
+      ];
+      if (typeof legacy.implementPattern === 'string') patterns.push(legacy.implementPattern);
+      return patterns;
+    }
+    const selected = phase === 'repair'
+      ? binding.repair.output.pattern
+      : phase === 'task'
+        ? (typeof legacy.implementPattern === 'string' ? legacy.implementPattern : binding.evaluate.output.pattern)
+        : binding.evaluate.output.pattern;
+    const legacySelected = phase === 'repair'
+      ? legacy.followUpPattern
+      : phase === 'task'
+        ? legacy.implementPattern
+        : legacy.auditPattern;
+    return [typeof legacySelected === 'string' ? legacySelected : selected];
+  }
+
+  const legacy = binding as TaskBinding & {
+    auditPattern?: unknown;
+    followUpPattern?: unknown;
+    implementPattern?: unknown;
+  };
+  if (typeof legacy.implementPattern === 'string') return [legacy.implementPattern];
+  if (typeof legacy.auditPattern === 'string' || typeof legacy.followUpPattern === 'string') {
+    return [
+      ...(typeof legacy.auditPattern === 'string' ? [legacy.auditPattern] : []),
+      ...(typeof legacy.followUpPattern === 'string' ? [legacy.followUpPattern] : []),
+    ];
+  }
+  const task = binding as TaskBinding;
+  return [typeof task.output?.pattern === 'string' ? task.output.pattern : ''];
 }
 
 // --- Module-level interrupt context (signal-safe mutable state) ---------------
@@ -169,18 +233,13 @@ export function clearInterruptedMarker(projectRoot: string): void {
 export function resolveInterruptedArtifactPath(
   projectRoot: string,
   marker: InterruptedMarker,
-  loops: Record<string, LoopSpec>
+  bindings: Record<string, BindingDefinition>
 ): string | null {
-  const loopSpec = loops[marker.loop];
-  if (!loopSpec) return null;
-  const pattern =
-    marker.kind === 'audit'
-      ? loopSpec.auditPattern
-      : marker.kind === 'follow-up'
-        ? loopSpec.followUpPattern
-        : loopSpec.implementPattern;
+  const binding = bindings[marker.loop];
+  if (!binding) return null;
+  const pattern = bindingPatterns(binding, markerPhase(marker.kind))[0];
   if (!pattern) return null;
-  const rel = renderPattern(pattern, { n: marker.version, agent: marker.agent });
+  const rel = renderPattern(pattern, { version: marker.version, provider: marker.agent });
   return resolve(projectRoot, rel);
 }
 
@@ -227,12 +286,10 @@ export function quarantineArtifact(
  */
 export function quarantineLateArtifactsForLoop(
   projectRoot: string,
-  loopSpec: LoopSpec,
+  binding: BindingDefinition,
   notBeforeMs: number
 ): string[] {
-  const patterns = [loopSpec.auditPattern, loopSpec.followUpPattern, loopSpec.implementPattern].filter(
-    (p): p is string => typeof p === 'string' && p.length > 0
-  );
+  const patterns = bindingPatterns(binding).filter((pattern) => pattern.length > 0);
   if (patterns.length === 0) return [];
   const regexes = patterns.map(patternToRegex);
   const docsDev = join(projectRoot, 'docs/dev');
@@ -276,7 +333,7 @@ function listArtifactFiles(dir: string): string[] {
  */
 export function quarantineInterruptedResume(
   projectRoot: string,
-  loops: Record<string, LoopSpec>
+  bindings: Record<string, BindingDefinition>
 ): { hadMarker: boolean; marker: InterruptedMarker | null; quarantined: string[] } {
   const marker = readInterruptedMarker(projectRoot);
   if (!marker) {
@@ -284,7 +341,7 @@ export function quarantineInterruptedResume(
   }
   const quarantined: string[] = [];
 
-  const inFlight = resolveInterruptedArtifactPath(projectRoot, marker, loops);
+  const inFlight = resolveInterruptedArtifactPath(projectRoot, marker, bindings);
   if (inFlight) {
     const result = quarantineArtifact(projectRoot, inFlight, { reason: 'interrupted' });
     if (result.quarantined && result.archivedPath) {
@@ -292,9 +349,9 @@ export function quarantineInterruptedResume(
     }
   }
 
-  const loopSpec = loops[marker.loop];
-  if (loopSpec) {
-    const late = quarantineLateArtifactsForLoop(projectRoot, loopSpec, marker.interruptedAtMs);
+  const binding = bindings[marker.loop];
+  if (binding) {
+    const late = quarantineLateArtifactsForLoop(projectRoot, binding, marker.interruptedAtMs);
     quarantined.push(...late);
   }
 
@@ -374,7 +431,7 @@ async function recordTerminalOwnershipFailure(ctx: any, reason: string): Promise
   }
 }
 
-async function performOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
+async function performOwnershipLoss(binding: BindingDefinition, ctx: any): Promise<OwnershipLossResult> {
   try {
     const stepCtx = activeStepCtx;
     const root = activeProjectRoot;
@@ -427,12 +484,12 @@ async function performOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<Owner
         model: stepCtx.model,
         skillId: stepCtx.skillId,
         interruptedAtMs: Date.now()
-      }, { [stepCtx.loop]: loopSpec });
+      }, { [stepCtx.loop]: binding });
 
       if (inFlight) {
         quarantineArtifact(root, inFlight, { reason: 'interrupted' });
       }
-      quarantineLateArtifactsForLoop(root, loopSpec, interruptedAtMs);
+      quarantineLateArtifactsForLoop(root, binding, interruptedAtMs);
     }
 
     if (unverified.length > 0 || missingFreshCapability.length > 0) {
@@ -470,11 +527,11 @@ async function performOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<Owner
   }
 }
 
-export function handleOwnershipLoss(loopSpec: LoopSpec, ctx: any): Promise<OwnershipLossResult> {
+export function handleOwnershipLoss(binding: BindingDefinition, ctx: any): Promise<OwnershipLossResult> {
   const key = String(ctx?.runDir ?? ctx?.runId ?? 'unknown');
   const existing = ownershipLosses.get(key);
   if (existing) return existing;
-  const operation = performOwnershipLoss(loopSpec, ctx).finally(() => {
+  const operation = performOwnershipLoss(binding, ctx).finally(() => {
     if (ownershipLosses.get(key) === operation) ownershipLosses.delete(key);
   });
   ownershipLosses.set(key, operation);

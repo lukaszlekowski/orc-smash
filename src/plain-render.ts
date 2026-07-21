@@ -105,10 +105,8 @@ export function renderPlainPanel(context: PanelContext): string {
         // No verdict/outcome for an interrupted step; the status line carries
         // the literal "interrupted" signal.
         resultText = '—';
-      } else if (s.kind === 'audit') {
-        resultText = s.verdict ?? 'unknown';
       } else {
-        resultText = s.outcome ?? '';
+        resultText = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome ?? 'unknown';
       }
 
       const statusAcc = statusAccent(s.status);

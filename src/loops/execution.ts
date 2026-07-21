@@ -6,7 +6,7 @@ import type { Config } from '../config.js';
 import { debugLoopSpawn } from '../debug-spawn.js';
 import { setStepCtx } from '../interrupted-artifact.js';
 import { roleForKind, type Step } from '../state.js';
-import { buildPanelContext, latestAuditVersion, resolveLoopLabels } from '../status.js';
+import { buildPanelContext, latestVersion, resolveLoopLabels } from '../status.js';
 import type { PanelContext } from '../status.js';
 import type { StepKind } from '../provenance.js';
 import type { LoopSpec } from '../manifest.js';
@@ -138,9 +138,8 @@ export async function executeLoopStep(
   if (deps.output.attachLiveRegion) {
     deps.output.attachLiveRegion(() => {
       let activeLabel = skillId;
-      if (kind === 'audit') activeLabel = labels.audit?.skillId ?? skillId;
-      else if (kind === 'follow-up') activeLabel = labels.followUp?.skillId ?? skillId;
-      else if (kind === 'implement') activeLabel = labels.implement?.skillId ?? skillId;
+      if (kind === 'evaluate') activeLabel = labels.evaluate?.skillId ?? skillId;
+      else if (kind === 'repair') activeLabel = labels.repair?.skillId ?? skillId;
 
       return buildPanelContext(
         deps.projectRoot,
@@ -151,7 +150,7 @@ export async function executeLoopStep(
         deps.steps,
         `Running ${activeLabel} v${version}...`,
         liveInFlight,
-        latestAuditVersion(deps.steps),
+        latestVersion(deps.steps),
         false
       );
     });
@@ -219,6 +218,7 @@ export async function executeLoopStep(
     const runInput = {
       prompt,
       model: runner.model,
+      effort: runner.effort,
       cwd: deps.projectRoot,
       skillId,
       version,

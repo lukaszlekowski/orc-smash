@@ -38,35 +38,27 @@ function makeMarker(overrides: Partial<InterruptedMarker> = {}): InterruptedMark
 
 /** A representative three-loop manifest shape (plan/review/implement patterns). */
 function makeLoops(): Record<string, LoopSpec> {
-  const base = {
-    target: '.',
-    targetKind: 'file' as const,
-    inputs: []
-  };
   return {
     plan: {
-      ...base,
-      kind: 'doc-audit' as const,
-      audit: 'plan-audit',
-      'follow-up': 'plan-followup',
-      auditPattern: 'docs/dev/plan-audit-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/plan-followup-v{n}-{agent}.md'
+      type: 'approval-loop' as const,
+      target: { path: '.', kind: 'file' as const },
+      inputs: [],
+      evaluate: { skill: 'plan-audit', output: { pattern: 'docs/dev/plan-audit-v{version}-{provider}.md', contract: 'decision-artifact' as const, decision: { heading: 'Verdict', accepted: 'APPROVED', retry: 'REJECTED' } } },
+      repair: { skill: 'plan-followup', output: { pattern: 'docs/dev/plan-followup-v{version}-{provider}.md', contract: 'completion-artifact' as const } }
     },
     review: {
-      ...base,
-      kind: 'code-review' as const,
-      planPath: 'docs/dev/plan.md',
-      audit: 'review-audit',
-      'follow-up': 'review-followup',
-      auditPattern: 'docs/dev/review-audit-v{n}-{agent}.md',
-      followUpPattern: 'docs/dev/review-followup-v{n}-{agent}.md'
+      type: 'approval-loop' as const,
+      target: { path: '.', kind: 'file' as const },
+      inputs: [],
+      evaluate: { skill: 'review-audit', output: { pattern: 'docs/dev/review-audit-v{version}-{provider}.md', contract: 'decision-artifact' as const, decision: { heading: 'Verdict', accepted: 'APPROVED', retry: 'REJECTED' } } },
+      repair: { skill: 'review-followup', output: { pattern: 'docs/dev/review-followup-v{version}-{provider}.md', contract: 'completion-artifact' as const } }
     },
     implement: {
-      ...base,
-      kind: 'implement' as const,
-      planPath: 'docs/dev/plan.md',
-      implement: 'simple-implement',
-      implementPattern: 'docs/dev/impl-v{n}-{agent}.md'
+      type: 'approval-loop' as const,
+      target: { path: '.', kind: 'file' as const },
+      inputs: [],
+      evaluate: { skill: 'simple-implement', output: { pattern: 'docs/dev/impl-v{version}-{provider}.md', contract: 'required-artifact' as const } },
+      repair: { skill: 'simple-implement', output: { pattern: 'docs/dev/impl-v{version}-{provider}.md', contract: 'required-artifact' as const } }
     }
   };
 }

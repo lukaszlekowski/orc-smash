@@ -1,75 +1,75 @@
-import type { Verdict } from './verdict.js';
 
 /**
  * Single source of truth for next-step / restart decisions.
  *
- * The restart rule ("what should happen after the latest audit?") was previously
+ * The restart rule ("what should happen after the latest evaluation?") was previously
  * recomputed in `scan`, `loop`, and `status`. It is a domain rule and must exist
  * exactly once. This module owns it.
  *
  * `resolveNextStep(...)` returns enough data for both runtime flow
- * (`nextSkill` / `followUpVersion` / `nextAuditVersion`) and status messaging
- * (`state` / `nextAuditVersion`), so the status panel and the loop cannot drift.
+ * (`nextSkill` / `repairVersion` / `nextEvaluateVersion`) and status messaging
+ * (`state` / `nextEvaluateVersion`), so the status panel and the loop cannot drift.
  */
 
-export type NextStepState = 'fresh' | 'rejected' | 'approved' | 'unknown-latest-audit';
+export type NextStepState = 'fresh' | 'rejected' | 'accepted' | 'unknown-latest-evaluation';
 
 export interface NextStepDecision {
   state: NextStepState;
-  nextSkill: 'audit' | 'follow-up' | null;
-  followUpVersion: number | null;
-  nextAuditVersion: number;
-  priorAuditPath: string | null;
+  nextSkill: 'evaluate' | 'repair' | null;
+  repairVersion?: number | null;
+  nextEvaluateVersion?: number;
+  priorArtifactPath?: string | null;
 }
 
 export interface NextStepInput {
-  latestVerdict: Verdict | null;
+  /** Canonical decision (`accepted`/`retry`/`unknown`). */
+  latestDecision: string | null;
   latestVersion: number;
-  hasAudits: boolean;
-  latestAuditPath: string | null;
+  hasEvaluations: boolean;
+  latestArtifactPath?: string | null;
 }
 
 export function resolveNextStep(input: NextStepInput): NextStepDecision {
-  const { latestVerdict, latestVersion, hasAudits, latestAuditPath } = input;
+  const { latestDecision, latestVersion, hasEvaluations } = input;
+  const latestArtifactPath = input.latestArtifactPath ?? null;
 
-  if (!hasAudits) {
+  if (!hasEvaluations) {
     return {
       state: 'fresh',
-      nextSkill: 'audit',
-      followUpVersion: null,
-      nextAuditVersion: 1,
-      priorAuditPath: null
+      nextSkill: 'evaluate',
+      repairVersion: null,
+      nextEvaluateVersion: 1,
+      priorArtifactPath: null
     };
   }
 
-  switch (latestVerdict) {
-    case 'REJECTED':
-      // The follow-up repairs the rejected version (same N); the next audit is N+1.
+  switch (latestDecision) {
+    case 'retry':
+      // The repair fixes the rejected version (same N); the next evaluation is N+1.
       return {
         state: 'rejected',
-        nextSkill: 'follow-up',
-        followUpVersion: latestVersion,
-        nextAuditVersion: latestVersion + 1,
-        priorAuditPath: latestAuditPath
+        nextSkill: 'repair',
+        repairVersion: latestVersion,
+        nextEvaluateVersion: latestVersion + 1,
+        priorArtifactPath: latestArtifactPath
       };
-    case 'APPROVED':
-      // Approved round closes; the next round's audit is N+1.
+    case 'accepted':
+      // Accepted round closes; the next round's evaluation is N+1.
       return {
-        state: 'approved',
-        nextSkill: 'audit',
-        followUpVersion: null,
-        nextAuditVersion: latestVersion + 1,
-        priorAuditPath: latestAuditPath
+        state: 'accepted',
+        nextSkill: 'evaluate',
+        repairVersion: null,
+        nextEvaluateVersion: latestVersion + 1,
+        priorArtifactPath: latestArtifactPath
       };
     default:
       // 'unknown' (or anomalous null): terminal — no next skill advances the loop.
       return {
-        state: 'unknown-latest-audit',
+        state: 'unknown-latest-evaluation',
         nextSkill: null,
-        followUpVersion: null,
-        nextAuditVersion: latestVersion + 1,
-        priorAuditPath: latestAuditPath
+        repairVersion: null,
+        nextEvaluateVersion: latestVersion + 1,
+        priorArtifactPath: latestArtifactPath
       };
   }
 }
-

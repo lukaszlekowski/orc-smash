@@ -1,4 +1,6 @@
 defaultModel: glm-5.2[1m]
+efforts: [low, medium, high, xhigh]
+defaultEffort: medium
 models:
   - glm-5.2[1m]
   - glm-4.7

@@ -1,0 +1,94 @@
+schemaVersion: 1
+roles:
+  auditor: roles/auditor.md
+  planner: roles/planner.md
+  reviewer: roles/reviewer.md
+  implementer: roles/implementer.md
+
+skills:
+  plan-audit:
+    file: skills/21-simple-plans-audit/SKILL.md
+    role: auditor
+    runnerProfile: audit
+  plan-follow-up:
+    file: skills/22-simple-plans-follow-up/SKILL.md
+    role: planner
+    runnerProfile: follow-up
+  review:
+    file: skills/40-simple-review/SKILL.md
+    role: reviewer
+    runnerProfile: audit
+  review-follow-up:
+    file: skills/42-simple-review-follow-up/SKILL.md
+    role: implementer
+    runnerProfile: follow-up
+  30-simple-implement:
+    file: skills/30-simple-implement/SKILL.md
+    role: implementer
+    runnerProfile: implement
+
+loops:
+  plan:
+    type: approval-loop
+    target: { path: docs/dev/plan.md, kind: file }
+    inputs:
+      - { source: target }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    evaluate:
+      skill: plan-audit
+      output:
+        pattern: "docs/dev/plan-audit-v{version}-{provider}.md"
+        contract: decision-artifact
+        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
+    repair:
+      skill: plan-follow-up
+      output:
+        pattern: "docs/dev/plan-followup-v{version}-{provider}.md"
+        contract: completion-artifact
+  review:
+    type: approval-loop
+    target: { path: ".", kind: worktree }
+    files:
+      planPath: docs/dev/plan.md
+    inputs:
+      - { source: planPath }
+      - { source: target }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    evaluate:
+      skill: review
+      output:
+        pattern: "docs/dev/review-v{version}-{provider}.md"
+        contract: decision-artifact
+        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
+    repair:
+      skill: review-follow-up
+      output:
+        pattern: "docs/dev/review-followup-v{version}-{provider}.md"
+        contract: completion-artifact
+
+tasks:
+  implement:
+    skill: 30-simple-implement
+    target: { path: ".", kind: worktree }
+    files:
+      planPath: docs/dev/plan.md
+    inputs:
+      - { source: planPath }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    output:
+      pattern: "docs/dev/impl-v{version}-{provider}.md"
+      contract: required-artifact
+      validator: implement-ledger
+
+pipelines:
+  default:
+    stages:
+      - { stageId: plan, loop: plan }
+      - { stageId: implement, task: implement }
+      - { stageId: review, loop: review }

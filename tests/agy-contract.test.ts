@@ -22,7 +22,6 @@ vi.mock('../src/config.js', async (importOriginal) => {
 import { createProductionAdapterRegistry, type AgentRegistry } from '../src/adapters/registry.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
-import { parseVerdict } from '../src/verdict.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 
@@ -31,7 +30,7 @@ const mockOutput = createMockOutput();
 /**
  * Deterministic fake `agy` adapter for the loop-level contract. It mirrors how
  * a real agent obeys the prompt by writing the artifact at the parsed
- * "Write your output to:" path, then returns either:
+ * "Output path:" path, then returns either:
  *   - authenticated success (valid APPROVED audit, benign auth-substring output), or
  *   - unauthenticated failure (partial artifact + error.kind 'auth').
  *
@@ -41,6 +40,7 @@ const mockOutput = createMockOutput();
 function makeFakeAgyAdapter(opts: { authFail: boolean }): AgentAdapter {
   return {
     name: 'agy',
+    capabilities: { resumeSession: true, effort: true },
     buildRun(input: RunInput) {
       return { command: 'agy', args: ['-p', input.prompt, '--model', input.model, '--dangerously-skip-permissions'] };
     },
@@ -49,7 +49,7 @@ function makeFakeAgyAdapter(opts: { authFail: boolean }): AgentAdapter {
       if (input.onLifecycle && input.version !== undefined && input.skillId !== undefined) {
         emit({ type: 'started', agent: 'agy', model: input.model, version: input.version, skillId: input.skillId, message: 'agy', atMs: Date.now() });
       }
-      const match = input.prompt.match(/Write your output to:\s*([^\r\n]+)/i);
+      const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
       const relPath = match?.[1]?.trim() ?? '';
       if (relPath) {
         const abs = resolve(input.cwd, relPath);
@@ -90,6 +90,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
   beforeEach(() => {
     createTempDir('temp-agy-contract');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Plan\n');
     registry = createProductionAdapterRegistry(loadConfig(tempDir).registry);
   });
 
@@ -111,11 +112,11 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     });
 
     expect(result.success).toBe(true);
-    expect(result.verdict).toBe('APPROVED');
+    expect(result.verdict).toBe('accepted');
     // The authenticated artifact remains in place (NOT quarantined).
     const artifact = join(tempDir, 'docs/dev/plan-audit-v1-agy.md');
     expect(existsSync(artifact)).toBe(true);
-    expect(parseVerdict(readFileSync(artifact, 'utf-8'))).toBe('APPROVED');
+    expect(readFileSync(artifact, 'utf8')).toContain('## Verdict\n\nAPPROVED');
   });
 
   it('unauthenticated agy run: the LOOP quarantines the resolved plan-style artifact (no resumable file left)', async () => {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -98,7 +98,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const prompt = process.argv.at(-1) ?? '';
-const outputMatch = prompt.match(/Write your output to:\\s*([^\\r\\n]+)/i);
+const outputMatch = prompt.match(/Output path:\\s*([^\\r\\n]+)/i);
 const outputPath = outputMatch?.[1]?.trim();
 const mode = process.env.ORC_E2E_PROVIDER_MODE ?? 'approved';
 
@@ -111,7 +111,7 @@ if (outputPath && mode !== 'missing') {
     const verdict = mode === 'reject-approve' && version === 1 ? 'REJECTED' : 'APPROVED';
     writeFileSync(outputPath, '# Plan Audit\\n\\n## Verdict\\n\\n' + verdict + '\\n');
   } else if (outputPath.includes('plan-followup')) {
-    writeFileSync(outputPath, '# Plan Follow-up\\n\\n## Follow-up Outcome\\n\\npatched\\n');
+    writeFileSync(outputPath, '# Plan Follow-up\\n\\n## Outcome\\n\\nCOMPLETED\\n');
   } else if (outputPath.includes('impl-v')) {
     writeFileSync(outputPath, '# Implementation Evidence Ledger\\n\\n' +
       '## Implementation Evidence\\n\\n' +
@@ -157,7 +157,7 @@ if (mode === 'auth-error') {
     expect(invalidIterations.merged).toContain('error message="Error: max-iterations must be a positive integer."');
   });
 
-  it('rejects invalid runner and continuity options before ownership admission', async () => {
+  it('rejects invalid runner and binding options before ownership admission', async () => {
     const project = createProject('validation-errors');
     const invalidRunner = await runCompiled([
       'smash', '--plain', '--project', project, '--loop', 'plan', '--agent', 'not-a-provider'
@@ -166,18 +166,18 @@ if (mode === 'auth-error') {
     expect(invalidRunner.merged).toContain('runner.rejected');
     expect(invalidRunner.merged).not.toContain('ownership.opened');
 
-    const conflictingContinuity = await runCompiled([
-      'smash', '--plain', '--project', project, '--loop', 'plan', '--audit-continuity', '--codex-audit-continuity'
+    const conflictingBinding = await runCompiled([
+      'smash', '--plain', '--project', project, '--loop', 'plan', '--task', 'implement'
     ]);
-    expectPlainRun(conflictingContinuity, 1, 'run.failed');
-    expect(conflictingContinuity.merged).toContain('mutually exclusive');
-    expect(conflictingContinuity.merged).not.toContain('ownership.opened');
+    expectPlainRun(conflictingBinding, 1, 'run.failed');
+    expect(conflictingBinding.merged).toContain('mutually exclusive');
+    expect(conflictingBinding.merged).not.toContain('ownership.opened');
 
     const runnerWithoutLoop = await runCompiled([
       'smash', '--plain', '--project', project, '--runner', 'plan-audit=opencode'
     ]);
     expectPlainRun(runnerWithoutLoop, 1, 'run.failed');
-    expect(runnerWithoutLoop.merged).toContain('require an explicit --loop');
+    expect(runnerWithoutLoop.merged).toContain('require an explicit --loop, --task, or --pipeline');
     expect(runnerWithoutLoop.merged).not.toContain('ownership.opened');
   });
 
@@ -200,11 +200,12 @@ if (mode === 'auth-error') {
 
   it('covers provider failure, missing artifact, max iterations, and approved completion', async () => {
     const implementPreflightProject = createProject('implement-preflight');
+    unlinkSync(join(implementPreflightProject, 'docs', 'dev', 'plan.md'));
     const implementPreflight = await runCompiled([
-      'smash', '--plain', '--project', implementPreflightProject, '--loop', 'implement', '--max-iterations', '1'
+      'smash', '--plain', '--project', implementPreflightProject, '--task', 'implement', '--max-iterations', '1'
     ]);
     expectPlainRun(implementPreflight, 1, 'run.failed');
-    expect(implementPreflight.merged).toContain('approved plan audit');
+    expect(implementPreflight.merged).toContain('Project inputs missing');
     expect(implementPreflight.merged).not.toContain('provider.started');
 
     const missingArtifactProject = createProject('missing-artifact');
@@ -237,8 +238,8 @@ if (mode === 'auth-error') {
       ['smash', '--plain', '--project', maxProject, '--loop', 'plan', '--max-iterations', '1'],
       { env: { ORC_E2E_PROVIDER_MODE: 'reject-approve' } }
     );
-    expectPlainRun(maxed, 0, 'run.failed');
-    expect(maxed.merged).toContain('verdict.parsed verdict=REJECTED');
+    expectPlainRun(maxed, 1, 'run.failed');
+    expect(maxed.merged).toContain('decision.parsed decision=retry');
 
     const approvedProject = createProject('approved');
     const approved = await runCompiled([
@@ -246,26 +247,25 @@ if (mode === 'auth-error') {
     ]);
     expectPlainRun(approved, 0, 'run.completed');
     expect(approved.merged).toContain('artifact.verified');
-    expect(approved.merged).toContain('verdict.parsed verdict=APPROVED');
+    expect(approved.merged).toContain('decision.parsed decision=accepted');
   });
 
-  it('covers rejected→follow-up→approved and implementation closeout on the compiled bin', async () => {
+  it('covers rejected→repair→approved and a task on the compiled bin', async () => {
     const reviewProject = createProject('rejected-followup-approved');
     const reviewRun = await runCompiled([
       'smash', '--plain', '--project', reviewProject, '--loop', 'plan', '--max-iterations', '3'
     ], { env: { ORC_E2E_PROVIDER_MODE: 'reject-approve' } });
     expectPlainRun(reviewRun, 0, 'run.completed');
-    expect(reviewRun.merged.match(/verdict\.parsed/g)).toHaveLength(2);
-    expect(reviewRun.merged).toContain('follow-up.outcome outcome=patched');
-    expect(reviewRun.merged).toContain('step.started kind=follow-up');
+    expect(reviewRun.merged.match(/decision\.parsed/g)).toHaveLength(2);
+    expect(reviewRun.merged).toContain('completion.parsed outcome=completed');
+    expect(reviewRun.merged).toContain('step.started kind=repair');
 
-    const implementationProject = createProject('implementation-closeout', true);
+    const implementationProject = createProject('implementation-task');
     const implementationRun = await runCompiled([
-      'smash', '--plain', '--project', implementationProject, '--loop', 'implement', '--max-iterations', '1'
+      'smash', '--plain', '--project', implementationProject, '--task', 'implement', '--max-iterations', '1'
     ]);
     expectPlainRun(implementationRun, 0, 'run.completed');
-    expect(implementationRun.merged).toContain('implementation.ledger-validated isComplete=true');
-    expect(implementationRun.merged).toContain('plan.closeout status=done');
-    expect(readFileSync(join(implementationProject, 'docs', 'dev', 'plan.md'), 'utf8')).toContain('status: done');
+    expect(implementationRun.merged).toContain('artifact.verified path=docs/dev/impl-v1-opencode.md result=valid');
+    expect(implementationRun.merged).toContain('stage.completed binding=task/implement');
   });
 });

@@ -37,19 +37,22 @@ export function buildProgram(): Command {
 
   program
     .command('smash')
-    .description('Run the audit ↔ follow-up loop against a target project')
+    .description('Run a configured loop, task, or pipeline stage against a target project')
     .option('-p, --project <path>', 'Path to the target project')
-    .option('-l, --loop <loop-name>', 'Loop name to run')
+    .option('-l, --loop <loop-name>', 'Loop name to run (ad-hoc start)')
+    .option('-t, --task <task-id>', 'Task ID to run (ad-hoc start, mutually exclusive with --loop and --pipeline)')
+    .option('--pipeline <pipeline-id>', 'Pipeline ID to start at first stage')
     .option('-a, --agent <agent-name>', 'Global override for agent')
     .option('-m, --model <model-name>', 'Global override for model')
-    .option('-i, --max-iterations <iterations>', 'Maximum audit iterations', '5')
+    .option('-i, --max-iterations <iterations>', 'Maximum evaluator iterations', '4')
+    .option('--effort <level>', 'Global override for effort level')
+    .option('--config <path>', 'Path to config file (orc-smash.yaml)')
     .option('--debug-spawn', 'Write spawn/process debug logs to docs/dev/spawn-debug.log')
     .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
     .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
     .option('--runner <skill-id=agent>', 'Per-skill agent override (repeatable)', collectOption, [])
     .option('--runner-model <skill-id=model>', 'Per-skill model override (repeatable)', collectOption, [])
-    .option('--audit-continuity', 'Enable audit continuity (resume sessions across rejected audits)')
-    .option('--codex-audit-continuity', 'Enable audit continuity restricted to Codex (legacy alias)')
+    .option('--runner-effort <skill-id=level>', 'Per-skill effort override (repeatable)', collectOption, [])
     .action(async (options) => {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
       const output = options.plain ? createPlainCliOutput(projectRoot) : createPanelCliOutput(projectRoot);
@@ -62,6 +65,7 @@ export function buildProgram(): Command {
     .description('Read-only: detect project state and render status panel')
     .option('-p, --project <path>', 'Path to the target project')
     .option('-a, --all', 'Show artifacts across all loops')
+    .option('--config <path>', 'Path to config file (orc-smash.yaml)')
     .action(async (options) => {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
       const output = createPanelCliOutput(projectRoot);

@@ -41,6 +41,11 @@ export function structuredMessage(result: RunResult, ctx: MessageContext): strin
 
   const stderrTail = boundedTail(result.stderr);
 
+  if (result.completion === 'truncated' || result.completion === 'interrupted') {
+    const reason = result.stopReason ? ` (${result.stopReason})` : '';
+    return `${label} execution truncated or interrupted${reason}.`;
+  }
+
   if (error) {
     const msg = error.message || '';
     const refStr = error.ref ? ` (ref ${error.ref})` : '';
