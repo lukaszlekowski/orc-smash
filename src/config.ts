@@ -6,7 +6,13 @@ import { z } from 'zod';
 import { loadManifest, type V1Manifest } from './manifest.js';
 
 export interface ModelRegistry {
-  providers: Record<string, { models: string[]; defaultModel: string; efforts?: string[]; defaultEffort?: string }>;
+  providers: Record<string, {
+    models: string[];
+    defaultModel: string;
+    efforts?: string[];
+    defaultEffort?: string;
+    modelEfforts?: Record<string, string[]>;
+  }>;
   defaultProfile: string;
   profiles: Record<string, { provider: string; model?: string; effort?: string }>;
   timeouts?: { opencode?: number; claude?: number; codex?: number; agy?: number };
@@ -18,6 +24,7 @@ export const ModelRegistrySchema = z.object({
     defaultModel: z.string(),
     efforts: z.array(z.string()).min(1).optional(),
     defaultEffort: z.string().optional(),
+    modelEfforts: z.record(z.string(), z.array(z.string()).min(1)).optional(),
   }).strict()),
   defaultProfile: z.string(),
   profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional(), effort: z.string().optional() }).strict()),
@@ -32,6 +39,15 @@ export const ModelRegistrySchema = z.object({
     if (!catalogue.models.includes(catalogue.defaultModel)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'defaultModel'], message: `defaultModel '${catalogue.defaultModel}' must be listed in models for provider '${provider}'` });
     }
+    if (catalogue.efforts) {
+      const uniqueEfforts = new Set(catalogue.efforts);
+      if (uniqueEfforts.size !== catalogue.efforts.length) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'efforts'], message: `efforts list for provider '${provider}' contains duplicate values` });
+      }
+      if (catalogue.defaultEffort && !catalogue.efforts.includes(catalogue.defaultEffort)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', provider, 'defaultEffort'], message: `defaultEffort '${catalogue.defaultEffort}' must be listed in provider '${provider}' efforts` });
+      }
+    }
   }
   for (const [profile, value] of Object.entries(registry.profiles)) {
     const catalogue = registry.providers[value.provider];
@@ -40,13 +56,8 @@ export const ModelRegistrySchema = z.object({
     } else if (value.model && !catalogue.models.includes(value.model)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'model'], message: `Profile '${profile}' specifies model '${value.model}' which is not in provider '${value.provider}' catalogue` });
     }
-    if (catalogue) {
-      if (catalogue.efforts && value.effort && !catalogue.efforts.includes(value.effort)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'effort'], message: `Profile '${profile}' specifies effort '${value.effort}' which is not supported by provider '${value.provider}'` });
-      }
-      if (catalogue.efforts && catalogue.defaultEffort && !catalogue.efforts.includes(catalogue.defaultEffort)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['providers', value.provider, 'defaultEffort'], message: `defaultEffort '${catalogue.defaultEffort}' must be listed in provider '${value.provider}' efforts` });
-      }
+    if (catalogue && catalogue.efforts && value.effort && !catalogue.efforts.includes(value.effort)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['profiles', profile, 'effort'], message: `Profile '${profile}' specifies effort '${value.effort}' which is not supported by provider '${value.provider}'` });
     }
   }
   if (!registry.profiles[registry.defaultProfile]) {
@@ -59,6 +70,7 @@ const ProviderCatalogSchema = z.object({
   models: z.array(z.string()).min(1),
   efforts: z.array(z.string()).min(1).optional(),
   defaultEffort: z.string().optional(),
+  modelEfforts: z.record(z.string(), z.array(z.string()).min(1)).optional(),
 }).strict();
 
 const RunnersSchema = z.object({

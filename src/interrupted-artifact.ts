@@ -47,6 +47,14 @@ export interface InterruptedMarker {
   skillId: string;
   /** Wall-clock ms when the interruption was recorded. */
   interruptedAtMs: number;
+  effort?: string;
+  sessionStrategy?: string;
+  chainId?: string;
+  pipelineId?: string | null;
+  pipelineRunId?: string | null;
+  stageId?: string | null;
+  artifactIdentity?: string;
+  parentArtifactIdentity?: string | null;
 }
 
 /** Active step context: non-null only while a provider subprocess is live. */
@@ -57,6 +65,14 @@ export interface StepCtx {
   agent: string;
   model: string;
   skillId: string;
+  effort?: string;
+  sessionStrategy?: string;
+  chainId?: string;
+  pipelineId?: string | null;
+  pipelineRunId?: string | null;
+  stageId?: string | null;
+  artifactIdentity?: string;
+  parentArtifactIdentity?: string | null;
 }
 
 type BindingDefinition = LoopBinding | TaskBinding | Record<string, unknown>;
@@ -198,7 +214,15 @@ export function readInterruptedMarker(projectRoot: string): InterruptedMarker | 
         agent: obj.agent,
         model: obj.model,
         skillId: obj.skillId,
-        interruptedAtMs: obj.interruptedAtMs
+        interruptedAtMs: obj.interruptedAtMs,
+        effort: obj.effort,
+        sessionStrategy: obj.sessionStrategy,
+        chainId: obj.chainId,
+        pipelineId: obj.pipelineId,
+        pipelineRunId: obj.pipelineRunId,
+        stageId: obj.stageId,
+        artifactIdentity: obj.artifactIdentity,
+        parentArtifactIdentity: obj.parentArtifactIdentity,
       };
     }
     return null;
@@ -380,6 +404,14 @@ export async function handleInterruptSignal(signal: NodeJS.Signals): Promise<voi
       agent: ctx.agent,
       model: ctx.model,
       skillId: ctx.skillId,
+      effort: ctx.effort,
+      sessionStrategy: ctx.sessionStrategy,
+      chainId: ctx.chainId,
+      pipelineId: ctx.pipelineId,
+      pipelineRunId: ctx.pipelineRunId,
+      stageId: ctx.stageId,
+      artifactIdentity: ctx.artifactIdentity,
+      parentArtifactIdentity: ctx.parentArtifactIdentity,
       interruptedAtMs: Date.now()
     });
   }
@@ -446,6 +478,14 @@ async function performOwnershipLoss(binding: BindingDefinition, ctx: any): Promi
         agent: stepCtx.agent,
         model: stepCtx.model,
         skillId: stepCtx.skillId,
+        effort: stepCtx.effort,
+        sessionStrategy: stepCtx.sessionStrategy,
+        chainId: stepCtx.chainId,
+        pipelineId: stepCtx.pipelineId,
+        pipelineRunId: stepCtx.pipelineRunId,
+        stageId: stepCtx.stageId,
+        artifactIdentity: stepCtx.artifactIdentity,
+        parentArtifactIdentity: stepCtx.parentArtifactIdentity,
         interruptedAtMs
       });
     }

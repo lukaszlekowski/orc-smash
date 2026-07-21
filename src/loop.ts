@@ -11,7 +11,7 @@ import { runBinding } from './loops/binding-engine.js';
 /** Options shared by the generic loop and one-off task executors. */
 export interface LoopOptions {
   maxIterations: number;
-  globalOverrides?: { agent?: string; model?: string; effort?: string };
+  globalOverrides?: { agent?: string; model?: string; effort?: string; sessionStrategy?: string };
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;

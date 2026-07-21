@@ -13,6 +13,7 @@ export interface StatusOptions {
   config?: string;
   output: CliOutput;
   all?: boolean;
+  loop?: string;
 }
 
 export async function statusAction(options: StatusOptions): Promise<CommandResult> {
@@ -55,12 +56,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
   const loopSpec = config.manifest.loops[detectedLoop];
 
   const globalStatusScan = scanAllForStatus(projectRoot, config.manifest);
-  const statusScan = options.all || !detectedLoop
-    ? globalStatusScan
-    : {
-      ...globalStatusScan,
-      timeline: globalStatusScan.timeline.filter(step => step.bindingId === detectedLoop),
-    };
+  const statusScan = globalStatusScan;
 
   let nextStepMessage: string;
   if (statusScan.interruptedStep) {
@@ -86,7 +82,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
 
   const panelCtx = buildPanelContext(
     projectRoot,
-    options.all || !detectedLoop ? 'all' : detectedLoop,
+    options.all ? 'all' : (options.loop ?? detectedLoop ?? 'all'),
     0,
     5,
     null,

@@ -120,9 +120,25 @@ const BASE_V1_SCHEMA = z.object({
   pipelines: z.record(z.string(), PipelineSpecSchema).optional().default({}),
 });
 
+const SAFE_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
+
+function assertSafeId(ctx: z.RefinementCtx, path: (string | number)[], id: string, name: string): void {
+  if (!SAFE_ID_REGEX.test(id)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path,
+      message: `Invalid ${name} '${id}': must contain only letters, numbers, underscores, and hyphens.`,
+    });
+  }
+}
+
 const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
-  // 1. Validate skill roles exist
+  // 1. Validate roles and skill identifiers
+  for (const [roleId] of Object.entries(data.roles)) {
+    assertSafeId(ctx, ['roles', roleId], roleId, 'role ID');
+  }
   for (const [skillId, skill] of Object.entries(data.skills)) {
+    assertSafeId(ctx, ['skills', skillId], skillId, 'skill ID');
     if (!data.roles[skill.role]) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -132,8 +148,9 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
     }
   }
 
-  // 2. Validate loop skill references and output patterns
+  // 2. Validate loop skill references, identifiers, and output patterns
   for (const [loopId, loop] of Object.entries(data.loops)) {
+    assertSafeId(ctx, ['loops', loopId], loopId, 'loop ID');
     for (const stepKind of ['evaluate', 'repair'] as const) {
       const step = loop[stepKind];
       const skill = data.skills[step.skill];
@@ -145,12 +162,37 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
         });
       }
       validatePatternForContext(ctx, ['loops', loopId, stepKind, 'output', 'pattern'], step.output.pattern);
-      if (step.output.contract === 'decision-artifact' && !step.output.decision) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['loops', loopId, stepKind, 'output'],
-          message: `decision-artifact contract requires a 'decision' config in loop '${loopId}.${stepKind}'.`,
-        });
+      if (step.output.contract === 'decision-artifact') {
+        if (!step.output.decision) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['loops', loopId, stepKind, 'output'],
+            message: `decision-artifact contract requires a 'decision' config in loop '${loopId}.${stepKind}'.`,
+          });
+        } else {
+          const { accepted, retry } = step.output.decision;
+          if (!accepted || accepted.trim() === '') {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['loops', loopId, stepKind, 'output', 'decision', 'accepted'],
+              message: `decision 'accepted' token in loop '${loopId}.${stepKind}' must be a non-empty string.`,
+            });
+          }
+          if (!retry || retry.trim() === '') {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['loops', loopId, stepKind, 'output', 'decision', 'retry'],
+              message: `decision 'retry' token in loop '${loopId}.${stepKind}' must be a non-empty string.`,
+            });
+          }
+          if (accepted && retry && accepted.trim().toLowerCase() === retry.trim().toLowerCase()) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ['loops', loopId, stepKind, 'output', 'decision'],
+              message: `decision 'accepted' and 'retry' tokens in loop '${loopId}.${stepKind}' must be case-insensitively distinct.`,
+            });
+          }
+        }
       }
       if (step.output.contract !== 'decision-artifact' && step.output.decision) {
         ctx.addIssue({
@@ -171,8 +213,9 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
     }
   }
 
-  // 4. Validate task skill references and output patterns
+  // 4. Validate task skill references, identifiers, and output patterns
   for (const [taskId, task] of Object.entries(data.tasks)) {
+    assertSafeId(ctx, ['tasks', taskId], taskId, 'task ID');
     const skill = data.skills[task.skill];
     if (!skill) {
       ctx.addIssue({
@@ -182,12 +225,37 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
       });
     }
     validatePatternForContext(ctx, ['tasks', taskId, 'output', 'pattern'], task.output.pattern);
-    if (task.output.contract === 'decision-artifact' && !task.output.decision) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['tasks', taskId, 'output'],
-        message: `decision-artifact contract requires a 'decision' config in task '${taskId}'.`,
-      });
+    if (task.output.contract === 'decision-artifact') {
+      if (!task.output.decision) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['tasks', taskId, 'output'],
+          message: `decision-artifact contract requires a 'decision' config in task '${taskId}'.`,
+        });
+      } else {
+        const { accepted, retry } = task.output.decision;
+        if (!accepted || accepted.trim() === '') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['tasks', taskId, 'output', 'decision', 'accepted'],
+            message: `decision 'accepted' token in task '${taskId}' must be a non-empty string.`,
+          });
+        }
+        if (!retry || retry.trim() === '') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['tasks', taskId, 'output', 'decision', 'retry'],
+            message: `decision 'retry' token in task '${taskId}' must be a non-empty string.`,
+          });
+        }
+        if (accepted && retry && accepted.trim().toLowerCase() === retry.trim().toLowerCase()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['tasks', taskId, 'output', 'decision'],
+            message: `decision 'accepted' and 'retry' tokens in task '${taskId}' must be case-insensitively distinct.`,
+          });
+        }
+      }
     }
     for (let i = 0; i < task.inputs.length; i++) {
       const input = task.inputs[i]!;
@@ -200,9 +268,11 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
 
   // 5. Validate pipeline stage references: each stage must reference a loop or task
   for (const [pipelineId, pipeline] of Object.entries(data.pipelines)) {
+    assertSafeId(ctx, ['pipelines', pipelineId], pipelineId, 'pipeline ID');
     const stageIds = new Set<string>();
     for (let i = 0; i < pipeline.stages.length; i++) {
       const stage = pipeline.stages[i]!;
+      assertSafeId(ctx, ['pipelines', pipelineId, 'stages', i, 'stageId'], stage.stageId, 'stage ID');
       if (stageIds.has(stage.stageId)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

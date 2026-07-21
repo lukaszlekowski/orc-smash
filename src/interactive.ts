@@ -1,6 +1,6 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
-import { isValidEffortForAgent, isValidModelForAgent, resolveRunner } from './runner.js';
+import { isValidEffortForModel, isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { StageAction } from './stage-menu.js';
 
@@ -170,20 +170,27 @@ export async function promptRunners(
     }
 
     const adapter = agentRegistry.adapters.get(agent);
-    const effortLevels = config.registry.providers[agent]?.efforts ?? [];
+    const effortLevels = config.registry.providers[agent]?.modelEfforts?.[selectedModel] ?? config.registry.providers[agent]?.efforts ?? [];
     let selectedEffort: string | undefined;
     if (adapter?.capabilities.effort && effortLevels.length > 0) {
       const configuredDefault = agent === defaultAgent
         ? resolved.effort
         : config.registry.providers[agent]?.defaultEffort;
-      const effortDefault = configuredDefault && isValidEffortForAgent(agent, configuredDefault, config.registry)
+      const effortDefault = configuredDefault && isValidEffortForModel(agent, selectedModel, configuredDefault, config.registry)
         ? configuredDefault
-        : effortLevels[0]!;
-      selectedEffort = await select({
-        message: `Select effort for agent '${agent}' (skill '${skillId}'):` ,
-        choices: effortLevels.map(level => ({ name: level, value: level })),
+        : 'default';
+      const effortChoices = [
+        { name: 'Provider default', value: 'default' },
+        ...effortLevels.map(level => ({ name: level, value: level }))
+      ];
+      const picked = await select({
+        message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
+        choices: effortChoices,
         default: effortDefault,
       });
+      if (picked !== 'default') {
+        selectedEffort = picked;
+      }
     } else if (adapter && !adapter.capabilities.effort) {
       console.log(`  ${skillId}: effort selection unavailable for ${agent} (provider capability disabled)`);
     }

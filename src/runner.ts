@@ -30,6 +30,13 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
   return false;
 }
 
+export function isValidEffortForModel(agent: string, model: string, effort: string, registry: ModelRegistry): boolean {
+  const catalogue = registry.providers[agent];
+  if (!catalogue) return false;
+  const levels = catalogue.modelEfforts?.[model] ?? catalogue.efforts;
+  return !levels || levels.includes(effort);
+}
+
 export function isValidEffortForAgent(agent: string, effort: string, registry: ModelRegistry): boolean {
   const levels = registry.providers[agent]?.efforts;
   return !levels || levels.includes(effort);

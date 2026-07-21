@@ -119,6 +119,7 @@ function renderTimelineSection(context: PanelContext): string {
       roleAcc.chalk(roleAcc.label),
       s.agent,
       s.model,
+      s.effort ?? 'default',
       resultStr,
       chalk.gray(formatDurationMs(s.durationMs)),
       formatSessionId(s.sessionId),
@@ -134,6 +135,7 @@ function renderTimelineSection(context: PanelContext): string {
       roleAcc.chalk(roleAcc.label),
       context.inFlight.agent,
       context.inFlight.model,
+      'default',
       '\u2014',
       chalk.gray(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
       '\u2014',
@@ -146,7 +148,7 @@ function renderTimelineSection(context: PanelContext): string {
   }
 
   const table = new Table({
-    head: ['Ver', 'Role', 'Agent', 'Model', 'Result', 'Time', 'Session ID', 'Status'],
+    head: ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status'],
     style: { head: ['cyan'], border: [] },
     chars: {
       top: '', 'top-mid': '', 'top-left': '', 'top-right': '',

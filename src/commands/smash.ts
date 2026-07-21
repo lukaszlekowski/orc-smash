@@ -205,7 +205,7 @@ async function resolveSmashRunSetup(
 
   const runContext = options.pipeline
     ? mintRunContext({ mode: 'pipeline-start', pipelineId: options.pipeline, stageId: pipelineStageId })
-    : undefined;
+    : mintRunContext({ mode: 'ad-hoc' });
 
   if (selected.kind === 'loop') {
     const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
