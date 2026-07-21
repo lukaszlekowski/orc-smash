@@ -122,5 +122,24 @@ describe('v1 manifest contract', () => {
         },
       },
     })).toThrow(/case-insensitively distinct/);
+
+    // task with decision-artifact contract is rejected
+    expect(() => schema.parse({
+      schemaVersion: 1,
+      roles: { auditor: 'roles/auditor.md' },
+      skills: { audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' } },
+      loops: {},
+      tasks: {
+        doit: {
+          skill: 'audit',
+          target: { path: '.', kind: 'worktree' },
+          inputs: [],
+          output: {
+            pattern: 'docs/eval-v{version}-{provider}.md',
+            contract: 'decision-artifact',
+          },
+        },
+      },
+    })).toThrow();
   });
 });

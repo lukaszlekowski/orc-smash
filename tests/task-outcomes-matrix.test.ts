@@ -142,7 +142,7 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
       message: 'provider exit 1',
       lastAuditPath: null,
       terminalEventEmitted: false,
-      outcome: { kind: 'provider-failed', message: 'provider exit 1', artifactPath: null },
+      outcome: { kind: 'provider-failed', message: 'provider exit 1', errorKind: 'spawn', artifactPath: null },
     });
 
     const result = await smashAction({
