@@ -1,8 +1,8 @@
 import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
-import { isValidEffortForModel, isValidModelForAgent, resolveRunner } from './runner.js';
+import { isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
-import type { StageAction } from './stage-menu.js';
+import type { TopMenuAction, LoopSubmenuItem, PipelineLaunchContext } from './stage-menu.js';
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
   return select({
@@ -10,6 +10,68 @@ export async function promptLoopSelect(loops: string[], defaultLoop: string): Pr
     choices: loops.map(l => ({ name: l, value: l })),
     default: defaultLoop
   });
+}
+
+// ---- F7: Operator menu prompts ----
+
+/**
+ * Show the top-level interactive menu. Every action visible; disabled ones show
+ * their reason. Returns the selected action id.
+ */
+export async function promptTopLevelMenu(actions: TopMenuAction[]): Promise<string> {
+  return select({
+    message: 'What would you like to do?',
+    choices: actions.map(a => ({
+      name: a.label,
+      value: a.id,
+      disabled: a.disabledReason,
+    })),
+  });
+}
+
+/**
+ * Show the loop submenu (Continue / Fresh / Second opinion / Back).
+ * Returns the submenu item id.
+ */
+export async function promptLoopSubmenu(items: LoopSubmenuItem[]): Promise<string> {
+  const recommended = items.find(i => i.recommended);
+  return select({
+    message: 'What would you like to do?',
+    choices: items.map(i => ({
+      name: i.recommended ? `${i.label} (recommended)` : i.label,
+      value: i.id,
+      disabled: i.disabledReason,
+    })),
+    default: recommended?.id ?? items[0]!.id,
+  });
+}
+
+/**
+ * Prompt the user to choose between an ad-hoc start or a specific pipeline
+ * launch context when the selected binding is a first-stage reference.
+ * Returns 'ad-hoc' for ad-hoc, or the selected PipelineLaunchContext.
+ * If only one context exists, offers a simple choice.
+ */
+export async function promptPipelineLaunchContext(
+  bindingId: string,
+  contexts: PipelineLaunchContext[],
+): Promise<{ kind: 'ad-hoc' } | { kind: 'pipeline'; pipelineId: string; stageId: string }> {
+  if (contexts.length === 0) return { kind: 'ad-hoc' };
+
+  const choices: Array<{ name: string; value: string }> = [
+    { name: 'Start ad hoc (no pipeline identity)', value: 'ad-hoc' },
+    ...contexts.map(ctx => ({ name: ctx.label, value: `pipeline:${ctx.pipelineId}:${ctx.stageId}` })),
+  ];
+
+  const selected = await select({
+    message: `'${bindingId}' is the first stage in one or more pipelines. How would you like to launch?`,
+    choices,
+    default: 'ad-hoc',
+  });
+
+  if (selected === 'ad-hoc') return { kind: 'ad-hoc' };
+  const [, pipelineId, stageId] = selected.split(':');
+  return { kind: 'pipeline', pipelineId: pipelineId!, stageId: stageId! };
 }
 
 /**
@@ -27,35 +89,9 @@ function invalidModelMessage(agent: string, val: string, registry: Config['regis
   return `model '${val}' is not a valid model for agent '${agent}'`;
 }
 
-export async function promptStageAction(actions: StageAction[], recommendedId: string): Promise<string> {
-  const choices = actions.map(act => {
-    const isRec = act.id === recommendedId;
-    return {
-      name: isRec ? `${act.label} (recommended)` : act.label,
-      value: act.id,
-      disabled: act.disabledReason
-    };
-  });
-
-  // Flat list, recommended first
-  const recommendedIndex = choices.findIndex(c => c.value === recommendedId);
-  if (recommendedIndex > 0) {
-    const [recChoice] = choices.splice(recommendedIndex, 1);
-    if (recChoice) {
-      choices.unshift(recChoice);
-    }
-  }
-
-  return select({
-    message: 'What would you like to do next?',
-    choices,
-    default: recommendedId
-  });
-}
-
 export async function promptMaxIterations(defaultVal: number): Promise<number> {
   const result = await input({
-    message: 'Enter maximum audit iterations:',
+    message: 'Enter maximum evaluation rounds:',
     default: String(defaultVal),
     validate: (val) => {
       const parsed = parseInt(val, 10);
@@ -72,11 +108,11 @@ export async function promptRunners(
   skills: string[],
   config: Config,
   agentRegistry: AgentRegistry,
-  globalOverrides: { agent?: string; model?: string; effort?: string } = {},
+  globalOverrides: { agent?: string; model?: string; effort?: string; sessionStrategy?: string } = {},
   opts?: { forceSelect?: boolean }
-): Promise<Record<string, { agent: string; model: string; effort?: string }>> {
-  const runners: Record<string, { agent: string; model: string; effort?: string }> = {};
-  const defaultRunners = new Map<string, { agent: string; model: string; effort?: string }>();
+): Promise<Record<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }>> {
+  const runners: Record<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }> = {};
+  const defaultRunners = new Map<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }>();
 
   for (const skillId of skills) {
     if (config.manifest.skills[skillId]) {
@@ -93,7 +129,10 @@ export async function promptRunners(
   if (!opts?.forceSelect && defaultRunners.size > 0) {
     console.log('Default skill runners:');
     for (const [skillId, runner] of defaultRunners) {
-      console.log(`  ${skillId}: ${runner.agent} (${runner.model})`);
+      const parts = [`${skillId}: ${runner.agent} (${runner.model})`];
+      parts.push(`effort: ${runner.effort ?? 'provider default'}`);
+      parts.push(`session: ${runner.sessionStrategy ?? 'fresh-per-invocation'}`);
+      console.log(`  ${parts.join(', ')}`);
     }
   }
 
@@ -117,6 +156,7 @@ export async function promptRunners(
         agent: defaultAgent,
         model: defaultModel,
         ...(resolved.effort ? { effort: resolved.effort } : {}),
+        ...(resolved.sessionStrategy ? { sessionStrategy: resolved.sessionStrategy } : {}),
       };
       continue;
     }
@@ -176,33 +216,62 @@ export async function promptRunners(
       ? []
       : (catalogue?.modelEfforts?.[selectedModel] ?? catalogue?.efforts ?? []);
     let selectedEffort: string | undefined;
-    if (adapter?.capabilities.effort && effortLevels.length > 0) {
-      const configuredDefault = agent === defaultAgent
-        ? resolved.effort
-        : config.registry.providers[agent]?.defaultEffort;
-      const effortDefault = configuredDefault && isValidEffortForModel(agent, selectedModel, configuredDefault, config.registry)
-        ? configuredDefault
-        : 'default';
-      const effortChoices = [
-        { name: 'Provider default', value: 'default' },
-        ...effortLevels.map(level => ({ name: level, value: level }))
-      ];
-      const picked = await select({
-        message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
-        choices: effortChoices,
-        default: effortDefault,
+    const effortChoices: Array<{ name: string; value: string; disabled?: string }> = [
+      { name: 'Provider default', value: 'default' },
+    ];
+    if (adapter && !adapter.capabilities.effort) {
+      effortChoices.push({
+        name: `Configure effort (unavailable — ${agent} does not support effort)`,
+        value: 'unsupported-effort',
+        disabled: `${agent} does not support effort`,
       });
-      if (picked !== 'default') {
-        selectedEffort = picked;
+    } else if (effortLevels.length > 0) {
+      for (const level of effortLevels) {
+        effortChoices.push({ name: level, value: level });
       }
-    } else if (adapter && !adapter.capabilities.effort) {
-      console.log(`  ${skillId}: effort selection unavailable for ${agent} (provider capability disabled)`);
+    } else {
+      effortChoices.push({
+        name: `Configure effort (unavailable — no effort levels for model '${selectedModel}')`,
+        value: 'unsupported-effort',
+        disabled: `no effort levels for model '${selectedModel}'`,
+      });
+    }
+    const pickedEffort = await select({
+      message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
+      choices: effortChoices,
+      default: 'default',
+    });
+    if (pickedEffort !== 'default' && pickedEffort !== 'unsupported-effort') {
+      selectedEffort = pickedEffort;
+    }
+
+    let selectedSessionStrategy: string | undefined;
+    const sessionChoices: Array<{ name: string; value: string; disabled?: string }> = [
+      { name: 'Fresh per invocation (no session reuse)', value: 'fresh-per-invocation' },
+    ];
+    if (adapter && !adapter.capabilities.resumeSession) {
+      sessionChoices.push({
+        name: `Resume per skill (unavailable — ${agent} does not support session resumption)`,
+        value: 'unsupported-resume',
+        disabled: `${agent} does not support session resumption`,
+      });
+    } else if (adapter?.capabilities.resumeSession) {
+      sessionChoices.push({ name: 'Resume per skill (reuse last session)', value: 'resume-per-skill' });
+    }
+    const pickedSession = await select({
+      message: `Select session strategy for agent '${agent}' (skill '${skillId}'):`,
+      choices: sessionChoices,
+      default: 'fresh-per-invocation',
+    });
+    if (pickedSession !== 'fresh-per-invocation' && pickedSession !== 'unsupported-resume') {
+      selectedSessionStrategy = pickedSession;
     }
 
     runners[skillId] = {
       agent,
       model: selectedModel,
       ...(selectedEffort ? { effort: selectedEffort } : {}),
+      ...(selectedSessionStrategy ? { sessionStrategy: selectedSessionStrategy } : {}),
     };
   }
 

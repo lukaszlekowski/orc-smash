@@ -41,22 +41,23 @@ export async function statusAction(options: StatusOptions): Promise<CommandResul
   }
 }
 
-async function renderStatus(projectRoot: string, config: Config, options: StatusOptions): Promise<CommandResult> {
+/**
+ * Render the global status snapshot to the output. Shared between
+ * `orc status` and the interactive menu's `Display pipeline and project state`.
+ */
+export function renderStatusPanel(
+  projectRoot: string,
+  config: Config,
+  output: CliOutput,
+  opts?: { loop?: string; all?: boolean },
+): void {
   const loopKeys = Object.keys(config.manifest.loops);
-  const taskKeys = Object.keys(config.manifest.tasks ?? {});
-  if (loopKeys.length === 0 && taskKeys.length === 0) {
-    const msg = 'Error: no loops or tasks defined in manifest.';
-    options.output.error(msg);
-    return { exitCode: 1, message: msg };
-  }
-
   const { loopName: detectedLoop } = loopKeys.length > 0
     ? resolveDefaultLoop(projectRoot, config.manifest)
     : { loopName: '' };
   const loopSpec = config.manifest.loops[detectedLoop];
 
-  const globalStatusScan = scanAllForStatus(projectRoot, config.manifest);
-  const statusScan = globalStatusScan;
+  const statusScan = scanAllForStatus(projectRoot, config.manifest);
 
   let nextStepMessage: string;
   if (statusScan.interruptedStep) {
@@ -82,7 +83,7 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
 
   const panelCtx = buildPanelContext(
     projectRoot,
-    options.all ? 'all' : (options.loop ?? detectedLoop ?? 'all'),
+    opts?.all ? 'all' : (opts?.loop ?? detectedLoop ?? 'all'),
     0,
     5,
     null,
@@ -93,7 +94,18 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
     true,
   );
 
-  options.output.renderPanel(panelCtx);
+  output.renderPanel(panelCtx);
+}
 
+async function renderStatus(projectRoot: string, config: Config, options: StatusOptions): Promise<CommandResult> {
+  const loopKeys = Object.keys(config.manifest.loops);
+  const taskKeys = Object.keys(config.manifest.tasks ?? {});
+  if (loopKeys.length === 0 && taskKeys.length === 0) {
+    const msg = 'Error: no loops or tasks defined in manifest.';
+    options.output.error(msg);
+    return { exitCode: 1, message: msg };
+  }
+
+  renderStatusPanel(projectRoot, config, options.output, { loop: options.loop, all: options.all });
   return { exitCode: 0 };
 }

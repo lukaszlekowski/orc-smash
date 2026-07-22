@@ -36,7 +36,7 @@ export type BindingKind = 'loop' | 'task';
 
 export interface BindingEngineOptions {
   maxIterations: number;
-  globalOverrides?: { agent?: string; model?: string; effort?: string };
+  globalOverrides?: { agent?: string; model?: string; effort?: string; sessionStrategy?: string };
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
@@ -185,7 +185,22 @@ export async function runBinding(
     const predecessor = lastArtifact
       ?? history.find(item => item.meta.artifactIdentity === parentIdentityForLookup);
     const sessionStrategy = runner.sessionStrategy ?? (options.globalOverrides as any)?.sessionStrategy ?? 'fresh-per-invocation';
-    const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy, request.skillId);
+    // Build a combined artifact list from filesystem history AND in-memory
+    // steps so the backwards search can find same-skill predecessors written
+    // earlier in the current loop (e.g. evaluate A → repair B → evaluate A).
+    const inMemoryArtifacts = steps.map(s => ({
+      meta: {
+        chainId: s.chainId ?? context.chainId,
+        skill: s.skillId ?? s.role,
+        sessionId: s.sessionId ?? 'none',
+        agent: s.agent,
+        model: s.model,
+        effort: s.effort,
+      },
+      decision: s.decision,
+      completion: s.completionOutcome,
+    }));
+    const continuity = resolveContinuity(predecessor, runner, options.registry, sessionStrategy, request.skillId, [...history.map(h => ({ meta: { chainId: h.meta.chainId, skill: h.meta.skill, sessionId: h.meta.sessionId ?? 'none', agent: h.meta.agent, model: h.meta.model, effort: h.meta.effort }, decision: h.decision, completion: h.completion })), ...inMemoryArtifacts], context.chainId);
     // Prompt-semantic inputs are captured before the provider can mutate the
     // target or the referenced predecessor artifact.
     let inputFingerprint: string;
@@ -641,40 +656,42 @@ function initialRequest(
 
   const loop = binding as LoopBinding;
 
-  if (context.chainMode === 'ad-hoc' || context.chainMode === 'pipeline-start' || context.chainMode === 'second-opinion') {
-    return {
-      phase: 'evaluate',
-      version,
-      skillId: loop.evaluate.skill,
-      skill: config.manifest.skills[loop.evaluate.skill]!,
-      output: loop.evaluate.output,
-      priorArtifact: priorArtifactNone(),
-      parentArtifactIdentity: null,
-    };
-  }
+  if (!context.continue) {
+    if (context.chainMode === 'ad-hoc' || context.chainMode === 'pipeline-start' || context.chainMode === 'second-opinion') {
+      return {
+        phase: 'evaluate',
+        version,
+        skillId: loop.evaluate.skill,
+        skill: config.manifest.skills[loop.evaluate.skill]!,
+        output: loop.evaluate.output,
+        priorArtifact: priorArtifactNone(),
+        parentArtifactIdentity: null,
+      };
+    }
 
-  if (context.chainMode === 'stage-continuation') {
-    let prior = priorArtifactNone();
-    if (context.parentArtifactIdentity) {
-      const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
-      const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
-      if (predStep) {
-        try {
-          prior = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
-        } catch {
-          prior = priorArtifactNone();
+    if (context.chainMode === 'stage-continuation') {
+      let prior = priorArtifactNone();
+      if (context.parentArtifactIdentity) {
+        const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
+        const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
+        if (predStep) {
+          try {
+            prior = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
+          } catch {
+            prior = priorArtifactNone();
+          }
         }
       }
+      return {
+        phase: 'evaluate',
+        version,
+        skillId: loop.evaluate.skill,
+        skill: config.manifest.skills[loop.evaluate.skill]!,
+        output: loop.evaluate.output,
+        priorArtifact: prior,
+        parentArtifactIdentity: context.parentArtifactIdentity ?? null,
+      };
     }
-    return {
-      phase: 'evaluate',
-      version,
-      skillId: loop.evaluate.skill,
-      skill: config.manifest.skills[loop.evaluate.skill]!,
-      output: loop.evaluate.output,
-      priorArtifact: prior,
-      parentArtifactIdentity: context.parentArtifactIdentity ?? null,
-    };
   }
 
   const chainHistory = history.filter((item) => item.meta.chainId === context.chainId);
@@ -709,21 +726,49 @@ function initialRequest(
   };
 }
 
+/** Minimal artifact record for session-resume search. */
+interface ResumeRecord {
+  meta: { chainId?: string; skill: string; sessionId: string; agent: string; model: string; effort?: string };
+  decision?: string;
+  completion?: string;
+}
+
 function resolveContinuity(
   predecessor: PersistedArtifact | undefined,
   runner: Runner,
   registry: AgentRegistry,
-  sessionStrategy: string = 'fresh-per-invocation',
+  sessionStrategy: string,
   skillId: string,
+  allHistory: ResumeRecord[],
+  chainId: string,
 ): { mode: 'fresh' | 'resumed'; sessionId?: string } {
   if (sessionStrategy === 'fresh-per-invocation') return { mode: 'fresh' };
-  if (!predecessor) return { mode: 'fresh' };
-  if (predecessor.meta.skill !== skillId) return { mode: 'fresh' };
-  const sessionId = predecessor.meta.sessionId;
+
+  // Scope the search to the current chain only (same chainId).  Walk
+  // backwards through chain-scoped history and stop at an acceptance or
+  // second-opinion boundary so we never resume a session from a different
+  // run or across an approved/independent-review boundary.
+  const chainHistory = allHistory.filter(item => item.meta.chainId === chainId);
+  let candidate: ResumeRecord | undefined;
+  for (let i = chainHistory.length - 1; i >= 0; i--) {
+    const item = chainHistory[i]!;
+    if (item.meta.skill === skillId) {
+      candidate = item;
+      break;
+    }
+    // Stop walking at acceptance or second-opinion boundaries. A
+    // completion artifact (repair completed) is not a boundary — it is
+    // part of the normal loop cycle and should not stop the search.
+    if (item.decision === 'accepted') break;
+  }
+
+  if (!candidate || candidate.meta.skill !== skillId) return { mode: 'fresh' };
+
+  const sessionId = candidate.meta.sessionId;
   if (!sessionId || sessionId === 'none') return { mode: 'fresh' };
-  if (predecessor.meta.agent !== runner.agent
-    || predecessor.meta.model !== runner.model
-    || (predecessor.meta.effort ?? undefined) !== (runner.effort ?? undefined)) {
+  if (candidate.meta.agent !== runner.agent
+    || candidate.meta.model !== runner.model
+    || (candidate.meta.effort ?? undefined) !== (runner.effort ?? undefined)) {
     return { mode: 'fresh' };
   }
   let adapter;
@@ -774,7 +819,7 @@ function discoverArtifacts(projectRoot: string, bindingId: string, config: Confi
     mtime: step.mtime,
     meta: {
       loop: step.bindingId ?? bindingId,
-      skill: step.role,
+      skill: step.skillId ?? step.role,
       kind: step.kind,
       role: step.role,
       agent: step.agent,
@@ -797,6 +842,7 @@ function discoverArtifacts(projectRoot: string, bindingId: string, config: Confi
       parentArtifactIdentity: step.parentArtifactIdentity,
       effort: step.effort,
       provider: step.provider,
+      sessionStrategy: step.sessionStrategy,
     },
     decision: step.decision as any,
     completion: step.completionOutcome as any,
@@ -838,6 +884,7 @@ function allocateVersion(
 function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
   return {
     kind: request.phase,
+    skillId: request.skillId,
     role: request.skill.role,
     agent: item.meta.agent,
     model: item.meta.model,
@@ -863,5 +910,6 @@ function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
     parentArtifactIdentity: item.meta.parentArtifactIdentity,
     provider: item.meta.provider,
     effort: item.meta.effort,
+    sessionStrategy: item.meta.sessionStrategy,
   };
 }

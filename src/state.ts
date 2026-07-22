@@ -17,6 +17,7 @@ export type StepStatus = 'running' | 'done' | 'failed' | 'interrupted';
 
 export interface Step {
   kind: StepKind;
+  skillId?: string;
   bindingId?: string;
   bindingKind?: string;
   role: string;
@@ -52,6 +53,7 @@ export interface Step {
   parentArtifactIdentity?: string | null;
   effort?: string;
   provider?: string;
+  sessionStrategy?: string;
 }
 
 export interface GlobalSnapshot {

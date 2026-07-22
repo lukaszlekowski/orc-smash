@@ -86,12 +86,14 @@ describe('Model Efforts Resolver & Interactive Regression (m1)', () => {
   });
 
   describe('Interactive Prompts Behavior', () => {
-    it('does not prompt for effort and returns empty effort for a custom/unlisted model selection', async () => {
+    it('always shows effort prompt (with Provider default) and session strategy for a custom/unlisted model selection', async () => {
       vi.mocked(confirm).mockResolvedValueOnce(true); // Choose to customize
       vi.mocked(select)
         .mockResolvedValueOnce('opencode') // Select agent
-        .mockResolvedValueOnce('custom'); // Select custom model choice
-      
+        .mockResolvedValueOnce('custom') // Select custom model choice
+        .mockResolvedValueOnce('default') // Effort prompt (always shown, picks default)
+        .mockResolvedValueOnce('fresh-per-invocation'); // Session strategy
+
       vi.mocked(input).mockResolvedValueOnce('opencode-go/unlisted-custom-model'); // Enter custom model id
 
       const result = await promptRunners(
@@ -100,16 +102,17 @@ describe('Model Efforts Resolver & Interactive Regression (m1)', () => {
         createProductionAdapterRegistry()
       );
 
-      // Verify that select was called only twice (agent, model) and not a third time for effort
-      // Because effort levels is empty for unlisted custom model
-      expect(vi.mocked(select)).toHaveBeenCalledTimes(2);
+      // Select is called 4 times (agent, model, effort, session strategy).
+      // Effort is always shown with at least "Provider default" enabled.
+      expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
 
       // Verify result returns custom model and undefined effort
       expect(result).toEqual({
         implement: {
           agent: 'opencode',
           model: 'opencode-go/unlisted-custom-model',
-          effort: undefined
+          effort: undefined,
+          sessionStrategy: undefined,
         }
       });
     });
