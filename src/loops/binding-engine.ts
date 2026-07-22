@@ -27,7 +27,7 @@ import type { RunnerOverrideMap } from '../runner-overrides.js';
 import type { Step } from '../state.js';
 import { quarantineArtifact, quarantineInterruptedResume } from '../interrupted-artifact.js';
 import { validateImplementLedger } from '../implement-ledger.js';
-import { promptRunners } from '../interactive.js';
+import { promptRunners, promptIterationExtension } from '../interactive.js';
 import { makeRunEvent } from '../run-event.js';
 import { scanGlobalSnapshot } from '../artifact-index.js';
 
@@ -161,16 +161,9 @@ export async function runBinding(
   const initial = initialRequest(binding, bindingKind, history, version, config, context);
   let request: StepRequest | null = initial;
   let evaluationCount = 0;
+  const providerCallCount = { value: 0 };
 
   while (request) {
-    if (bindingKind === 'loop' && request.phase === 'evaluate' && evaluationCount >= options.maxIterations) {
-      const message = `Iteration budget exhausted after ${evaluationCount} evaluator rounds; the latest retry remains available for a later continuation.`;
-      return finish(
-        { kind: 'budget-exhausted', message, artifactPath: lastPath },
-        'retry',
-        message,
-      );
-    }
     if (request.phase === 'evaluate') evaluationCount += 1;
 
     const runner = runners[request.skillId];
@@ -226,6 +219,7 @@ export async function runBinding(
           maxIterations: options.maxIterations,
           ownership: options.ownership,
           runContext: context,
+          providerCallCount,
         },
         {
           runner,
@@ -413,6 +407,27 @@ export async function runBinding(
         return finish({ kind: 'blocked', message, artifactPath: lastPath }, 'blocked', message);
       }
       if (evaluationCount >= options.maxIterations) {
+        if (options.interactive) {
+          const extension = await promptIterationExtension(options.maxIterations, evaluationCount, providerCallCount.value);
+          if (extension !== 'return') {
+            const match = extension.match(/^extend-(\d+)$/);
+            if (match) {
+              const extra = parseInt(match[1]!, 10);
+              options.maxIterations += extra;
+              const repair = loopBinding!.repair;
+              request = {
+                phase: 'repair',
+                version: request.version,
+                skillId: repair.skill,
+                skill: config.manifest.skills[repair.skill]!,
+                output: repair.output,
+                priorArtifact: resolvePriorArtifact(outputPath, artifactIdentity, body),
+                parentArtifactIdentity: artifactIdentity,
+              };
+              continue;
+            }
+          }
+        }
         const message = `Iteration budget exhausted after ${evaluationCount} evaluator rounds; the latest retry remains available for a later continuation.`;
         return finish({ kind: 'budget-exhausted', message, artifactPath: lastPath }, 'retry', message);
       }

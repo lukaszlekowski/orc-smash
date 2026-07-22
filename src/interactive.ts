@@ -2,7 +2,7 @@ import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
 import { isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
-import type { TopMenuAction, LoopSubmenuItem, PipelineLaunchContext } from './stage-menu.js';
+import type { TopMenuAction, LoopSubmenuItem, PipelineLaunchContext, SuggestedStageAction } from './stage-menu.js';
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
   return select({
@@ -276,6 +276,62 @@ export async function promptRunners(
   }
 
   return runners;
+}
+
+// ---- F9: Suggested-stage prompts ----
+
+export async function promptCandidateSelection(
+  candidates: SuggestedStageAction[],
+): Promise<SuggestedStageAction | null> {
+  if (candidates.length === 0) return null;
+  const choices = candidates.map(c => {
+    const key = `${c.pipelineId}:${c.pipelineRunId}:${c.successorStageId}:${c.predecessorArtifactIdentity}`;
+    return { name: c.label, value: key };
+  });
+  choices.push({ name: 'Cancel (Go back)', value: 'cancel' });
+
+  const picked = await select({
+    message: 'Select a pipeline stage to advance:',
+    choices,
+  });
+  if (picked === 'cancel') return null;
+  return candidates.find(c => {
+    const key = `${c.pipelineId}:${c.pipelineRunId}:${c.successorStageId}:${c.predecessorArtifactIdentity}`;
+    return key === picked;
+  }) ?? null;
+}
+
+// ---- F10: Extension menu prompts ----
+
+export type ExtensionChoice = 'extend-3' | 'extend-5' | 'custom' | 'return';
+
+export async function promptIterationExtension(
+  currentBudget: number,
+  roundsUsed: number,
+  providerCalls: number,
+): Promise<ExtensionChoice> {
+  const result = await select({
+    message: `Iteration budget exhausted: Round ${roundsUsed}/${currentBudget} - provider calls ${providerCalls}. What would you like to do?`,
+    choices: [
+      { name: `Extend budget by 3 (new total: ${currentBudget + 3})`, value: 'extend-3' },
+      { name: `Extend budget by 5 (new total: ${currentBudget + 5})`, value: 'extend-5' },
+      { name: 'Set custom budget…', value: 'custom' },
+      { name: 'Return to menu (keep retry artifact for later)', value: 'return' },
+    ],
+  });
+  if (result === 'custom') {
+    const customVal = await input({
+      message: 'Enter new maximum iteration count:',
+      validate: (val: string) => {
+        const n = parseInt(val, 10);
+        if (isNaN(n) || n <= currentBudget) return `Must be greater than ${currentBudget}`;
+        return true;
+      },
+    });
+    const n = parseInt(customVal, 10);
+    return `extend-${n - currentBudget}` as ExtensionChoice;
+  }
+  return result as ExtensionChoice;
 }
 
 export async function promptPostRunRecovery(): Promise<'menu' | 'exit'> {

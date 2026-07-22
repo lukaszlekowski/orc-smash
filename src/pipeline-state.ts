@@ -115,6 +115,7 @@ export interface ArtifactIdentity {
 
 export interface Candidate {
   artifactIdentity: string;
+  pipelineId: string;
   pipelineRunId: string;
   successorStageId: string;
   predecessorStageId: string;
@@ -329,6 +330,7 @@ export function pipelineStageCandidates(
 
         candidates.push({
           artifactIdentity: pred.artifactIdentity,
+          pipelineId,
           pipelineRunId: pred.pipelineRunId!,
           successorStageId: nextStage.stageId,
           predecessorStageId: currentStage.stageId,

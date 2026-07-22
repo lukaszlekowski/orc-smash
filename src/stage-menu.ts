@@ -1,11 +1,22 @@
 import type { V1Manifest } from './manifest.js';
 
+// ---- F9: Candidate types ----
+
+export interface SuggestedStageAction {
+  pipelineId: string;
+  pipelineRunId: string;
+  successorStageId: string;
+  predecessorStageId: string;
+  predecessorArtifactIdentity: string;
+  label: string;
+}
+
 // ---- F7: Operator menu types and builders ----
 
 export interface TopMenuAction {
   id: string;
   label: string;
-  group: 'start-loop' | 'change-loop' | 'run-task' | 'display-status' | 'stop';
+  group: 'start-loop' | 'change-loop' | 'run-task' | 'start-suggested-stage' | 'display-status' | 'stop';
   disabledReason?: string;
 }
 
@@ -69,6 +80,13 @@ export function buildTopLevelMenu(
     label: 'Change loop',
     group: 'change-loop',
     disabledReason: hasLoops ? undefined : 'No loops configured in manifest',
+  });
+
+  actions.push({
+    id: 'start-suggested-stage',
+    label: 'Start suggested stage',
+    group: 'start-suggested-stage',
+    disabledReason: 'No eligible pipeline stage candidates',
   });
 
   actions.push({

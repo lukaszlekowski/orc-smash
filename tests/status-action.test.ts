@@ -8,6 +8,7 @@ import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
+import { captureTargetFingerprint } from '../src/target-snapshot.js';
 
 describe('generic status snapshot', () => {
   const project = resolve(process.cwd(), 'temp-status-action');
@@ -89,5 +90,133 @@ describe('generic status snapshot', () => {
     await statusAction({ project, output });
     expect(panel.nextStepMessage).toContain('Binding plan v3 was interrupted');
     expect(panel.timeline.some((step: any) => step.status === 'interrupted')).toBe(true);
+  });
+
+  it('renders pipeline suggestions in nextStepMessage when a stage is completed', async () => {
+    const planPath = join(project, 'docs/dev/plan.md');
+    writeFileSync(planPath, '# Plan\n');
+    const config = loadConfig(project);
+    const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+
+    const meta = makeV1ArtifactMeta({
+      version: 1,
+      agent: 'fake',
+      provider: 'fake',
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'test-run-123',
+      stageId: 'plan',
+      chainId: 'c1',
+      chainMode: 'pipeline-start',
+      resultFingerprint: fingerprint,
+    });
+
+    writeArtifactWithMeta(
+      join(project, 'docs/dev/plan-audit-v1-fake.md'),
+      '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+      meta,
+    );
+
+    await statusAction({ project, output });
+    expect(panel.nextStepMessage).toContain('=== Eligible Pipeline Suggestions ===');
+    expect(panel.nextStepMessage).toContain('Suggested Stage: implement');
+    expect(panel.nextStepMessage).toContain('Pipeline: default');
+    expect(panel.nextStepMessage).toContain('Run ID: test-run-123');
+    expect(panel.nextStepMessage).toContain('Predecessor Stage: plan');
+    expect(panel.nextStepMessage).toContain('Completion Artifact:');
+    expect(panel.nextStepMessage).toContain('Artifact Identity:');
+    expect(panel.nextStepMessage).toContain('Decision/Outcome: accepted');
+    expect(panel.nextStepMessage).toContain('Fingerprint Match:');
+    expect(panel.nextStepMessage).toContain('(valid)');
+  });
+
+  it('renders stale pipeline suggestions with drift explanation when target is modified', async () => {
+    const planPath = join(project, 'docs/dev/plan.md');
+    writeFileSync(planPath, '# Plan\n');
+
+    const meta = makeV1ArtifactMeta({
+      version: 1,
+      agent: 'fake',
+      provider: 'fake',
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'test-run-123',
+      stageId: 'plan',
+      chainId: 'c1',
+      chainMode: 'pipeline-start',
+      resultFingerprint: 'some-stale-hash-123',
+    });
+
+    writeArtifactWithMeta(
+      join(project, 'docs/dev/plan-audit-v1-fake.md'),
+      '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+      meta,
+    );
+
+    await statusAction({ project, output });
+    expect(panel.nextStepMessage).toContain('=== Unavailable Pipeline Suggestions (Stale) ===');
+    expect(panel.nextStepMessage).toContain('Suggested Stage: implement [STALE DRIFT]');
+    expect(panel.nextStepMessage).toContain('Recorded Fingerprint: some-stale-hash-123');
+    expect(panel.nextStepMessage).toContain('Current Fingerprint:');
+  });
+
+  it('renders concurrently eligible runs in stable order', async () => {
+    const planPath = join(project, 'docs/dev/plan.md');
+    writeFileSync(planPath, '# Plan\n');
+    const config = loadConfig(project);
+    const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+
+    const metaB = makeV1ArtifactMeta({
+      version: 1,
+      agent: 'fake',
+      provider: 'fake',
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'run-BBB',
+      stageId: 'plan',
+      chainId: 'c-bbb',
+      chainMode: 'pipeline-start',
+      resultFingerprint: fingerprint,
+    });
+
+    writeArtifactWithMeta(
+      join(project, 'docs/dev/plan-audit-v1-fake.md'),
+      '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+      metaB,
+    );
+
+    const metaA = makeV1ArtifactMeta({
+      version: 1,
+      agent: 'opencode',
+      provider: 'opencode',
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'run-AAA',
+      stageId: 'plan',
+      chainId: 'c-aaa',
+      chainMode: 'pipeline-start',
+      resultFingerprint: fingerprint,
+    });
+
+    writeArtifactWithMeta(
+      join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+      '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+      metaA,
+    );
+
+    await statusAction({ project, output });
+    const idxA = panel.nextStepMessage.indexOf('Run ID: run-AAA');
+    const idxB = panel.nextStepMessage.indexOf('Run ID: run-BBB');
+    expect(idxA).toBeGreaterThan(-1);
+    expect(idxB).toBeGreaterThan(-1);
+    expect(idxA).toBeLessThan(idxB); // AAA is sorted before BBB
   });
 });

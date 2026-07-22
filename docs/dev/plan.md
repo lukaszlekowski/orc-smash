@@ -1,13 +1,13 @@
 ---
 confidence: 0.95
-status: r2-complete
+status: r3-complete
 source: docs/dev/research.md
 ---
 
 # Plan: Config-Driven Approval Loops, Tasks, Pipelines, and Continuity
 
-> **Release status:** R2 is implemented, verified, and approved. R3 remains
-> deferred.
+> **Release status:** R3 (F9 pipeline suggestions + F10 iteration-extension menu)
+> is fully implemented and verified. All test suites pass. R3 is now complete.
 
 ## Architectural Decision
 
@@ -1366,4 +1366,5 @@ timeout/interruption behavior are unchanged from today.
 |---|---|
 | 2026-07-21 | Initial plan (R1: F1–F6 + Pipeline Identity + F11 portion) |
 | 2026-07-21 | R2 implemented: F7 (operator menus with top-level/submenu), F8 (per-skill continuity via adapter capabilities), F11 R2 portion (mode-specific recovery through new menus). Plan status → `r2-complete`. |
-| | R2 closed. R3 (F9, F10) deferred. |
+| 2026-07-22 | R2 independently approved and closed. R3 (F9 pipeline suggestions and F10 iteration-budget extension) is now the active implementation focus. Plan status → `r3-active`. |
+| 2026-07-22 | R3 implemented: F9 (pipeline suggestion logic consuming existing `eligibleNextStages`, `Start suggested stage` menu action with candidate selection, status rendering), F10 (extension menu on final-round retry with extend-by-3/5/custom/return, interactive budget extension). Plan status → `r3-complete`. |

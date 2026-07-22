@@ -1,3 +1,8 @@
+import { captureTargetFingerprint } from './target-snapshot.js';
+import type { V1Manifest } from './manifest.js';
+import { eligibleNextStages, pipelineStageCandidates } from './pipeline-state.js';
+import type { Candidate } from './pipeline-state.js';
+import { scanGlobalSnapshot } from './state.js';
 
 /**
  * Single source of truth for next-step / restart decisions.
@@ -9,6 +14,9 @@
  * `resolveNextStep(...)` returns enough data for both runtime flow
  * (`nextSkill` / `repairVersion` / `nextEvaluateVersion`) and status messaging
  * (`state` / `nextEvaluateVersion`), so the status panel and the loop cannot drift.
+ *
+ * F9: `pipelineSuggestions(...)` returns the ordered collection of explainable
+ * next-stage candidates for display and operator selection.
  */
 
 export type NextStepState = 'fresh' | 'rejected' | 'accepted' | 'unknown-latest-evaluation';
@@ -45,7 +53,6 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
 
   switch (latestDecision) {
     case 'retry':
-      // The repair fixes the rejected version (same N); the next evaluation is N+1.
       return {
         state: 'rejected',
         nextSkill: 'repair',
@@ -54,7 +61,6 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
         priorArtifactPath: latestArtifactPath
       };
     case 'accepted':
-      // Accepted round closes; the next round's evaluation is N+1.
       return {
         state: 'accepted',
         nextSkill: 'evaluate',
@@ -63,7 +69,6 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
         priorArtifactPath: latestArtifactPath
       };
     default:
-      // 'unknown' (or anomalous null): terminal — no next skill advances the loop.
       return {
         state: 'unknown-latest-evaluation',
         nextSkill: null,
@@ -72,4 +77,84 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
         priorArtifactPath: latestArtifactPath
       };
   }
+}
+
+// ---- F9: Pipeline suggestion logic ----
+
+/**
+ * Compute fingerprint snapshots for every binding target across all pipelines.
+ * Used by the eligibility predicate to check staleness.
+ */
+function buildTargetSnapshots(projectRoot: string, manifest: V1Manifest): Map<string, string> {
+  const snapshots = new Map<string, string>();
+  for (const [pipelineId, pipeline] of Object.entries(manifest.pipelines ?? {})) {
+    for (const stage of pipeline.stages) {
+      const bindingId = stage.loop ?? stage.task;
+      if (!bindingId) continue;
+      const binding = manifest.loops[bindingId] ?? manifest.tasks?.[bindingId];
+      if (!binding) continue;
+      const fingerprint = captureTargetFingerprint(projectRoot, binding.target, manifest);
+      snapshots.set(`${pipelineId}:${stage.stageId}`, fingerprint);
+    }
+  }
+  return snapshots;
+}
+
+/**
+ * Return the ordered collection of explainable next-stage candidates for
+ * every pipeline, consuming the R1 eligibility predicate.
+ *
+ * Each candidate carries the evidence (decision, completion, staleness) needed
+ * for the status display and the operator's `Start suggested stage` selection.
+ */
+export function pipelineSuggestions(
+  projectRoot: string,
+  manifest: V1Manifest,
+): Candidate[] {
+  const snapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const artifacts = snapshot.steps.map(s => ({
+    artifactIdentity: s.artifactIdentity ?? '',
+    pipelineId: s.pipelineId ?? null,
+    pipelineRunId: s.pipelineRunId ?? null,
+    stageId: s.stageId ?? null,
+    chainId: s.chainId ?? '',
+    chainMode: (s.chainMode ?? null) as any,
+    parentArtifactIdentity: s.parentArtifactIdentity ?? null,
+    resultFingerprint: s.resultFingerprint ?? '',
+    artifactPath: s.artifactPath,
+    decision: s.decision,
+    completionOutcome: s.completionOutcome,
+    contractValid: !s.unclassified,
+    version: s.version,
+  }));
+  const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
+  return eligibleNextStages(artifacts, manifest, targetSnapshots);
+}
+
+/**
+ * Return ALL pipeline stage candidates (including stale ones) for status
+ * display, so the operator can see why a suggestion is unavailable.
+ */
+export function allPipelineCandidates(
+  projectRoot: string,
+  manifest: V1Manifest,
+): Candidate[] {
+  const snapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const artifacts = snapshot.steps.map(s => ({
+    artifactIdentity: s.artifactIdentity ?? '',
+    pipelineId: s.pipelineId ?? null,
+    pipelineRunId: s.pipelineRunId ?? null,
+    stageId: s.stageId ?? null,
+    chainId: s.chainId ?? '',
+    chainMode: (s.chainMode ?? null) as any,
+    parentArtifactIdentity: s.parentArtifactIdentity ?? null,
+    resultFingerprint: s.resultFingerprint ?? '',
+    artifactPath: s.artifactPath,
+    decision: s.decision,
+    completionOutcome: s.completionOutcome,
+    contractValid: !s.unclassified,
+    version: s.version,
+  }));
+  const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
+  return pipelineStageCandidates(artifacts, manifest, targetSnapshots);
 }

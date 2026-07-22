@@ -24,7 +24,10 @@ export function captureTargetSnapshot(
     : resolve(projectRoot, target.path);
 
   if (!existsSync(targetPath)) {
-    throw new Error(`Target '${target.path}' does not exist in project '${projectRoot}'.`);
+    if (target.kind === 'file') {
+      return `file\n${relative(projectRoot, targetPath)}\nmissing`;
+    }
+    return `worktree\nmissing`;
   }
 
   if (target.kind === 'file') {
