@@ -1,103 +1,163 @@
-import type { Step, StepKind } from './state.js';
+import type { V1Manifest } from './manifest.js';
 
-export type SessionPolicy = 'new' | 'resumed';
+// ---- F7: Operator menu types and builders ----
 
-export interface StageAction {
+export interface TopMenuAction {
   id: string;
-  group: 'start-new' | 'continue' | 'run-one-step';
-  stage: 'evaluate' | 'repair' | 'task' | 'stop';
-  version: number;
-  sessionPolicy: SessionPolicy | { repair: SessionPolicy; evaluate: SessionPolicy };
-  sessionId?: string;
-  provider?: string;
-  model?: string;
-  oneOff?: boolean;
   label: string;
-  recommended: boolean;
+  group: 'start-loop' | 'change-loop' | 'run-task' | 'display-status' | 'stop';
   disabledReason?: string;
 }
 
-export type MenuPhase = 'fresh' | 'retry-pending' | 'repair-complete' | 'accepted' | 'task-complete';
-
-export interface LoopMenuState {
-  phase: MenuPhase;
-  latestVersion: number;
-  pendingRepairVersion: number | null;
-  decisionPoint: 'startup' | 'in-loop';
-  loopName: string;
+export interface LoopSubmenuItem {
+  id: 'continue-current-loop' | 'start-fresh-loop' | 'run-second-opinion' | 'back';
+  label: string;
+  disabledReason?: string;
+  recommended: boolean;
 }
 
-/** Build generic actions for a configured two-step approval binding. */
-export function buildStageActions(input: LoopMenuState): { actions: StageAction[]; recommendedId: string } {
-  const version = input.latestVersion + 1;
-  const repairVersion = input.pendingRepairVersion ?? input.latestVersion;
-  const actions: StageAction[] = [
-    {
-      id: 'start-new',
-      group: 'start-new',
-      stage: 'evaluate',
-      version,
-      sessionPolicy: 'new',
-      label: `Start ${input.loopName} evaluation v${version} with a fresh session`,
-      recommended: input.phase === 'fresh' || input.phase === 'accepted',
-    },
-    {
-      id: 'run-evaluate',
-      group: 'run-one-step',
-      stage: 'evaluate',
-      version,
-      sessionPolicy: 'new',
-      oneOff: true,
-      label: `Run ${input.loopName} evaluation v${version}`,
-      recommended: false,
-    },
-  ];
+export interface PipelineLaunchContext {
+  pipelineId: string;
+  stageId: string;
+  label: string;
+}
 
-  if (input.phase === 'retry-pending') {
-    actions.unshift({
-      id: 'continue-repair',
-      group: 'continue',
-      stage: 'repair',
-      version: repairVersion,
-      sessionPolicy: { repair: 'new', evaluate: 'new' },
-      label: `Repair ${input.loopName} v${repairVersion}, then evaluate v${repairVersion + 1}`,
-      recommended: true,
+/**
+ * Build the top-level interactive menu from the manifest. Every action stays
+ * visible; unavailable ones carry a concrete disabledReason.
+ * @param missingInputs per-binding missing project files (keyed by binding id)
+ */
+export function buildTopLevelMenu(
+  manifest: V1Manifest,
+  missingInputs?: Map<string, string[]>,
+): TopMenuAction[] {
+  const hasLoops = Object.keys(manifest.loops).length > 0;
+  const hasTasks = Object.keys(manifest.tasks ?? {}).length > 0;
+
+  const actions: TopMenuAction[] = [];
+
+  actions.push({
+    id: 'start-loop',
+    label: 'Start loop',
+    group: 'start-loop',
+    disabledReason: hasLoops ? undefined : 'No loops configured in manifest',
+  });
+
+  if (hasTasks) {
+    for (const taskId of Object.keys(manifest.tasks!)) {
+      const taskMissing = missingInputs?.get(taskId);
+      actions.push({
+        id: `task:${taskId}`,
+        label: `Execute one-off task: ${taskId}`,
+        group: 'run-task',
+        disabledReason: taskMissing && taskMissing.length > 0
+          ? `Missing project input${taskMissing.length > 1 ? 's' : ''}: ${taskMissing.join(', ')}`
+          : undefined,
+      });
+    }
+  } else {
+    actions.push({
+      id: 'run-task',
+      label: 'Execute one-off task',
+      group: 'run-task',
+      disabledReason: 'No tasks configured in manifest',
     });
   }
 
-  return {
-    actions,
-    recommendedId: actions.find((action) => action.recommended)?.id ?? actions[0]!.id,
-  };
+  actions.push({
+    id: 'change-loop',
+    label: 'Change loop',
+    group: 'change-loop',
+    disabledReason: hasLoops ? undefined : 'No loops configured in manifest',
+  });
+
+  actions.push({
+    id: 'display-status',
+    label: 'Display pipeline and project state',
+    group: 'display-status',
+  });
+
+  actions.push({
+    id: 'stop',
+    label: 'Stop for manual review',
+    group: 'stop',
+  });
+
+  return actions;
 }
 
-export function findResumableSession(
-  steps: Step[],
-  kinds: StepKind[],
-  agent: string,
-  model: string,
-  opts?: { stopAtAccepted?: boolean; effort?: string },
-): { sessionId: string; version: number; kind: StepKind; provider: string; model: string } | null {
-  const stopAtAccepted = opts?.stopAtAccepted !== false;
-  if (stopAtAccepted && steps.some((step) => step.decision === 'accepted')) return null;
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    const step = steps[index]!;
-    if (
-      kinds.includes(step.kind) &&
-      step.agent === agent &&
-      step.model === model &&
-      (opts?.effort === undefined || step.effort === opts.effort) &&
-      step.sessionId &&
-      step.sessionId !== 'none'
-    ) {
-      return {
-        sessionId: step.sessionId,
-        version: step.version,
-        kind: step.kind,
-        provider: step.agent,
-        model: step.model,
-      };
+/**
+ * Build the loop submenu actions for a given loop binding.
+ * Every action remains visible; unavailable ones carry a concrete reason.
+ * @param loopMissingInputs project files that are missing for this binding
+ * @param continueDetail optional next-step info to enrich the Continue label
+ */
+export function buildLoopSubmenu(
+  loopName: string,
+  hasInProgressChain: boolean,
+  hasSecondOpinionTarget: boolean,
+  loopMissingInputs?: string[],
+  continueDetail?: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string },
+): LoopSubmenuItem[] {
+  const freshDisabledReason = loopMissingInputs && loopMissingInputs.length > 0
+    ? `Missing project input${loopMissingInputs.length > 1 ? 's' : ''}: ${loopMissingInputs.join(', ')}`
+    : undefined;
+
+  const continueLabel = continueDetail
+    ? `Continue current ${loopName} loop (next: ${continueDetail.skillId} ${continueDetail.phase} v${continueDetail.version}, ${continueDetail.agent}/${continueDetail.model}${continueDetail.effort ? `/${continueDetail.effort}` : ''}${continueDetail.sessionStrategy ? `, ${continueDetail.sessionStrategy}` : ''})`
+    : `Continue current ${loopName} loop`;
+
+  return [
+    {
+      id: 'continue-current-loop',
+      label: continueLabel,
+      disabledReason: hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0)
+        ? undefined
+        : (hasInProgressChain ? freshDisabledReason : 'No in-progress loop to continue'),
+      recommended: hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0),
+    },
+    {
+      id: 'start-fresh-loop',
+      label: `Start fresh ${loopName} loop`,
+      disabledReason: freshDisabledReason,
+      recommended: !hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0),
+    },
+    {
+      id: 'run-second-opinion',
+      label: `Run second opinion for ${loopName}`,
+      disabledReason: hasSecondOpinionTarget ? undefined : 'No completed loop to review',
+      recommended: false,
+    },
+    {
+      id: 'back',
+      label: 'Back to main menu',
+      recommended: false,
+    },
+  ];
+}
+
+/**
+ * Determine if a binding is a first-stage reference in any configured pipeline.
+ * Returns all the pipeline launch contexts where the binding is stage 0.
+ */
+export function pipelineLaunchContexts(
+  manifest: V1Manifest,
+  bindingId: string,
+  kind: 'loop' | 'task',
+): PipelineLaunchContext[] {
+  const contexts: PipelineLaunchContext[] = [];
+  for (const [pipelineId, pipeline] of Object.entries(manifest.pipelines ?? {})) {
+    const firstStage = pipeline.stages[0];
+    if (!firstStage) continue;
+    const isFirst = (kind === 'loop' && firstStage.loop === bindingId)
+      || (kind === 'task' && firstStage.task === bindingId);
+    if (isFirst) {
+      contexts.push({
+        pipelineId,
+        stageId: firstStage.stageId,
+        label: `Pipeline: ${pipelineId} (stage: ${firstStage.stageId})`,
+      });
     }
   }
-  return null;
+  return contexts;
 }

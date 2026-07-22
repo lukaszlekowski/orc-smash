@@ -5,6 +5,11 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import { loadManifest, type V1Manifest } from './manifest.js';
 
+/** Supported session strategies. */
+export const SESSION_STRATEGIES = ['fresh-per-invocation', 'resume-per-skill'] as const;
+export type SessionStrategy = typeof SESSION_STRATEGIES[number];
+const SessionStrategySchema = z.enum(SESSION_STRATEGIES);
+
 export interface ModelRegistry {
   providers: Record<string, {
     models: string[];
@@ -14,7 +19,7 @@ export interface ModelRegistry {
     modelEfforts?: Record<string, string[]>;
   }>;
   defaultProfile: string;
-  profiles: Record<string, { provider: string; model?: string; effort?: string }>;
+  profiles: Record<string, { provider: string; model?: string; effort?: string; sessionStrategy?: SessionStrategy }>;
   timeouts?: { opencode?: number; claude?: number; codex?: number; agy?: number };
 }
 
@@ -27,7 +32,7 @@ export const ModelRegistrySchema = z.object({
     modelEfforts: z.record(z.string(), z.array(z.string()).min(1)).optional(),
   }).strict()),
   defaultProfile: z.string(),
-  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional(), effort: z.string().optional() }).strict()),
+  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional(), effort: z.string().optional(), sessionStrategy: SessionStrategySchema.optional() }).strict()),
   timeouts: z.object({
     opencode: z.number().int().nonnegative().optional(),
     claude: z.number().int().nonnegative().optional(),
@@ -98,7 +103,7 @@ const ProviderCatalogSchema = z.object({
 
 const RunnersSchema = z.object({
   defaultProfile: z.string(),
-  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional(), effort: z.string().optional() }).strict())
+  profiles: z.record(z.string(), z.object({ provider: z.string(), model: z.string().optional(), effort: z.string().optional(), sessionStrategy: SessionStrategySchema.optional() }).strict())
 }).strict();
 
 const TimeoutsSchema = z.object({

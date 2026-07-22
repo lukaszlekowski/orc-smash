@@ -8,7 +8,7 @@ import type { AgentRegistry } from '../src/adapters/registry.js';
 import type { RunEvent } from '../src/run-event.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 
@@ -18,6 +18,9 @@ vi.mock('../src/interactive.js', () => {
     promptMaxIterations: vi.fn(),
     promptPostRunRecovery: vi.fn(),
     promptRunners: vi.fn(),
+    promptTopLevelMenu: vi.fn(),
+    promptLoopSubmenu: vi.fn(),
+    promptPipelineLaunchContext: vi.fn(),
   };
 });
 
@@ -149,8 +152,15 @@ describe('generic smash dispatch', () => {
       Object.assign(process.env, savedEnv);
     });
 
+    function mockInteractiveStartup(loopId = 'plan'): void {
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-loop');
+      vi.mocked(promptLoopSelect).mockResolvedValueOnce(loopId);
+      vi.mocked(promptLoopSubmenu).mockResolvedValueOnce('start-fresh-loop');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
+    }
+
     it('Interactive mode: successful run followed by menu choice exit', async () => {
-      vi.mocked(promptLoopSelect).mockResolvedValueOnce('plan');
+      mockInteractiveStartup();
       vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
@@ -164,17 +174,21 @@ describe('generic smash dispatch', () => {
       } as any);
 
       expect(result.exitCode).toBe(0);
-      expect(promptLoopSelect).toHaveBeenCalledTimes(1);
+      expect(promptTopLevelMenu).toHaveBeenCalledTimes(1);
+      expect(promptLoopSubmenu).toHaveBeenCalledTimes(1);
       expect(promptMaxIterations).toHaveBeenCalledTimes(1);
       expect(promptPostRunRecovery).toHaveBeenCalledTimes(1);
     });
 
     it('Interactive mode: provider failure followed by menu choice menu then exit', async () => {
-      vi.mocked(promptLoopSelect).mockResolvedValue('plan');
-      vi.mocked(promptMaxIterations).mockResolvedValue(4);
-      vi.mocked(promptPostRunRecovery)
-        .mockResolvedValueOnce('menu') // Loops back
-        .mockResolvedValueOnce('exit'); // Exits
+      // First run
+      mockInteractiveStartup();
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('menu');
+      // Second run
+      mockInteractiveStartup();
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
       // Mock failure adapter
       const adapter: AgentAdapter = {
@@ -193,7 +207,8 @@ describe('generic smash dispatch', () => {
       } as any);
 
       expect(result.exitCode).toBe(1);
-      expect(promptLoopSelect).toHaveBeenCalledTimes(2);
+      expect(promptTopLevelMenu).toHaveBeenCalledTimes(2);
+      expect(promptLoopSubmenu).toHaveBeenCalledTimes(2);
       expect(promptMaxIterations).toHaveBeenCalledTimes(2);
       expect(promptPostRunRecovery).toHaveBeenCalledTimes(2);
     });
@@ -206,13 +221,20 @@ describe('generic smash dispatch', () => {
       const planPath = join(project, 'docs/dev/plan.md');
       if (existsSync(planPath)) unlinkSync(planPath);
 
-      // Create a mock that restores the file during the second call of the prompt/retry loop!
-      vi.mocked(promptLoopSelect)
-        .mockResolvedValueOnce('plan') // First call (preflight fails)
-        .mockImplementationOnce(async () => {
-          writeFileSync(planPath, '# Plan\n'); // Second call (preflight succeeds)
-          return 'plan';
-        });
+      // First call (preflight fails)
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-loop');
+      vi.mocked(promptLoopSelect).mockResolvedValueOnce('plan');
+      vi.mocked(promptLoopSubmenu).mockResolvedValueOnce('start-fresh-loop');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
+
+      // Create a mock that restores the file during the second call
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-loop');
+      vi.mocked(promptLoopSelect).mockImplementationOnce(async () => {
+        writeFileSync(planPath, '# Plan\n');
+        return 'plan';
+      });
+      vi.mocked(promptLoopSubmenu).mockResolvedValueOnce('start-fresh-loop');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
 
       const adapter = scriptedAdapter();
       const result = await smashAction({
@@ -224,12 +246,13 @@ describe('generic smash dispatch', () => {
       } as any);
 
       expect(result.exitCode).toBe(0);
-      // It should have failed the first resolution/validation, retry: true, and succeeded in the next iteration
+      expect(promptTopLevelMenu).toHaveBeenCalledTimes(2);
       expect(promptLoopSelect).toHaveBeenCalledTimes(2);
+      expect(promptLoopSubmenu).toHaveBeenCalledTimes(2);
     });
 
     it('Interactive mode: safety-critical ownership failure (exits directly without prompting recovery)', async () => {
-      vi.mocked(promptLoopSelect).mockResolvedValue('plan');
+      mockInteractiveStartup();
       vi.mocked(promptMaxIterations).mockResolvedValue(4);
 
       // Trigger safety critical ownership mismatch (ambiguous mode)
@@ -401,6 +424,149 @@ describe('generic smash dispatch', () => {
       expect(result.exitCode).toBe(1);
       expect(result.message).toContain('Output flush failed');
       expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('F7 Continue wiring', () => {
+    const continueProject = resolve(process.cwd(), 'temp-smash-continue');
+    const output = createMockOutput();
+
+    beforeEach(() => {
+      delete process.env.ORC_RUN_ID;
+      delete process.env.ORC_RUN_TOKEN;
+      delete process.env.ORC_RUN_STATE_DIR;
+      createTempDir('temp-smash-continue');
+      mkdirSync(join(continueProject, 'docs/dev'), { recursive: true });
+      writeFileSync(join(continueProject, 'docs/dev/plan.md'), '# Plan\n');
+      writeFileSync(join(continueProject, '.orc-smash.yaml'), JSON.stringify({
+        schemaVersion: 1,
+        roles: { testRole: 'roles/testRole.md' },
+        skills: {
+          evaluate: { file: 'skills/evaluate.md', role: 'testRole', runnerProfile: 'audit' },
+          repair: { file: 'skills/repair.md', role: 'testRole', runnerProfile: 'repairProfile' },
+        },
+        loops: {
+          test: {
+            type: 'approval-loop',
+            target: { path: 'docs/dev/plan.md', kind: 'file' },
+            inputs: [{ source: 'target' }, { source: 'version' }, { source: 'outputPath' }],
+            evaluate: {
+              skill: 'evaluate',
+              output: { pattern: 'docs/dev/audit-v{version}-{provider}.md', contract: 'decision-artifact', decision: { heading: 'Verdict', accepted: 'YES', retry: 'NO' } },
+            },
+            repair: {
+              skill: 'repair',
+              output: { pattern: 'docs/dev/repair-v{version}-{provider}.md', contract: 'completion-artifact' },
+            },
+          },
+        },
+        tasks: {},
+        pipelines: {},
+      }));
+      mkdirSync(join(continueProject, 'roles'), { recursive: true });
+      mkdirSync(join(continueProject, 'skills'), { recursive: true });
+      writeFileSync(join(continueProject, 'roles/testRole.md'), '# Role\n');
+      writeFileSync(join(continueProject, 'skills/evaluate.md'), '# Evaluate\n');
+      writeFileSync(join(continueProject, 'skills/repair.md'), '# Repair\n');
+    });
+
+    afterEach(() => {
+      removeTempDir(continueProject);
+    });
+
+    it('Continue label shows the distinct repair runner tuple which matches execution', async () => {
+      const { loadConfig, DEFAULT_REGISTRY } = await import('../src/config.js');
+      const { runLoop } = await import('../src/loop.js');
+
+      // Inject BEFORE first loadConfig so the profile is available to both
+      // the test config and the smashAction config.
+      DEFAULT_REGISTRY.profiles['repairProfile'] = { provider: 'codex', model: 'codex-model' };
+      const config = loadConfig(continueProject);
+      let evalCalls = 0;
+      const evalAdapter: AgentAdapter = {
+        name: 'opencode', capabilities: { resumeSession: true, effort: true },
+        buildRun: () => ({ command: 'eval', args: [] }),
+        run: async (input) => {
+          if (input.kind === 'repair') return { stdout: 'done', exitCode: 0, sessionId: 's' };
+          const m = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+          if (!m?.[1]) return { stdout: 'done', exitCode: 0, sessionId: 's' };
+          mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+          evalCalls++;
+          writeFileSync(resolve(input.cwd, m[1].trim()),
+            evalCalls <= 1 ? '# Evaluation\n\n## Verdict\n\nNO\n' : '# Evaluation\n\n## Verdict\n\nYES\n');
+          return { stdout: 'done', exitCode: 0, sessionId: 's' };
+        },
+      };
+      const repairAdapter: AgentAdapter = {
+        name: 'codex', capabilities: { resumeSession: true, effort: true },
+        buildRun: () => ({ command: 'repair', args: [] }),
+        run: async (input) => {
+          const m = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+          if (!m?.[1]) return { stdout: 'done', exitCode: 0, sessionId: 's' };
+          mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+          writeFileSync(resolve(input.cwd, m[1].trim()), '# Repair\n\n## Outcome\n\nCOMPLETED\n');
+          return { stdout: 'done', exitCode: 0, sessionId: 'codex-repair' };
+        },
+      };
+      const dualReg: AgentRegistry = {
+        adapters: new Map([['opencode', evalAdapter], ['codex', repairAdapter]]),
+      };
+
+      // Phase 1: retry-pending evaluate via opencode with codex configured for repair
+      await runLoop(
+        continueProject, 'test', config.manifest.loops.test!, config,
+        { evaluate: { agent: 'opencode', model: MODEL }, repair: { agent: 'codex', model: 'codex-model' } },
+        { maxIterations: 1, registry: dualReg, output, interactive: false },
+      );
+
+      // Phase 2: mock Continue via smashAction
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-loop');
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptLoopSubmenu).mockResolvedValueOnce('continue-current-loop');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      // Verify the profile is in a fresh loadConfig (as smashAction would do)
+      const { loadConfig: lc } = await import('../src/config.js');
+      const testCfg = lc(continueProject);
+      console.log('Second loadConfig has repairProfile:', testCfg.registry.profiles['repairProfile']);
+
+      // Don't pass agent/model globally — that would override the repair
+      // profile via resolveWithGlobalOverrides.  Leave runner resolution to
+      // profiles (mock promptRunners so the interactive flow can complete).
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        evaluate: { agent: 'opencode', model: MODEL },
+        repair: { agent: 'codex', model: 'codex-model' },
+      });
+
+      const result = await smashAction({
+        project: continueProject,
+        output, createAdapterRegistry: () => dualReg,
+      } as any);
+
+      if (result.exitCode !== 0) {
+        console.log('Continue test failed:', result.message);
+        console.log('evalCalls:', evalCalls);
+      }
+      expect(result.exitCode).toBe(0);
+
+      // Assert the Continue label names the repair skill AND the distinct
+      // codex/codex-model runner tuple (not the evaluate's opencode/MODEL).
+      const afterCalls = vi.mocked(promptLoopSubmenu).mock.calls;
+      expect(afterCalls.length).toBeGreaterThanOrEqual(1);
+      const items: any[] = afterCalls[0]![0] ?? [];
+      const continueItem = items.find((c: any) => c.id === 'continue-current-loop');
+      expect(continueItem).toBeTruthy();
+      expect(continueItem.label).toContain('repair');
+      expect(continueItem.label).toContain('codex/codex-model');
+
+      // Verify the repair step was executed with the distinct tuple
+      const { scanGlobalSnapshot: snap } = await import('../src/state.js');
+      const ss = snap(continueProject, config.manifest);
+      const repairStep = ss.steps.find(s => s.kind === 'repair' && !s.unclassified);
+      expect(repairStep).toBeTruthy();
+      expect(repairStep!.agent).toBe('codex');
+      expect(repairStep!.model).toBe('codex-model');
     });
   });
 });

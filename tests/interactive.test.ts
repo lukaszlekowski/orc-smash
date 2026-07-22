@@ -2,13 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { select, confirm, input } from '@inquirer/prompts';
 import {
   promptRunners,
-  promptStageAction
 } from '../src/interactive.js';
 import { DEFAULT_REGISTRY } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import type { Config } from '../src/config.js';
-import type { StageAction } from '../src/stage-menu.js';
 
 vi.mock('@inquirer/prompts', () => ({
   select: vi.fn(),
@@ -58,7 +56,7 @@ describe('Interactive registry selection', () => {
     await promptRunners(['plan-audit'], config, createProductionAdapterRegistry());
 
     expect(output).toHaveBeenCalledWith('Default skill runners:');
-    expect(output).toHaveBeenCalledWith('  plan-audit: opencode (opencode-model)');
+    expect(output).toHaveBeenCalledWith('  plan-audit: opencode (opencode-model), effort: provider default, session: fresh-per-invocation');
     expect(output.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(confirm).mock.invocationCallOrder[0]!);
   });
 
@@ -150,22 +148,6 @@ describe('Interactive registry selection', () => {
     expect(selectArgs.default).toBe('codex');
   });
 
-  it('promptStageAction returns selected action and sets recommended first', async () => {
-    vi.mocked(select).mockResolvedValueOnce('continue');
-
-    const actions: StageAction[] = [
-      { id: 'start-new', group: 'start-new', stage: 'evaluate', version: 1, sessionPolicy: 'new', label: 'Start New', recommended: false },
-      { id: 'continue', group: 'continue', stage: 'repair', version: 1, sessionPolicy: 'new', label: 'Continue', recommended: true }
-    ];
-
-    const result = await promptStageAction(actions, 'continue');
-    expect(result).toBe('continue');
-    expect(vi.mocked(select)).toHaveBeenCalled();
-    const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
-    expect(selectArgs.choices[0].value).toBe('continue');
-    expect(selectArgs.choices[0].name).toContain('(recommended)');
-  });
-
   it('selecting agy re-defaults to providers.agy[0] and does not mutate global defaults', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
@@ -229,6 +211,52 @@ describe('Interactive registry selection', () => {
     expect(validate('Gemini 3.5 Flash (Medium)')).toBe(true);
   });
 
+  it('renders disabled effort/resume choices for a non-effort non-resume adapter', async () => {
+    const config = dummyConfig({
+      'non-resume-agent': ['m1'],
+    }, { agent: 'non-resume-agent', model: 'm1' });
+
+    // Create a registry with an adapter that has both capabilities disabled
+    const testRegistry = createTestAdapterRegistry();
+    testRegistry.adapters.set('non-resume-agent', {
+      name: 'non-resume-agent',
+      capabilities: { resumeSession: false, effort: false },
+      buildRun: () => ({ command: '', args: [] }),
+      run: async () => ({ stdout: '', exitCode: 0 }),
+    });
+
+    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select)
+      .mockResolvedValueOnce('non-resume-agent') // choose agent
+      .mockResolvedValueOnce('m1') // choose model
+      .mockResolvedValueOnce('default') // effort prompt — always has Provider default enabled
+      .mockResolvedValueOnce('fresh-per-invocation'); // session prompt — always has Fresh enabled
+
+    await promptRunners(['plan-audit'], config, testRegistry);
+
+    // Find effort and session strategy select calls (skip agent + model)
+    const effortCall = vi.mocked(select).mock.calls[2]![0] as any;
+    const sessionCall = vi.mocked(select).mock.calls[3]![0] as any;
+
+    // Effort choices: Provider default (enabled) + disabled entry with reason
+    expect(effortCall.choices.length).toBeGreaterThanOrEqual(2);
+    const effortEnabled = effortCall.choices.find((c: any) => !c.disabled);
+    expect(effortEnabled).toBeDefined();
+    expect(effortEnabled.value).toBe('default');
+    const effortDisabled = effortCall.choices.find((c: any) => c.disabled);
+    expect(effortDisabled).toBeDefined();
+    expect(effortDisabled.disabled).toContain('does not support effort');
+
+    // Session choices: Fresh per invocation (enabled) + disabled entry with reason
+    expect(sessionCall.choices.length).toBeGreaterThanOrEqual(2);
+    const sessionEnabled = sessionCall.choices.find((c: any) => !c.disabled);
+    expect(sessionEnabled).toBeDefined();
+    expect(sessionEnabled.value).toBe('fresh-per-invocation');
+    const sessionDisabled = sessionCall.choices.find((c: any) => c.disabled);
+    expect(sessionDisabled).toBeDefined();
+    expect(sessionDisabled.disabled).toContain('does not support session resumption');
+  });
+
   it('promptRunners with forceSelect bypasses the customize confirm and shows the model list', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
@@ -244,8 +272,8 @@ describe('Interactive registry selection', () => {
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, {}, { forceSelect: true });
 
     expect(vi.mocked(confirm)).not.toHaveBeenCalled();
-    expect(vi.mocked(select)).toHaveBeenCalledTimes(2);
-    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
+    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model', effort: undefined, sessionStrategy: undefined });
   });
 
   it('selects effort after the provider/model pair when the adapter supports it', async () => {
@@ -258,10 +286,11 @@ describe('Interactive registry selection', () => {
     vi.mocked(select)
       .mockResolvedValueOnce('opencode')
       .mockResolvedValueOnce('opencode-model')
-      .mockResolvedValueOnce('high');
+      .mockResolvedValueOnce('high')
+      .mockResolvedValueOnce('fresh-per-invocation'); // session strategy
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry);
-    expect(runners['plan-audit']).toEqual({ agent: 'opencode', model: 'opencode-model', effort: 'high' });
-    expect(vi.mocked(select)).toHaveBeenCalledTimes(3);
+    expect(runners['plan-audit']).toEqual({ agent: 'opencode', model: 'opencode-model', effort: 'high', sessionStrategy: undefined });
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
   });
 });

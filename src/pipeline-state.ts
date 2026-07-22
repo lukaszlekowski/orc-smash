@@ -23,6 +23,10 @@ export interface RunContext {
   chainId: string;
   chainMode: ChainMode;
   parentArtifactIdentity: string | null;
+  /** Set when the context was created by `continueRunContext` – signals the
+   *  executor to route through chain-history continuation logic rather than
+   *  treating this as a fresh start of the given mode. */
+  continue?: true;
 }
 
 /**
@@ -76,6 +80,25 @@ export function mintRunContext(params: {
         parentArtifactIdentity: null,
       };
   }
+}
+
+export function continueRunContext(params: {
+  chainId: string;
+  chainMode: ChainMode;
+  pipelineId: string | null;
+  pipelineRunId: string | null;
+  stageId: string | null;
+  parentArtifactIdentity: string | null;
+}): RunContext {
+  return {
+    pipelineId: params.pipelineId,
+    pipelineRunId: params.pipelineRunId,
+    stageId: params.stageId,
+    chainId: params.chainId,
+    chainMode: params.chainMode,
+    parentArtifactIdentity: params.parentArtifactIdentity,
+    continue: true,
+  };
 }
 
 export interface ArtifactIdentity {

@@ -1,6 +1,7 @@
 import type { LoopSpec, Manifest } from './manifest.js';
 import { readInterruptedMarker } from './interrupted-artifact.js';
 import { scanGlobalSnapshot } from './state.js';
+import { recoverInProgressRun } from './pipeline-state.js';
 
 /** Select the most recently active configured loop from generic artifact activity. */
 export function selectDefaultLoop(
@@ -43,4 +44,40 @@ export function resolveDefaultLoop(
   return {
     loopName: selectDefaultLoop(markerBinding, manifest.loops, loopMaxMtimes),
   };
+}
+
+// ---- F7: Checks for operator menu state ----
+
+/**
+ * Check if a given binding id has an in-progress (unresolved) chain.
+ * Returns true when there are artifact steps with no terminal decision.
+ */
+export function bindingHasInProgressChain(
+  projectRoot: string,
+  manifest: Manifest,
+  bindingId: string,
+): boolean {
+  const snapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const steps = snapshot.byBinding.get(bindingId) ?? [];
+  if (steps.length === 0) return false;
+  const recovered = recoverInProgressRun(steps as any);
+  if (!recovered) return false;
+  const latest = steps[steps.length - 1]!;
+  if (latest.decision === 'accepted' || latest.completionOutcome === 'completed') return false;
+  if (latest.unclassified) return false;
+  return true;
+}
+
+/**
+ * Check if a given loop binding has at least one completed (accepted) artifact
+ * that can serve as a second-opinion target.
+ */
+export function bindingHasCompletedAcceptance(
+  projectRoot: string,
+  manifest: Manifest,
+  bindingId: string,
+): boolean {
+  const snapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const steps = snapshot.byBinding.get(bindingId) ?? [];
+  return steps.some(s => s.decision === 'accepted' && !s.unclassified);
 }

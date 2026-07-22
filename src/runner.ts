@@ -11,6 +11,7 @@ export interface ResolvedRunner extends Runner {
   modelSource: 'interactive' | 'skill' | 'agent-default' | 'global' | 'profile' | 'default' | 'session';
   effort?: string;
   effortSource?: 'interactive' | 'skill' | 'global' | 'profile' | 'default';
+  sessionStrategySource?: 'interactive' | 'skill' | 'profile' | 'default' | 'global';
   inheritedSession?: { agent: string; model: string; sessionId: string };
 }
 
@@ -66,8 +67,8 @@ export function validateRunnerCapabilities(runner: Runner, registry: AgentRegist
 export function resolveRunner(
   skillId: string,
   config: Config,
-  globalOverrides: { agent?: string; model?: string; effort?: string } = {},
-  interactiveOverride?: { agent: string; model: string; effort?: string },
+  globalOverrides: { agent?: string; model?: string; effort?: string; sessionStrategy?: string } = {},
+  interactiveOverride?: { agent: string; model: string; effort?: string; sessionStrategy?: string },
   perSkillOverride?: PerSkillOverride,
   globalEffortOverride?: string,
 ): ResolvedRunner {
@@ -82,6 +83,9 @@ export function resolveRunner(
       'interactive',
       resolveEffort(interactiveOverride.agent, interactiveOverride.model, interactiveOverride.effort ?? perSkillOverride?.effort ?? globalEffort, undefined, 'interactive', config.registry),
       config.registry,
+      interactiveOverride.sessionStrategy
+        ? { value: interactiveOverride.sessionStrategy, source: 'interactive' }
+        : undefined,
     );
   }
 
@@ -102,6 +106,11 @@ export function resolveRunner(
   const model = profile.model ?? catalogue.defaultModel;
   validateAgentAndModel(profile.provider, model, config.registry);
   const effort = resolveEffort(profile.provider, model, globalEffort, profile.effort, globalEffort ? 'global' : 'profile', config.registry);
+  const sessionStrategy = profile.sessionStrategy
+    ? { value: profile.sessionStrategy, source: 'profile' as const }
+    : globalOverrides.sessionStrategy
+      ? { value: globalOverrides.sessionStrategy, source: 'global' as const }
+      : undefined;
   return makeRunner(
     profile.provider,
     model,
@@ -109,16 +118,20 @@ export function resolveRunner(
     profile.model ? 'profile' : 'default',
     effort,
     config.registry,
+    sessionStrategy,
   );
 }
 
 function resolveWithPerSkillOverride(
   skillId: string,
   config: Config,
-  globalOverrides: { agent?: string; model?: string; effort?: string },
+  globalOverrides: { agent?: string; model?: string; effort?: string; sessionStrategy?: string },
   override: PerSkillOverride,
   globalEffort?: string,
 ): ResolvedRunner {
+  const ss = (s: string | undefined, src: ResolvedRunner['sessionStrategySource']) =>
+    s ? { value: s, source: src } : undefined;
+
   if (override.agent && override.model) {
     validateAgentAndModel(override.agent, override.model, config.registry);
     return makeRunner(
@@ -128,6 +141,7 @@ function resolveWithPerSkillOverride(
       'skill',
       resolveEffort(override.agent, override.model, override.effort ?? globalEffort, undefined, 'skill', config.registry),
       config.registry,
+      ss(globalOverrides.sessionStrategy, 'global'),
     );
   }
 
@@ -142,6 +156,7 @@ function resolveWithPerSkillOverride(
       'agent-default',
       resolveEffort(override.agent, model, override.effort ?? globalEffort, undefined, 'skill', config.registry),
       config.registry,
+      ss(globalOverrides.sessionStrategy, 'global'),
     );
   }
 
@@ -155,6 +170,7 @@ function resolveWithPerSkillOverride(
       'skill',
       resolveEffort(base.agent, override.model, override.effort ?? globalEffort, base.effort, override.effort || globalEffort ? 'skill' : base.effortSource ?? 'profile', config.registry),
       config.registry,
+      base.sessionStrategy ? { value: base.sessionStrategy, source: base.sessionStrategySource ?? 'profile' } : undefined,
     );
   }
 
@@ -163,33 +179,35 @@ function resolveWithPerSkillOverride(
 
 function resolveWithGlobalOverrides(
   config: Config,
-  overrides: { agent?: string; model?: string; effort?: string },
+  overrides: { agent?: string; model?: string; effort?: string; sessionStrategy?: string },
   globalEffort?: string,
 ): ResolvedRunner {
   const defaultProfile = config.registry.profiles[config.registry.defaultProfile];
   if (!defaultProfile) throw new Error(`unknown default runner profile '${config.registry.defaultProfile}'`);
+  const ss = (s: string | undefined, src: ResolvedRunner['sessionStrategySource']) =>
+    s ? { value: s, source: src } : undefined;
 
   if (overrides.agent && overrides.model) {
     validateAgentAndModel(overrides.agent, overrides.model, config.registry);
-    return makeRunner(overrides.agent, overrides.model, 'global', 'global', resolveEffort(overrides.agent, overrides.model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
+    return makeRunner(overrides.agent, overrides.model, 'global', 'global', resolveEffort(overrides.agent, overrides.model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry, ss(overrides.sessionStrategy, 'global'));
   }
 
   if (overrides.agent) {
     const model = config.registry.providers[overrides.agent]?.defaultModel;
     if (!model) throw new Error(`no default model for agent '${overrides.agent}'`);
     validateAgentAndModel(overrides.agent, model, config.registry);
-    return makeRunner(overrides.agent, model, 'global', 'agent-default', resolveEffort(overrides.agent, model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
+    return makeRunner(overrides.agent, model, 'global', 'agent-default', resolveEffort(overrides.agent, model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry, ss(overrides.sessionStrategy, 'global'));
   }
 
   const agent = defaultProfile.provider;
   if (overrides.model) {
     validateAgentAndModel(agent, overrides.model, config.registry);
-    return makeRunner(agent, overrides.model, 'profile', 'global', resolveEffort(agent, overrides.model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry);
+    return makeRunner(agent, overrides.model, 'profile', 'global', resolveEffort(agent, overrides.model, overrides.effort ?? globalEffort, undefined, 'global', config.registry), config.registry, ss(defaultProfile.sessionStrategy ?? overrides.sessionStrategy, defaultProfile.sessionStrategy ? 'profile' : 'global'));
   }
 
   const model = defaultProfile.model ?? config.registry.providers[agent]?.defaultModel;
   if (!model) throw new Error(`no model resolved for agent '${agent}'`);
-  return makeRunner(agent, model, 'profile', defaultProfile.model ? 'profile' : 'default', resolveEffort(agent, model, overrides.effort ?? globalEffort, defaultProfile.effort, overrides.effort || globalEffort ? 'global' : 'profile', config.registry), config.registry);
+  return makeRunner(agent, model, 'profile', defaultProfile.model ? 'profile' : 'default', resolveEffort(agent, model, overrides.effort ?? globalEffort, defaultProfile.effort, overrides.effort || globalEffort ? 'global' : 'profile', config.registry), config.registry, ss(defaultProfile.sessionStrategy ?? overrides.sessionStrategy, defaultProfile.sessionStrategy ? 'profile' : 'global'));
 }
 
 function resolveEffort(
@@ -223,6 +241,7 @@ function makeRunner(
   modelSource: ResolvedRunner['modelSource'],
   effort: { value: string; source: ResolvedRunner['effortSource'] } | null,
   registry: ModelRegistry,
+  sessionStrategy?: { value: string; source: ResolvedRunner['sessionStrategySource'] },
 ): ResolvedRunner {
   validateAgentAndModel(agent, model, registry);
   return {
@@ -231,5 +250,6 @@ function makeRunner(
     agentSource,
     modelSource,
     ...(effort ? { effort: effort.value, effortSource: effort.source } : {}),
+    ...(sessionStrategy ? { sessionStrategy: sessionStrategy.value, sessionStrategySource: sessionStrategy.source } : {}),
   };
 }

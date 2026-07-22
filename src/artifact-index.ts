@@ -257,6 +257,7 @@ export function scanGlobalSnapshot(
 
       const step: Step = {
         kind: meta.kind,
+        skillId: meta.skill,
         bindingId: meta.bindingId ?? patternInfo.bindingId,
         bindingKind: meta.bindingKind ?? patternInfo.bindingKind,
         role: meta.role,
@@ -279,6 +280,7 @@ export function scanGlobalSnapshot(
         resultFingerprint: meta.resultFingerprint,
         parentArtifactIdentity: meta.parentArtifactIdentity,
         effort: meta.effort,
+        sessionStrategy: meta.sessionStrategy,
         provider,
       };
 

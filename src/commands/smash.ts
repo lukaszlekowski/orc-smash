@@ -4,7 +4,14 @@ import { loadConfig, type Config } from '../config.js';
 import { scanGlobalSnapshot } from '../state.js';
 import { runLoop, runTask } from '../loop.js';
 import { resolveRunner, validateRunnerCapabilities, type ResolvedRunner } from '../runner.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery } from '../interactive.js';
+import {
+  promptLoopSelect,
+  promptMaxIterations,
+  promptPostRunRecovery,
+  promptTopLevelMenu,
+  promptLoopSubmenu,
+  promptPipelineLaunchContext,
+} from '../interactive.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, setActiveRunEventSink, quarantineInterruptedResume } from '../interrupted-artifact.js';
@@ -13,8 +20,10 @@ import type { CommandResult } from './types.js';
 import type { LoopBinding, TaskBinding, V1Manifest } from '../manifest.js';
 import { configureSpawnDebug, debugHarnessEvent } from '../debug-spawn.js';
 import { makeRunEvent } from '../run-event.js';
-import { mintRunContext, type RunContext } from '../pipeline-state.js';
-import { resolveDefaultLoop } from '../loop-selector.js';
+import { continueRunContext, mintRunContext, type RunContext, recoverInProgressRun } from '../pipeline-state.js';
+import { bindingHasInProgressChain, bindingHasCompletedAcceptance, resolveDefaultLoop } from '../loop-selector.js';
+import { renderStatusPanel } from './status.js';
+import { buildTopLevelMenu, buildLoopSubmenu, pipelineLaunchContexts } from '../stage-menu.js';
 import type { BindingKind } from '../loops/binding-engine.js';
 import type { LoopReturn, RunOutcome } from '../loops/runtime.js';
 
@@ -57,7 +66,12 @@ interface SmashRunSetup {
   runContext?: RunContext;
 }
 
-type ResolveResult = { errorResult: CommandResult } | { setup: SmashRunSetup } | { retry: true };
+type ResolveResult =
+  | { errorResult: CommandResult }
+  | { setup: SmashRunSetup }
+  | { retry: true }
+  | { exitSignal: true; message: string }
+  | { displaySignal: true };
 
 function allBindings(manifest: V1Manifest): Record<string, LoopBinding | TaskBinding> {
   return {
@@ -168,6 +182,7 @@ async function resolveSmashRunSetup(
 
   let selected: SelectedBinding;
   let pipelineStageId: string | undefined;
+  let runContext: RunContext | undefined;
   const explicit = selectedFromOptions(config.manifest, options);
   if (explicit && 'error' in explicit) {
     const msg = `Error: ${explicit.error}`;
@@ -178,14 +193,26 @@ async function resolveSmashRunSetup(
     selected = explicit.selected;
     pipelineStageId = explicit.pipelineStageId;
   } else {
-    if (loopIds.length === 0) {
-      const msg = 'Error: interactive selection requires at least one configured loop.';
+    // F7: Interactive top-level menu with submenus
+    if (loopIds.length === 0 && taskIds.length === 0) {
+      const msg = 'Error: no loops or tasks available for interactive selection.';
       options.output.error(msg);
       return { errorResult: { exitCode: 1, message: msg } };
     }
-    const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, config.manifest);
-    const id = await promptLoopSelect(loopIds, defaultLoop);
-    selected = { kind: 'loop', id, binding: config.manifest.loops[id]! };
+
+    const selection = await runInteractiveBindingSelection(projectRoot, config, registry, loopIds, taskIds, options);
+    if (selection.kind === 'exit') {
+      return { exitSignal: true, message: selection.reason };
+    }
+    if (selection.kind === 'retry') {
+      return { retry: true };
+    }
+    if (selection.kind === 'display') {
+      return { displaySignal: true };
+    }
+    selected = selection.selected;
+    runContext = selection.runContext;
+    pipelineStageId = selection.pipelineStageId;
   }
 
   debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'binding-selected', detail: `${selected.kind}/${selected.id}`, result: 'pass' });
@@ -203,9 +230,9 @@ async function resolveSmashRunSetup(
     return { retry: true };
   }
 
-  const runContext = options.pipeline
+  const resolvedRunContext = runContext ?? (options.pipeline
     ? mintRunContext({ mode: 'pipeline-start', pipelineId: options.pipeline, stageId: pipelineStageId })
-    : mintRunContext({ mode: 'ad-hoc' });
+    : mintRunContext({ mode: 'ad-hoc' }));
 
   if (selected.kind === 'loop') {
     const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
@@ -291,9 +318,231 @@ async function resolveSmashRunSetup(
       isInteractive,
       registry,
       runnerOverrides,
-      runContext,
+      runContext: resolvedRunContext,
     },
   };
+}
+
+type InteractiveSelectionResult =
+  | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string }
+  | { kind: 'exit'; reason: string }
+  | { kind: 'retry' }
+  | { kind: 'display' };
+
+/**
+ * F7: Run the interactive top-level menu and submenus until the user selects a
+ * specific binding to execute or chooses to exit. Handles the full menu
+ * navigation: top-level → loop submenu → pipeline context → selected binding.
+ */
+async function runInteractiveBindingSelection(
+  projectRoot: string,
+  config: Config,
+  registry: AgentRegistry,
+  loopIds: string[],
+  taskIds: string[],
+  options: SmashOptions,
+): Promise<InteractiveSelectionResult> {
+  const manifest = config.manifest;
+  const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
+  let lastPickedLoop: string | null = null;
+
+  while (true) {
+    const topActions = buildTopLevelMenu(manifest, snapshot.missingInputs);
+    const topActionId = await promptTopLevelMenu(topActions);
+
+    // Stop for manual review
+    if (topActionId === 'stop') {
+      return { kind: 'exit', reason: 'Stop for manual review' };
+    }
+
+    // Display pipeline and project state → render snapshot, then return to
+    // menu.
+    if (topActionId === 'display-status') {
+      renderStatusPanel(projectRoot, config, options.output);
+      return { kind: 'display' };
+    }
+
+    // Change loop — persist the selection so Start loop uses it
+    if (topActionId === 'change-loop') {
+      if (loopIds.length > 0) {
+        const { loopName: defaultLoop } = resolveDefaultLoop(projectRoot, manifest);
+        lastPickedLoop = await promptLoopSelect(loopIds, defaultLoop);
+      }
+      continue;
+    }
+
+    // Execute one-off task
+    if (topActionId.startsWith('task:')) {
+      const taskId = topActionId.slice(5);
+      const taskBinding = config.manifest.tasks?.[taskId];
+      if (!taskBinding) {
+        return { kind: 'retry' };
+      }
+
+      const contexts = pipelineLaunchContexts(manifest, taskId, 'task');
+      let ctxRunContext: RunContext;
+      if (contexts.length > 0) {
+        const ctx = await promptPipelineLaunchContext(taskId, contexts);
+        if (ctx.kind === 'pipeline') {
+          ctxRunContext = mintRunContext({ mode: 'pipeline-start', pipelineId: ctx.pipelineId, stageId: ctx.stageId });
+        } else {
+          ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+        }
+      } else {
+        ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+      }
+
+      return {
+        kind: 'selected',
+        selected: { kind: 'task', id: taskId, binding: taskBinding },
+        runContext: ctxRunContext,
+      };
+    }
+
+    // Start loop
+    if (topActionId === 'start-loop') {
+      // Pick which loop
+      let loopId: string;
+      if (loopIds.length === 0) {
+        return { kind: 'retry' };
+      }
+      if (loopIds.length === 1) {
+        loopId = loopIds[0]!;
+      } else {
+        const defaultLoop = lastPickedLoop ?? resolveDefaultLoop(projectRoot, manifest).loopName;
+        loopId = await promptLoopSelect(loopIds, defaultLoop);
+      }
+
+      const loopBinding = manifest.loops[loopId]!;
+
+      // Build submenu with state checks and missing-input awareness
+      const bindingSteps = snapshot.byBinding.get(loopId) ?? [];
+      const hasInProgressChain = bindingHasInProgressChain(projectRoot, manifest, loopId);
+      const hasAccepted = bindingHasCompletedAcceptance(projectRoot, manifest, loopId);
+      const loopMissing = snapshot.missingInputs.get(loopId);
+
+      // Compute continueDetail from the recovered chain when in-progress.
+      // Uses the manifest's next skill to resolve the correct runner for that
+      // skill (repair's runner when repair is next, evaluate's when evaluate
+      // is next), rather than copying the previous evaluator's runner.
+      let continueDetail: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string } | undefined;
+      if (hasInProgressChain) {
+        const recovered = recoverInProgressRun(bindingSteps as any);
+        if (recovered) {
+          const lastEval = [...bindingSteps].reverse()
+            .find(s => s.kind === 'evaluate' && !s.unclassified);
+          if (lastEval && lastEval.decision === 'retry') {
+            const repairSkillId = loopBinding.repair.skill;
+            const repairSkill = config.manifest.skills[repairSkillId];
+            const repairRunner = repairSkill ? resolveRunner(repairSkillId, config) : null;
+            continueDetail = {
+              phase: 'repair',
+              version: lastEval.version,
+              skillId: repairSkillId,
+              agent: repairRunner?.agent ?? lastEval.agent,
+              model: repairRunner?.model ?? lastEval.model,
+              effort: repairRunner?.effort ?? lastEval.effort,
+              sessionStrategy: repairRunner?.sessionStrategy ?? lastEval.sessionStrategy,
+            };
+          } else if (lastEval) {
+            const evalSkillId = loopBinding.evaluate.skill;
+            const evalSkill = config.manifest.skills[evalSkillId];
+            const evalRunner = evalSkill ? resolveRunner(evalSkillId, config) : null;
+            continueDetail = {
+              phase: 'evaluate',
+              version: lastEval.version + 1,
+              skillId: evalSkillId,
+              agent: evalRunner?.agent ?? lastEval.agent,
+              model: evalRunner?.model ?? lastEval.model,
+              effort: evalRunner?.effort ?? lastEval.effort,
+              sessionStrategy: evalRunner?.sessionStrategy ?? lastEval.sessionStrategy,
+            };
+          } else if (recovered) {
+            const evalSkillId = loopBinding.evaluate.skill;
+            continueDetail = {
+              phase: 'evaluate',
+              version: 1,
+              skillId: evalSkillId,
+              agent: '',
+              model: '',
+            };
+          }
+        }
+      }
+
+      const subItems = buildLoopSubmenu(loopId, hasInProgressChain, hasAccepted, loopMissing, continueDetail);
+      const subItemId = await promptLoopSubmenu(subItems);
+
+      // Back to top-level menu
+      if (subItemId === 'back') {
+        continue;
+      }
+
+      // Continue current loop – reuse the recovered chain identity
+      if (subItemId === 'continue-current-loop') {
+        if (!hasInProgressChain) continue;
+        const recovered = recoverInProgressRun(bindingSteps as any);
+        if (recovered) {
+          const lastValid = [...bindingSteps].reverse()
+            .find(s => !s.unclassified && s.artifactIdentity);
+          return {
+            kind: 'selected',
+            selected: { kind: 'loop', id: loopId, binding: loopBinding },
+            runContext: continueRunContext({
+              chainId: recovered.chainId,
+              chainMode: recovered.chainMode,
+              pipelineId: recovered.pipelineId,
+              pipelineRunId: recovered.pipelineRunId,
+              stageId: recovered.stageId,
+              parentArtifactIdentity: lastValid?.artifactIdentity ?? null,
+            }),
+          };
+        }
+      }
+
+      // Run second opinion
+      if (subItemId === 'run-second-opinion') {
+        if (!hasAccepted) continue;
+        const latestAccepted = [...bindingSteps].reverse()
+          .find(s => s.decision === 'accepted' && !s.unclassified);
+        if (latestAccepted) {
+          return {
+            kind: 'selected',
+            selected: { kind: 'loop', id: loopId, binding: loopBinding },
+            runContext: mintRunContext({
+              mode: 'second-opinion',
+              pipelineId: latestAccepted.pipelineId ?? undefined,
+              pipelineRunId: latestAccepted.pipelineRunId ?? undefined,
+              stageId: latestAccepted.stageId ?? undefined,
+            }),
+          };
+        }
+        continue;
+      }
+
+      // Start fresh loop — check for pipeline launch context
+      if (subItemId === 'start-fresh-loop') {
+        const contexts = pipelineLaunchContexts(manifest, loopId, 'loop');
+        let ctxRunContext: RunContext;
+        if (contexts.length > 0) {
+          const ctx = await promptPipelineLaunchContext(loopId, contexts);
+          if (ctx.kind === 'pipeline') {
+            ctxRunContext = mintRunContext({ mode: 'pipeline-start', pipelineId: ctx.pipelineId, stageId: ctx.stageId });
+          } else {
+            ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+          }
+        } else {
+          ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+        }
+
+        return {
+          kind: 'selected',
+          selected: { kind: 'loop', id: loopId, binding: loopBinding },
+          runContext: ctxRunContext,
+        };
+      }
+    }
+  }
 }
 
 function outcomeForResult(runResult: LoopReturn): RunOutcome {
@@ -374,8 +623,17 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
       let retryCount = 0;
       while (true) {
         setupResult = await resolveSmashRunSetup(projectRoot, options);
+        if ('exitSignal' in setupResult) {
+          return flushResult({ exitCode: 0, message: setupResult.message });
+        }
         if ('errorResult' in setupResult) {
           return finish(setupResult.errorResult, { success: false, verdict: 'unknown', errorKind: 'setup' });
+        }
+        // displaySignal is a menu-navigation action, not a missing-input
+        // retry — it should not consume the retry budget.
+        if ('displaySignal' in setupResult) {
+          retryCount = 0;
+          continue;
         }
         if (!('retry' in setupResult)) break;
         retryCount += 1;

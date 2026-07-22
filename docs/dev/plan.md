@@ -1,13 +1,13 @@
 ---
 confidence: 0.95
-status: r1-complete
+status: r2-complete
 source: docs/dev/research.md
 ---
 
 # Plan: Config-Driven Approval Loops, Tasks, Pipelines, and Continuity
 
-> **Release status:** R1 is implemented, verified, and approved. Current work
-> now focuses on R2 (F7–F8 and the R2 portion of F11). R3 remains deferred.
+> **Release status:** R2 is implemented, verified, and approved. R3 remains
+> deferred.
 
 ## Architectural Decision
 
@@ -1357,3 +1357,13 @@ Manual smoke (each release, supplementary sign-off only): run
 `orc smash --plain` and `orc status` against a scratch project; confirm typed
 events, debug log detail under `--debug-spawn`, and ownership/kill-gate/
 timeout/interruption behavior are unchanged from today.
+
+---
+
+## Plan Change Log
+
+| Date | Change |
+|---|---|
+| 2026-07-21 | Initial plan (R1: F1–F6 + Pipeline Identity + F11 portion) |
+| 2026-07-21 | R2 implemented: F7 (operator menus with top-level/submenu), F8 (per-skill continuity via adapter capabilities), F11 R2 portion (mode-specific recovery through new menus). Plan status → `r2-complete`. |
+| | R2 closed. R3 (F9, F10) deferred. |
