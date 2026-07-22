@@ -8,7 +8,7 @@ import type { AgentRegistry } from '../src/adapters/registry.js';
 import type { RunEvent } from '../src/run-event.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 
@@ -23,6 +23,8 @@ vi.mock('../src/interactive.js', () => {
     promptPipelineLaunchContext: vi.fn(),
     promptCandidateSelection: vi.fn(),
     promptIterationExtension: vi.fn(),
+    promptTaskMenu: vi.fn(),
+    promptTaskDetailConfirmation: vi.fn(),
   };
 });
 
@@ -180,6 +182,32 @@ describe('generic smash dispatch', () => {
       expect(promptLoopSubmenu).toHaveBeenCalledTimes(1);
       expect(promptMaxIterations).toHaveBeenCalledTimes(1);
       expect(promptPostRunRecovery).toHaveBeenCalledTimes(1);
+    });
+
+    it('Interactive mode: task detail Back returns to task chooser menu without re-rendering startup snapshot', async () => {
+      // 1. Top menu -> run-task
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      // 2. Task menu -> implement
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('implement' as any);
+      // 3. Task detail -> back
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('back');
+      // 4. Task menu again -> back to top menu
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('back' as any);
+      // 5. Top menu -> stop
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('stop');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptTaskMenu).toHaveBeenCalledTimes(2);
+      expect(promptTaskDetailConfirmation).toHaveBeenCalledTimes(1);
     });
 
     it('Interactive mode: provider failure followed by menu choice menu then exit', async () => {

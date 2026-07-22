@@ -27,6 +27,15 @@ export function formatSessionId(sessionId?: string | null): string {
   return sessionId.length > 5 ? `*${sessionId.slice(-5)}` : sessionId;
 }
 
+export interface ActiveInvocationDisplay {
+  skillId: string;
+  version: number;
+  sessionMode: 'fresh' | 'resumed';
+  sessionId: string | null;
+  freshReason?: 'policy' | 'no-compatible-session' | 'provider-unsupported';
+  newSessionPending: boolean;
+}
+
 export interface PanelContext {
   projectRoot: string;
   loopName: string;
@@ -34,6 +43,7 @@ export interface PanelContext {
   maxIterations: number;
   activeSkillRunner: { skillId: string; agent: string; model: string } | null;
   resolvedRunners?: ResolvedRunnerDisplay[];
+  activeInvocation?: ActiveInvocationDisplay;
   timeline: Step[];
   nextStepMessage: string;
   inFlight: {
@@ -60,8 +70,10 @@ export interface ResolvedRunnerDisplay {
   skillId: string;
   agent: string;
   model: string;
-  source: 'selected' | 'inherited' | 'configured';
-  inheritedFrom?: { kind: StepKind; version: number; sessionId: string };
+  role: string;
+  phase: 'evaluate' | 'repair' | 'task';
+  effort: string | null;
+  sessionStrategy: 'fresh-per-invocation' | 'resume-per-skill';
 }
 
 export function buildPanelContext(
@@ -76,7 +88,8 @@ export function buildPanelContext(
   latestVersion: number = 0,
   readOnly: boolean = false,
   resolvedRunners: ResolvedRunnerDisplay[] = [],
-  providerCalls?: number
+  providerCalls?: number,
+  activeInvocation?: ActiveInvocationDisplay,
 ): PanelContext {
   return {
     projectRoot,
@@ -85,6 +98,7 @@ export function buildPanelContext(
     maxIterations,
     activeSkillRunner,
     resolvedRunners,
+    activeInvocation,
     timeline,
     nextStepMessage,
     inFlight,

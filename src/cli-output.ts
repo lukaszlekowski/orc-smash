@@ -60,6 +60,7 @@ export interface CliOutput extends RunEventSink {
     lastAuditPath: string | null;
     details?: string[];
   }): void;
+  writeStatic(text: string): void;
   attachLiveRegion?(supplier: () => PanelContext): void;
   detachLiveRegion?(): void;
 }
@@ -209,6 +210,11 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
         for (const detail of ctx.details) console.log(chalk.gray(`  ${detail}`));
       }
     },
+    writeStatic(text: string) {
+      detach();
+      restoreMainScreen();
+      process.stdout.write(`${text}\n`);
+    },
     attachLiveRegion(supplier: () => PanelContext) {
       if (liveInterval) {
         clearInterval(liveInterval);
@@ -286,6 +292,9 @@ export function createPlainCliOutput(projectRoot?: string): CliOutput {
     },
     finalSummary(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
+    },
+    writeStatic(text: string) {
+      process.stdout.write(`${text}\n`);
     },
     attachLiveRegion: () => {},
     detachLiveRegion: () => {}

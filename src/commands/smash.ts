@@ -12,6 +12,10 @@ import {
   promptLoopSubmenu,
   promptPipelineLaunchContext,
   promptCandidateSelection,
+  promptTaskMenu,
+  promptTaskDetailConfirmation,
+  promptStatusAcknowledgement,
+  type TaskDetailView,
 } from '../interactive.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
@@ -25,8 +29,10 @@ import { continueRunContext, mintRunContext, type RunContext, recoverInProgressR
 import { bindingHasInProgressChain, bindingHasCompletedAcceptance, resolveDefaultLoop } from '../loop-selector.js';
 import { renderStatusPanel } from './status.js';
 import { pipelineSuggestions } from '../next-step.js';
-import { buildTopLevelMenu, buildLoopSubmenu, pipelineLaunchContexts } from '../stage-menu.js';
+import { buildTopLevelMenu, buildLoopSubmenu, buildTaskMenu, pipelineLaunchContexts } from '../stage-menu.js';
 import type { SuggestedStageAction } from '../stage-menu.js';
+import { buildProjectSnapshotView } from '../project-snapshot-view.js';
+import { renderCompactSnapshot } from '../project-snapshot-renderer.js';
 import type { BindingKind } from '../loops/binding-engine.js';
 import type { LoopReturn, RunOutcome } from '../loops/runtime.js';
 
@@ -391,18 +397,14 @@ async function runInteractiveBindingSelection(
   options: SmashOptions,
 ): Promise<InteractiveSelectionResult> {
   const manifest = config.manifest;
-  const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
   let lastPickedLoop: string | null = null;
 
   while (true) {
-    const topActions = buildTopLevelMenu(manifest, snapshot.missingInputs);
-    const suggestedActions = buildSuggestedStageActions(projectRoot, manifest);
-    if (suggestedActions.length > 0) {
-      const suggestedStageAction = topActions.find(a => a.id === 'start-suggested-stage');
-      if (suggestedStageAction) {
-        suggestedStageAction.disabledReason = undefined;
-      }
-    }
+    const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
+    const view = buildProjectSnapshotView(config, snapshot);
+    options.output.writeStatic(renderCompactSnapshot(view));
+
+    const topActions = buildTopLevelMenu(manifest, view.eligibleCandidates.length > 0);
     const topActionId = await promptTopLevelMenu(topActions);
 
     // Stop for manual review
@@ -410,11 +412,11 @@ async function runInteractiveBindingSelection(
       return { kind: 'exit', reason: 'Stop for manual review' };
     }
 
-    // Display pipeline and project state → render snapshot, then return to
-    // menu.
+    // Display pipeline and project state → render detailed snapshot, wait for acknowledgement, return to menu
     if (topActionId === 'display-status') {
       renderStatusPanel(projectRoot, config, options.output);
-      return { kind: 'display' };
+      await promptStatusAcknowledgement();
+      continue;
     }
 
     // Change loop — persist the selection so Start loop uses it
@@ -430,9 +432,9 @@ async function runInteractiveBindingSelection(
     // pick one, and bind that candidate's pipeline identity into the executor.
     if (topActionId === 'start-suggested-stage') {
       const candidates = buildSuggestedStageActions(projectRoot, manifest);
-      if (candidates.length === 0) return { kind: 'retry' };
+      if (candidates.length === 0) continue;
       const selected = await promptCandidateSelection(candidates);
-      if (!selected) return { kind: 'retry' };
+      if (!selected) continue;
 
       // Recompute eligibility to prevent TOCTOU drift
       const currentEligible = pipelineSuggestions(projectRoot, manifest);
@@ -444,11 +446,11 @@ async function runInteractiveBindingSelection(
       );
       if (!stillEligible) {
         options.output.error(`Selected candidate is no longer eligible (target files have been modified since selection).`);
-        return { kind: 'retry' };
+        continue;
       }
 
       const binding = resolveBindingForSuggested(manifest, selected);
-      if (!binding) return { kind: 'retry' };
+      if (!binding) continue;
 
       return {
         kind: 'selected',
@@ -463,31 +465,63 @@ async function runInteractiveBindingSelection(
       };
     }
 
-    // Execute one-off task
-    if (topActionId.startsWith('task:')) {
-      const taskId = topActionId.slice(5);
-      const taskBinding = config.manifest.tasks?.[taskId];
-      if (!taskBinding) {
-        return { kind: 'retry' };
-      }
+    // Execute one-off task: open generic task chooser menu
+    if (topActionId === 'run-task') {
+      let taskSelectionResult: { selectedTaskId: string; taskBinding: any; runContext: RunContext } | null = null;
+      while (true) {
+        const taskMenu = buildTaskMenu(manifest, snapshot.missingInputs);
+        const selectedTaskId = await promptTaskMenu(taskMenu);
+        if (selectedTaskId === 'back') {
+          break;
+        }
 
-      const contexts = pipelineLaunchContexts(manifest, taskId, 'task');
-      let ctxRunContext: RunContext;
-      if (contexts.length > 0) {
-        const ctx = await promptPipelineLaunchContext(taskId, contexts);
-        if (ctx.kind === 'pipeline') {
-          ctxRunContext = mintRunContext({ mode: 'pipeline-start', pipelineId: ctx.pipelineId, stageId: ctx.stageId });
+        const taskBinding = config.manifest.tasks?.[selectedTaskId];
+        if (!taskBinding) continue;
+
+        const skillDef = manifest.skills[taskBinding.skill];
+        const role = skillDef?.role ?? 'unknown';
+        const skillPath = skillDef?.file ? resolve(config.manifestRoot, skillDef.file) : 'unknown';
+        const detail: TaskDetailView = {
+          taskId: selectedTaskId,
+          skillId: taskBinding.skill,
+          role,
+          skillPath,
+          targetPath: taskBinding.target.path,
+          outputPattern: taskBinding.output.pattern,
+          contract: taskBinding.output.contract,
+          missingInputs: snapshot.missingInputs.get(selectedTaskId),
+        };
+
+        const confirmation = await promptTaskDetailConfirmation(detail);
+        if (confirmation === 'back') {
+          continue;
+        }
+
+        const contexts = pipelineLaunchContexts(manifest, selectedTaskId, 'task');
+        let ctxRunContext: RunContext;
+        if (contexts.length > 0) {
+          const ctx = await promptPipelineLaunchContext(selectedTaskId, contexts);
+          if (ctx.kind === 'pipeline') {
+            ctxRunContext = mintRunContext({ mode: 'pipeline-start', pipelineId: ctx.pipelineId, stageId: ctx.stageId });
+          } else {
+            ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+          }
         } else {
           ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
         }
-      } else {
-        ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+
+        taskSelectionResult = { selectedTaskId, taskBinding, runContext: ctxRunContext };
+        break;
+      }
+
+      if (!taskSelectionResult) {
+        continue;
       }
 
       return {
         kind: 'selected',
-        selected: { kind: 'task', id: taskId, binding: taskBinding },
-        runContext: ctxRunContext,
+        selected: { kind: 'task', id: taskSelectionResult.selectedTaskId, binding: taskSelectionResult.taskBinding },
+        runContext: taskSelectionResult.runContext,
       };
     }
 

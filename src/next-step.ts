@@ -85,7 +85,7 @@ export function resolveNextStep(input: NextStepInput): NextStepDecision {
  * Compute fingerprint snapshots for every binding target across all pipelines.
  * Used by the eligibility predicate to check staleness.
  */
-function buildTargetSnapshots(projectRoot: string, manifest: V1Manifest): Map<string, string> {
+export function buildTargetSnapshots(projectRoot: string, manifest: V1Manifest): Map<string, string> {
   const snapshots = new Map<string, string>();
   for (const [pipelineId, pipeline] of Object.entries(manifest.pipelines ?? {})) {
     for (const stage of pipeline.stages) {

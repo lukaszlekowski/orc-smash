@@ -345,3 +345,28 @@ describe('renderPlainPanel — session ID', () => {
     expect(out).toContain('session: —');
   });
 });
+
+describe('renderPlainPanel — resolvedRunners and activeInvocation', () => {
+  it('renders resolvedRunners phase and activeInvocation mode', () => {
+    const out = renderPlainPanel(makeContext({
+      resolvedRunners: [
+        { skillId: 'plan-audit', agent: 'opencode', model: 'opencode-model', role: 'auditor', phase: 'evaluate', effort: 'medium', sessionStrategy: 'resume-per-skill' },
+        { skillId: 'plan-follow-up', agent: 'fake', model: 'fake-model', role: 'planner', phase: 'repair', effort: null, sessionStrategy: 'fresh-per-invocation' },
+      ],
+      activeInvocation: {
+        skillId: 'plan-audit',
+        version: 2,
+        sessionMode: 'resumed',
+        sessionId: 'sess-99999',
+        newSessionPending: false,
+      },
+    }));
+
+    expect(out).toContain('Runner [Evaluate] (plan-audit · auditor)');
+    expect(out).toContain('opencode · opencode-model');
+    expect(out).toContain('esume per skill');
+    expect(out).toContain('Runner [Repair] (plan-follow-up · planner)');
+    expect(out).toContain('Active invocation');
+    expect(out).toContain('plan-audit v2 — resuming session *99999');
+  });
+});

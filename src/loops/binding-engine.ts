@@ -220,6 +220,7 @@ export async function runBinding(
           ownership: options.ownership,
           runContext: context,
           providerCallCount,
+          runners,
         },
         {
           runner,
@@ -756,8 +757,10 @@ function resolveContinuity(
   skillId: string,
   allHistory: ResumeRecord[],
   chainId: string,
-): { mode: 'fresh' | 'resumed'; sessionId?: string } {
-  if (sessionStrategy === 'fresh-per-invocation') return { mode: 'fresh' };
+): { mode: 'fresh' | 'resumed'; sessionId?: string; freshReason?: 'policy' | 'no-compatible-session' | 'provider-unsupported' } {
+  if (sessionStrategy === 'fresh-per-invocation') {
+    return { mode: 'fresh', freshReason: 'policy' };
+  }
 
   // Scope the search to the current chain only (same chainId).  Walk
   // backwards through chain-scoped history and stop at an acceptance or
@@ -777,24 +780,28 @@ function resolveContinuity(
     if (item.decision === 'accepted') break;
   }
 
-  if (!candidate || candidate.meta.skill !== skillId) return { mode: 'fresh' };
+  if (!candidate || candidate.meta.skill !== skillId) {
+    return { mode: 'fresh', freshReason: 'no-compatible-session' };
+  }
 
   const sessionId = candidate.meta.sessionId;
-  if (!sessionId || sessionId === 'none') return { mode: 'fresh' };
+  if (!sessionId || sessionId === 'none') {
+    return { mode: 'fresh', freshReason: 'no-compatible-session' };
+  }
   if (candidate.meta.agent !== runner.agent
     || candidate.meta.model !== runner.model
     || (candidate.meta.effort ?? undefined) !== (runner.effort ?? undefined)) {
-    return { mode: 'fresh' };
+    return { mode: 'fresh', freshReason: 'no-compatible-session' };
   }
   let adapter;
   try {
     adapter = getAdapter(registry, runner.agent);
   } catch {
-    return { mode: 'fresh' };
+    return { mode: 'fresh', freshReason: 'provider-unsupported' };
   }
   return adapter.capabilities.resumeSession
     ? { mode: 'resumed', sessionId }
-    : { mode: 'fresh' };
+    : { mode: 'fresh', freshReason: 'provider-unsupported' };
 }
 
 function nextEvaluationRequest(

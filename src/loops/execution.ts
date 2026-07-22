@@ -6,7 +6,7 @@ import type { Config } from '../config.js';
 import { debugLoopSpawn } from '../debug-spawn.js';
 import { setStepCtx } from '../interrupted-artifact.js';
 import { roleForKind, type Step } from '../state.js';
-import { buildPanelContext, latestVersion, resolveLoopLabels } from '../status.js';
+import { buildPanelContext, latestVersion, resolveLoopLabels, type ActiveInvocationDisplay, type ResolvedRunnerDisplay } from '../status.js';
 import type { PanelContext } from '../status.js';
 import type { StepKind } from '../provenance.js';
 import type { LoopSpec } from '../manifest.js';
@@ -31,6 +31,7 @@ export interface LoopExecutionDeps {
   ownership?: OwnershipContext | null;
   runContext?: RunContext;
   providerCallCount?: { value: number };
+  runners?: Record<string, Runner>;
 }
 
 export interface ExecuteLoopStep {
@@ -41,7 +42,7 @@ export interface ExecuteLoopStep {
   skillId: string;
   version: number;
   iteration: number;
-  continuity?: { mode: 'fresh' | 'resumed'; sessionId?: string };
+  continuity?: { mode: 'fresh' | 'resumed'; sessionId?: string; freshReason?: 'policy' | 'no-compatible-session' | 'provider-unsupported' };
   sessionStrategy?: string;
   inputFingerprint: string;
 }
@@ -150,6 +151,37 @@ export async function executeLoopStep(
       if (kind === 'evaluate') activeLabel = labels.evaluate?.skillId ?? skillId;
       else if (kind === 'repair') activeLabel = labels.repair?.skillId ?? skillId;
 
+      const resolvedRunnersList: ResolvedRunnerDisplay[] = [];
+      if (deps.runners) {
+        for (const [sId, r] of Object.entries(deps.runners)) {
+          const skillDef = deps.config.manifest.skills[sId];
+          const role = skillDef?.role ?? roleForKind(kind);
+          const loopSpec = deps.config.manifest.loops[deps.loopName];
+          const isRepair = loopSpec?.repair?.skill === sId;
+          const isTask = deps.bindingKind === 'task';
+          const phase: 'evaluate' | 'repair' | 'task' = isTask ? 'task' : (isRepair ? 'repair' : 'evaluate');
+
+          resolvedRunnersList.push({
+            skillId: sId,
+            agent: r.agent,
+            model: r.model,
+            role,
+            phase,
+            effort: r.effort ?? null,
+            sessionStrategy: (r.sessionStrategy === 'resume-per-skill' ? 'resume-per-skill' : 'fresh-per-invocation'),
+          });
+        }
+      }
+
+      const activeInvocation: ActiveInvocationDisplay = {
+        skillId,
+        version,
+        sessionMode: request.continuity?.mode ?? 'fresh',
+        sessionId: request.continuity?.sessionId ?? null,
+        freshReason: request.continuity?.freshReason,
+        newSessionPending: request.continuity?.mode === 'fresh',
+      };
+
       return buildPanelContext(
         deps.projectRoot,
         deps.loopName,
@@ -161,8 +193,9 @@ export async function executeLoopStep(
         liveInFlight,
         latestVersion(deps.steps),
         false,
-        [],
-        deps.providerCallCount?.value
+        resolvedRunnersList,
+        deps.providerCallCount?.value,
+        activeInvocation
       );
     });
   }

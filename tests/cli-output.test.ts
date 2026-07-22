@@ -255,4 +255,29 @@ describe('Plain mode loop-level integration', () => {
       .join('');
     expect(summaryWrites).toContain('\u001B[?1049l');
   });
+
+  it('writeStatic writes non-empty static output without alternate-screen or cursor-clear escape sequences', () => {
+    const panelOutput = createPanelCliOutput();
+    const plainOutput = createPlainCliOutput();
+
+    const testText = 'Project Snapshot\nProject: /tmp/test\n';
+
+    // Panel writeStatic
+    const panelStart = stdoutWriteSpy.mock.calls.length;
+    panelOutput.writeStatic(testText);
+    const panelWritten = stdoutWriteSpy.mock.calls.slice(panelStart).map((c: any) => c[0]).join('');
+    expect(panelWritten).toContain(testText);
+    expect(panelWritten).not.toContain('\u001B[?1049h');
+    expect(panelWritten).not.toContain('\u001B[?1049l');
+    expect(panelWritten).not.toContain('\u001B[H\u001B[2J');
+
+    // Plain writeStatic
+    const plainStart = stdoutWriteSpy.mock.calls.length;
+    plainOutput.writeStatic(testText);
+    const plainWritten = stdoutWriteSpy.mock.calls.slice(plainStart).map((c: any) => c[0]).join('');
+    expect(plainWritten).toContain(testText);
+    expect(plainWritten).not.toContain('\u001B[?1049h');
+    expect(plainWritten).not.toContain('\u001B[?1049l');
+    expect(plainWritten).not.toContain('\u001B[H\u001B[2J');
+  });
 });
