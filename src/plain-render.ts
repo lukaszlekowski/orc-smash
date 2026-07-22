@@ -37,6 +37,10 @@ export function wrapField(label: string, value: string, width: number): string[]
   return lines;
 }
 
+/**
+ * Render a plain normal-screen representation of PanelContext.
+ * Utility renderer available for non-TTY or plain snapshot rendering.
+ */
 export function renderPlainPanel(context: PanelContext): string {
   const lines: string[] = [];
   const width = resolveTerminalWidth();
@@ -61,13 +65,27 @@ export function renderPlainPanel(context: PanelContext): string {
     lines.push(...wrapField('Latest version', `v${context.latestVersion}`, width));
   }
 
-  for (const runner of context.resolvedRunners ?? []) {
-    const source = runner.source === 'inherited' && runner.inheritedFrom
-      ? `inherited from ${runner.inheritedFrom.kind} v${runner.inheritedFrom.version}, session ${formatSessionId(runner.inheritedFrom.sessionId)}`
-      : runner.source === 'selected'
-        ? 'selected this chain'
-        : 'configured for this run';
-    lines.push(...wrapField(`Runner (${runner.skillId})`, `${runner.agent} · ${runner.model} — ${source}`, width));
+  if (context.resolvedRunners && context.resolvedRunners.length > 0) {
+    for (const runner of context.resolvedRunners) {
+      const phaseLabel = runner.phase ? runner.phase.charAt(0).toUpperCase() + runner.phase.slice(1) : 'Skill';
+      const roleStr = runner.role ? ` · ${runner.role}` : '';
+      const effortStr = runner.effort ?? 'provider default';
+      const stratStr = runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation';
+      lines.push(...wrapField(`Runner [${phaseLabel}] (${runner.skillId}${roleStr})`, `${runner.agent} · ${runner.model} (${effortStr}) — ${stratStr}`, width));
+    }
+  }
+
+  if (context.activeInvocation) {
+    const active = context.activeInvocation;
+    const pendingStr = (active.newSessionPending || active.sessionMode === 'fresh') ? ', new session ID: pending' : '';
+    const modeStr = active.sessionMode === 'resumed'
+      ? `resuming session ${formatSessionId(active.sessionId)}`
+      : active.freshReason === 'policy'
+        ? `fresh session (policy${pendingStr})`
+        : active.freshReason === 'provider-unsupported'
+          ? `fresh session (provider unsupported${pendingStr})`
+          : `fresh session (no compatible session${pendingStr})`;
+    lines.push(...wrapField('Active invocation', `${active.skillId} v${active.version} — ${modeStr}`, width));
   }
 
   lines.push('Timeline:');

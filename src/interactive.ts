@@ -2,7 +2,26 @@ import { select, input, confirm } from '@inquirer/prompts';
 import type { Config } from './config.js';
 import { isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
-import type { TopMenuAction, LoopSubmenuItem, PipelineLaunchContext, SuggestedStageAction } from './stage-menu.js';
+import type { TopMenuAction, LoopSubmenuItem, TaskMenuItem, PipelineLaunchContext, SuggestedStageAction } from './stage-menu.js';
+
+export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean }>(
+  item: T,
+  value: string,
+): { name: string; value: string; disabled: boolean } {
+  const isRecommended = Boolean(item.recommended && !item.disabledReason);
+  let name = item.label;
+  if (isRecommended) {
+    name += ' (recommended)';
+  }
+  if (item.disabledReason) {
+    name += ` (unavailable: ${item.disabledReason})`;
+  }
+  return {
+    name,
+    value,
+    disabled: Boolean(item.disabledReason),
+  };
+}
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
   return select({
@@ -21,11 +40,7 @@ export async function promptLoopSelect(loops: string[], defaultLoop: string): Pr
 export async function promptTopLevelMenu(actions: TopMenuAction[]): Promise<string> {
   return select({
     message: 'What would you like to do?',
-    choices: actions.map(a => ({
-      name: a.label,
-      value: a.id,
-      disabled: a.disabledReason,
-    })),
+    choices: actions.map(a => formatMenuChoice(a, a.id)),
   });
 }
 
@@ -34,15 +49,69 @@ export async function promptTopLevelMenu(actions: TopMenuAction[]): Promise<stri
  * Returns the submenu item id.
  */
 export async function promptLoopSubmenu(items: LoopSubmenuItem[]): Promise<string> {
-  const recommended = items.find(i => i.recommended);
+  const recommended = items.find(i => i.recommended && !i.disabledReason);
   return select({
     message: 'What would you like to do?',
-    choices: items.map(i => ({
-      name: i.recommended ? `${i.label} (recommended)` : i.label,
-      value: i.id,
-      disabled: i.disabledReason,
-    })),
-    default: recommended?.id ?? items[0]!.id,
+    choices: items.map(i => formatMenuChoice(i, i.id)),
+    default: recommended?.id ?? items.find(i => !i.disabledReason)?.id ?? items[0]!.id,
+  });
+}
+
+/**
+ * Show the generic task menu (list of configured tasks + Back).
+ */
+export async function promptTaskMenu(tasks: TaskMenuItem[]): Promise<string> {
+  const choices = tasks.map(t => formatMenuChoice(t, t.taskId));
+  choices.push({ name: 'Back to main menu', value: 'back', disabled: false });
+  return select({
+    message: 'Select a task to run:',
+    choices,
+  });
+}
+
+export interface TaskDetailView {
+  taskId: string;
+  skillId: string;
+  role: string;
+  skillPath: string;
+  targetPath: string;
+  outputPattern: string;
+  contract: string;
+  missingInputs?: string[];
+}
+
+/**
+ * Show task details and prompt for confirmation (Run task / Back).
+ */
+export async function promptTaskDetailConfirmation(detail: TaskDetailView): Promise<'run' | 'back'> {
+  console.log(`\nTask Details: ${detail.taskId}`);
+  console.log(`  Bound skill:  ${detail.skillId} (${detail.skillPath})`);
+  console.log(`  Role:         ${detail.role}`);
+  console.log(`  Target:       ${detail.targetPath}`);
+  console.log(`  Output:       ${detail.outputPattern} (${detail.contract})`);
+  if (detail.missingInputs && detail.missingInputs.length > 0) {
+    console.log(`  Missing:      ${detail.missingInputs.join(', ')}`);
+  }
+  console.log('');
+
+  const choices = [
+    { name: 'Run task', value: 'run', disabled: Boolean(detail.missingInputs && detail.missingInputs.length > 0) },
+    { name: 'Back to task menu', value: 'back', disabled: false },
+  ];
+
+  return select({
+    message: `Confirm execution of task '${detail.taskId}':`,
+    choices,
+  }) as Promise<'run' | 'back'>;
+}
+
+/**
+ * Prompt for acknowledgement after displaying persistent project/pipeline state.
+ */
+export async function promptStatusAcknowledgement(): Promise<void> {
+  await select({
+    message: 'Press Enter to return to main menu',
+    choices: [{ name: 'Back to main menu', value: 'back' }],
   });
 }
 
@@ -216,25 +285,21 @@ export async function promptRunners(
       ? []
       : (catalogue?.modelEfforts?.[selectedModel] ?? catalogue?.efforts ?? []);
     let selectedEffort: string | undefined;
-    const effortChoices: Array<{ name: string; value: string; disabled?: string }> = [
-      { name: 'Provider default', value: 'default' },
+    const effortChoices = [
+      formatMenuChoice({ label: 'Provider default' }, 'default'),
     ];
     if (adapter && !adapter.capabilities.effort) {
-      effortChoices.push({
-        name: `Configure effort (unavailable — ${agent} does not support effort)`,
-        value: 'unsupported-effort',
-        disabled: `${agent} does not support effort`,
-      });
+      effortChoices.push(
+        formatMenuChoice({ label: 'Configure effort', disabledReason: `${agent} does not support effort` }, 'unsupported-effort')
+      );
     } else if (effortLevels.length > 0) {
       for (const level of effortLevels) {
-        effortChoices.push({ name: level, value: level });
+        effortChoices.push(formatMenuChoice({ label: level }, level));
       }
     } else {
-      effortChoices.push({
-        name: `Configure effort (unavailable — no effort levels for model '${selectedModel}')`,
-        value: 'unsupported-effort',
-        disabled: `no effort levels for model '${selectedModel}'`,
-      });
+      effortChoices.push(
+        formatMenuChoice({ label: 'Configure effort', disabledReason: `no effort levels for model '${selectedModel}'` }, 'unsupported-effort')
+      );
     }
     const pickedEffort = await select({
       message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
@@ -246,17 +311,17 @@ export async function promptRunners(
     }
 
     let selectedSessionStrategy: string | undefined;
-    const sessionChoices: Array<{ name: string; value: string; disabled?: string }> = [
-      { name: 'Fresh per invocation (no session reuse)', value: 'fresh-per-invocation' },
+    const sessionChoices = [
+      formatMenuChoice({ label: 'Fresh per invocation (no session reuse)' }, 'fresh-per-invocation'),
     ];
     if (adapter && !adapter.capabilities.resumeSession) {
-      sessionChoices.push({
-        name: `Resume per skill (unavailable — ${agent} does not support session resumption)`,
-        value: 'unsupported-resume',
-        disabled: `${agent} does not support session resumption`,
-      });
+      sessionChoices.push(
+        formatMenuChoice({ label: 'Resume per skill (reuse last session)', disabledReason: `${agent} does not support session resumption` }, 'unsupported-resume')
+      );
     } else if (adapter?.capabilities.resumeSession) {
-      sessionChoices.push({ name: 'Resume per skill (reuse last session)', value: 'resume-per-skill' });
+      sessionChoices.push(
+        formatMenuChoice({ label: 'Resume per skill (reuse last session)' }, 'resume-per-skill')
+      );
     }
     const pickedSession = await select({
       message: `Select session strategy for agent '${agent}' (skill '${skillId}'):`,

@@ -246,7 +246,8 @@ describe('Interactive registry selection', () => {
     expect(effortEnabled.value).toBe('default');
     const effortDisabled = effortCall.choices.find((c: any) => c.disabled);
     expect(effortDisabled).toBeDefined();
-    expect(effortDisabled.disabled).toContain('does not support effort');
+    expect(effortDisabled.disabled).toBe(true);
+    expect(effortDisabled.name).toContain('(unavailable: non-resume-agent does not support effort)');
 
     // Session choices: Fresh per invocation (enabled) + disabled entry with reason
     expect(sessionCall.choices.length).toBeGreaterThanOrEqual(2);
@@ -255,7 +256,8 @@ describe('Interactive registry selection', () => {
     expect(sessionEnabled.value).toBe('fresh-per-invocation');
     const sessionDisabled = sessionCall.choices.find((c: any) => c.disabled);
     expect(sessionDisabled).toBeDefined();
-    expect(sessionDisabled.disabled).toContain('does not support session resumption');
+    expect(sessionDisabled.disabled).toBe(true);
+    expect(sessionDisabled.name).toContain('(unavailable: non-resume-agent does not support session resumption)');
   });
 
   it('promptRunners with forceSelect bypasses the customize confirm and shows the model list', async () => {

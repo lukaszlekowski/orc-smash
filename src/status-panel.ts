@@ -30,13 +30,31 @@ export function renderStatusPanel(context: PanelContext): string {
     `Latest version:   v${context.latestVersion}`
   ];
 
-  for (const runner of context.resolvedRunners ?? []) {
-    const source = runner.source === 'inherited' && runner.inheritedFrom
-      ? `inherited from ${runner.inheritedFrom.kind} v${runner.inheritedFrom.version}, session ${formatSessionId(runner.inheritedFrom.sessionId)}`
-      : runner.source === 'selected'
-        ? 'selected this chain'
-        : 'configured for this run';
-    contentLines.push(`Runner (${runner.skillId}): ${chalk.green(`${runner.agent} · ${runner.model}`)} — ${source}`);
+  if (context.resolvedRunners && context.resolvedRunners.length > 0) {
+    contentLines.push('');
+    contentLines.push(chalk.bold('Run configuration'));
+    for (const runner of context.resolvedRunners) {
+      const phaseLabel = runner.phase ? runner.phase.charAt(0).toUpperCase() + runner.phase.slice(1) : 'Skill';
+      const roleStr = runner.role ? ` (${runner.role})` : '';
+      const effortStr = runner.effort ?? 'provider default';
+      const stratStr = runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation';
+      contentLines.push(`  ${phaseLabel.padEnd(10)} ${`${runner.skillId}${roleStr}`.padEnd(24)} ${chalk.green(`${runner.agent} · ${runner.model}`)}  ${effortStr}  ${stratStr}`);
+    }
+  }
+
+  if (context.activeInvocation) {
+    const active = context.activeInvocation;
+    const pendingStr = (active.newSessionPending || active.sessionMode === 'fresh') ? ', new session ID: pending' : '';
+    const modeStr = active.sessionMode === 'resumed'
+      ? `resuming session ${formatSessionId(active.sessionId)}`
+      : active.freshReason === 'policy'
+        ? `fresh session (policy${pendingStr})`
+        : active.freshReason === 'provider-unsupported'
+          ? `fresh session (provider unsupported${pendingStr})`
+          : `fresh session (no compatible session${pendingStr})`;
+    contentLines.push('');
+    contentLines.push(chalk.bold('Active invocation'));
+    contentLines.push(`  ${active.skillId} v${active.version} — ${modeStr}`);
   }
 
   const timelineSection = renderTimelineSection(context);

@@ -7,6 +7,7 @@ import { classifyArtifact } from './artifact-contract.js';
 import { validateImplementLedger } from './implement-ledger.js';
 import { roleForKind, type Step, type GlobalSnapshot } from './state.js';
 import { computeArtifactIdentity, expectedPredecessor } from './pipeline-state.js';
+import { readInterruptedMarker } from './interrupted-artifact.js';
 
 const EXCLUDED_DIRS = new Set([
   '.git',
@@ -234,14 +235,11 @@ export function scanGlobalSnapshot(
             throw new Error(`Stage '${meta.stageId}' maps to ${boundBindingKind} '${boundBindingId}', but front matter has '${meta.bindingId}'.`);
           }
           
-          // 4. Require pipeline-start to be the configured first stage with null parent
+          // 4. Require pipeline-start to be the configured first stage
           if (meta.chainMode === 'pipeline-start') {
             const firstStage = pipeline.stages[0];
             if (!firstStage || firstStage.stageId !== meta.stageId) {
               throw new Error(`Stage '${meta.stageId}' is not the first stage in pipeline '${meta.pipelineId}'.`);
-            }
-            if (meta.parentArtifactIdentity !== null) {
-              throw new Error(`pipeline-start artifact must have null parent.`);
             }
           }
         }
@@ -288,6 +286,7 @@ export function scanGlobalSnapshot(
       if (classification.status !== 'classified') {
         step.unclassified = true;
         step.contractValid = false;
+        step.unclassifiedReason = classification.reason || 'Unclassified: does not satisfy current provenance contract.';
         const bindingSteps = byBinding.get(patternInfo.bindingId) ?? [];
         bindingSteps.push(step);
         byBinding.set(patternInfo.bindingId, bindingSteps);
@@ -328,6 +327,7 @@ export function scanGlobalSnapshot(
       const bindingId = meta.bindingId ?? patternInfo.bindingId;
       if (step.contractValid === false) {
         step.unclassified = true;
+        step.unclassifiedReason = 'Output contract validation failed.';
         step.decision = undefined;
         step.completionOutcome = undefined;
         step.verdict = undefined;
@@ -353,6 +353,7 @@ export function scanGlobalSnapshot(
         artifactPath: file,
         mtime,
         unclassified: true,
+        unclassifiedReason: err.message ?? 'Artifact identity verification failed.',
         contractValid: false,
         provider,
       };
@@ -401,7 +402,7 @@ export function scanGlobalSnapshot(
       }
       
       // 6. Keep exact immediate-parent validation for subsequent same-chain artifacts
-      if (step.parentArtifactIdentity !== null && step.chainMode !== 'stage-continuation' && step.chainMode !== 'pipeline-start') {
+      if (step.parentArtifactIdentity !== null && step.chainMode !== 'stage-continuation') {
         const parentId = step.parentArtifactIdentity;
         const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
         
@@ -413,6 +414,7 @@ export function scanGlobalSnapshot(
       if (invalidReason) {
         step.unclassified = true;
         step.contractValid = false;
+        step.unclassifiedReason = invalidReason;
         step.decision = undefined;
         step.completionOutcome = undefined;
         step.verdict = undefined;
@@ -452,6 +454,7 @@ export function scanGlobalSnapshot(
       if (!lineageValid) {
         current.unclassified = true;
         current.contractValid = false;
+        current.unclassifiedReason = 'Chain lineage invalid: parent artifact identity mismatch.';
         current.decision = undefined;
         current.completionOutcome = undefined;
         current.verdict = undefined;
@@ -462,5 +465,6 @@ export function scanGlobalSnapshot(
   }
   unclassified.sort((a, b) => a.mtime - b.mtime);
 
-  return { steps, byBinding, unclassified, missingInputs };
+  const interruptedMarker = readInterruptedMarker(projectRoot);
+  return { steps, byBinding, unclassified, missingInputs, interruptedMarker };
 }

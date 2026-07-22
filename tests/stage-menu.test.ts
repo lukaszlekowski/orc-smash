@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { buildTopLevelMenu, buildLoopSubmenu, pipelineLaunchContexts } from '../src/stage-menu.js';
+import { buildTopLevelMenu, buildLoopSubmenu, buildTaskMenu, pipelineLaunchContexts } from '../src/stage-menu.js';
+import { formatMenuChoice } from '../src/interactive.js';
 import type { V1Manifest } from '../src/manifest.js';
 
 describe('F7 top-level menu', () => {
   const manifestWithEverything: V1Manifest = {
     schemaVersion: 1,
-    roles: {},
-    skills: {},
+    roles: { implementer: 'roles/impl.md' },
+    skills: { '30-simple-implement': { file: 'skills/impl.md', role: 'implementer', runnerProfile: 'default' } },
     loops: { plan: {} as any, review: {} as any },
-    tasks: { implement: {} as any },
+    tasks: { implement: { skill: '30-simple-implement', target: { path: '.', kind: 'file' }, inputs: [], output: { pattern: 'out.md', contract: 'required-artifact' } } },
     pipelines: { default: { stages: [{ stageId: 'plan', loop: 'plan' }] } },
   };
 
@@ -30,17 +31,37 @@ describe('F7 top-level menu', () => {
     pipelines: {},
   };
 
-  it('shows start-loop, change-loop, run-task when both exist', () => {
-    const actions = buildTopLevelMenu(manifestWithEverything);
+  it('shows start-loop, run-task, change-loop, start-suggested-stage, display-status, stop', () => {
+    const actions = buildTopLevelMenu(manifestWithEverything, true);
     const ids = actions.map(a => a.id);
-    expect(ids).toContain('start-loop');
-    expect(ids).toContain('change-loop');
-    expect(ids).toContain('task:implement');
-    expect(ids).toContain('display-status');
-    expect(ids).toContain('stop');
+    expect(ids).toEqual(['start-loop', 'run-task', 'change-loop', 'start-suggested-stage', 'display-status', 'stop']);
     expect(actions.find(a => a.id === 'start-loop')!.disabledReason).toBeUndefined();
-    expect(actions.find(a => a.id === 'change-loop')!.disabledReason).toBeUndefined();
-    expect(actions.find(a => a.id === 'task:implement')!.disabledReason).toBeUndefined();
+    expect(actions.find(a => a.id === 'run-task')!.disabledReason).toBeUndefined();
+    expect(actions.find(a => a.id === 'start-suggested-stage')!.disabledReason).toBeUndefined();
+  });
+
+  it('builds task menu choices for configured tasks', () => {
+    const taskItems = buildTaskMenu(manifestWithEverything);
+    expect(taskItems).toHaveLength(1);
+    expect(taskItems[0]!.taskId).toBe('implement');
+    expect(taskItems[0]!.skillId).toBe('30-simple-implement');
+    expect(taskItems[0]!.role).toBe('implementer');
+  });
+
+  it('formats menu choices with explicit (unavailable: reason) label and boolean disabled state', () => {
+    const item = { label: 'Start loop', disabledReason: 'no loops configured in manifest' };
+    const choice = formatMenuChoice(item, 'start-loop');
+    expect(choice.name).toBe('Start loop (unavailable: no loops configured in manifest)');
+    expect(choice.disabled).toBe(true);
+    expect(choice.value).toBe('start-loop');
+  });
+
+  it('recommended and unavailable cannot coexist on the same formatted choice', () => {
+    const item = { label: 'Continue loop', recommended: true, disabledReason: 'no active chain' };
+    const choice = formatMenuChoice(item, 'continue-loop');
+    expect(choice.name).toBe('Continue loop (unavailable: no active chain)');
+    expect(choice.name).not.toContain('(recommended)');
+    expect(choice.disabled).toBe(true);
   });
 
   it('disables start-loop and change-loop when no loops exist', () => {
@@ -49,15 +70,14 @@ describe('F7 top-level menu', () => {
     expect(actions.find(a => a.id === 'change-loop')!.disabledReason).toEqual(expect.any(String));
   });
 
-  it('shows run-task disabled when no tasks exist and does not list individual tasks', () => {
+  it('shows run-task disabled when no tasks exist', () => {
     const actions = buildTopLevelMenu(manifestLoopsOnly);
     expect(actions.find(a => a.id === 'run-task')!.disabledReason).toEqual(expect.any(String));
-    expect(actions.find(a => a.group === 'run-task' && a.id.startsWith('task:'))).toBeUndefined();
   });
 
   it('every action stays visible — no action is filtered out', () => {
     const actions = buildTopLevelMenu(manifestEmpty);
-    expect(actions.length).toBeGreaterThanOrEqual(4);
+    expect(actions.length).toBe(6);
     expect(actions.every(a => a.label.length > 0)).toBe(true);
   });
 });
@@ -141,7 +161,7 @@ describe('F7 Continue label detail', () => {
     });
     const item = items.find(i => i.id === 'continue-current-loop')!;
     expect(item.label).toContain('resume-per-skill');
-    expect(item.label).toContain('opencode/opencode-go/model');
+    expect(item.label).toContain('opencode-go/model');
     expect(item.label).toContain('plan-audit');
     expect(item.label).toContain('repair v3');
   });

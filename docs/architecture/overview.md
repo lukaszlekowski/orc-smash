@@ -69,8 +69,12 @@ unclassified and cannot provide completion, continuation, or resume evidence.
 `state.ts` scans every configured loop/task output pattern into one global
 snapshot, classifies each artifact through `artifact-contract.ts`, sorts the
 timeline chronologically, validates lineage, and ignores `docs/dev/archived/`.
-Status may filter the global result for display, but filtering does not change
-what the index knows.
+`project-snapshot-view.ts` derives a pure view model (`ProjectSnapshotView`)
+containing per-binding state summaries (latest evaluate/repair/task steps with
+provenance, missing inputs, unclassified counts), eligible/stale pipeline
+candidates, and suggested loop reasons without re-scanning disk.
+`project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
+and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model.
 
 ## Runner and provider boundaries
 

@@ -24,16 +24,20 @@ production execution; it packages the manifest, provider catalogues, roles,
 skills, and process-group bootstrap. `dist/src/cli.js` is an internal build
 artifact, not the public install path.
 
-## Commands
+## Commands & Interactive Operator Surface
 
 ```bash
-orc smash --project <path>                         # interactive configured loop
+orc smash --project <path>                         # interactive menu with startup snapshot
 orc smash --project <path> --loop <loop-id>        # ad-hoc approval loop
 orc smash --project <path> --task <task-id>        # ad-hoc one-off task
 orc smash --project <path> --pipeline <pipeline>   # explicit pipeline start
 orc smash --project <path> --plain --task <task-id>
 orc status --project <path> [--all] [--config <path>]
 ```
+
+On launch, interactive `orc smash` renders a compact startup snapshot displaying the project root, config path, configured pipelines, suggested loop & reason, and a compact per-binding state summary (binding kind, target path, latest evaluate/repair/task steps with decision/outcome, provider/model, effort, session strategy/ID, missing inputs, and unclassified count).
+
+All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. `Execute one-off task` opens a generic task chooser listing all configured tasks, followed by a task detail confirmation. Pressing `Back` on task detail returns to the task chooser, while pressing `Back` on the chooser returns to the main menu without re-scanning or re-printing the startup header.
 
 Runner selection is independent per skill. Global overrides are
 `--agent`, `--model`, and `--effort`; repeatable per-skill overrides are

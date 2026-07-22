@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { type StepKind } from './provenance.js';
 import { renderPattern } from './patterns.js';
 import type { V1Manifest } from './manifest.js';
-import { readInterruptedMarker } from './interrupted-artifact.js';
+import { readInterruptedMarker, type InterruptedMarker } from './interrupted-artifact.js';
 import { scanGlobalSnapshot } from './artifact-index.js';
 
 /** Derive the canonical role label for a step kind (used for synthesized steps). */
@@ -40,6 +40,7 @@ export interface Step {
   outcome?: string;
   contractValid?: boolean;
   unclassified?: boolean;
+  unclassifiedReason?: string;
 
   // v1 identity
   pipelineId?: string | null;
@@ -61,6 +62,7 @@ export interface GlobalSnapshot {
   byBinding: Map<string, Step[]>;
   unclassified: Step[];
   missingInputs: Map<string, string[]>;
+  interruptedMarker?: InterruptedMarker | null;
 }
 
 export { scanGlobalSnapshot, walkProjectDirectory } from './artifact-index.js';
