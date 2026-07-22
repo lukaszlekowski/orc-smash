@@ -8,7 +8,7 @@ import type { AgentRegistry } from '../src/adapters/registry.js';
 import type { RunEvent } from '../src/run-event.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 
@@ -21,6 +21,8 @@ vi.mock('../src/interactive.js', () => {
     promptTopLevelMenu: vi.fn(),
     promptLoopSubmenu: vi.fn(),
     promptPipelineLaunchContext: vi.fn(),
+    promptCandidateSelection: vi.fn(),
+    promptIterationExtension: vi.fn(),
   };
 });
 
@@ -40,7 +42,7 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
     buildRun(input: RunInput) {
       return { command: 'scripted-opencode', args: [input.prompt] };
     },
-    async run(input: RunInput): Promise<RunResult> {
+    run: vi.fn(async (input: RunInput): Promise<RunResult> => {
       const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
       if (match?.[1]) {
         const outputPath = resolve(input.cwd, match[1].trim());
@@ -63,7 +65,7 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
         }
       }
       return { stdout: 'done', exitCode: 0, sessionId: 'scripted-session' };
-    },
+    }),
   };
 }
 
@@ -470,8 +472,10 @@ describe('generic smash dispatch', () => {
       writeFileSync(join(continueProject, 'skills/repair.md'), '# Repair\n');
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       removeTempDir(continueProject);
+      const { DEFAULT_REGISTRY } = await import('../src/config.js');
+      delete DEFAULT_REGISTRY.profiles['repairProfile'];
     });
 
     it('Continue label shows the distinct repair runner tuple which matches execution', async () => {
@@ -527,10 +531,6 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
       // Verify the profile is in a fresh loadConfig (as smashAction would do)
-      const { loadConfig: lc } = await import('../src/config.js');
-      const testCfg = lc(continueProject);
-      console.log('Second loadConfig has repairProfile:', testCfg.registry.profiles['repairProfile']);
-
       // Don't pass agent/model globally — that would override the repair
       // profile via resolveWithGlobalOverrides.  Leave runner resolution to
       // profiles (mock promptRunners so the interactive flow can complete).
@@ -544,10 +544,6 @@ describe('generic smash dispatch', () => {
         output, createAdapterRegistry: () => dualReg,
       } as any);
 
-      if (result.exitCode !== 0) {
-        console.log('Continue test failed:', result.message);
-        console.log('evalCalls:', evalCalls);
-      }
       expect(result.exitCode).toBe(0);
 
       // Assert the Continue label names the repair skill AND the distinct
@@ -567,6 +563,455 @@ describe('generic smash dispatch', () => {
       expect(repairStep).toBeTruthy();
       expect(repairStep!.agent).toBe('codex');
       expect(repairStep!.model).toBe('codex-model');
+    });
+
+    it('Start suggested stage binds the correct run identity and pipelineId', async () => {
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(project);
+
+      // Write plan.md and its matching fingerprint to avoid staleness
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+
+      const predecessorMeta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'test-run-123-uuid',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: fingerprint,
+      });
+
+      // Create a completed plan-audit stage artifact
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        predecessorMeta,
+      );
+
+      // Mock interactive choices to pick the suggested stage
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => {
+        return Promise.resolve(candidates[0]); // Returns the 'default' -> 'implement' candidate
+      });
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        implement: { agent: 'opencode', model: MODEL },
+      });
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+
+      // Verify the generated artifact at docs/dev/impl-v1-opencode.md
+      const implArtifact = readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8');
+      expect(implArtifact).toContain('pipelineId: default'); // MUST be default, not test-run
+      expect(implArtifact).toContain('pipelineRunId: test-run-123-uuid');
+      expect(implArtifact).toContain('stageId: implement');
+      expect(implArtifact).toContain('parentArtifactIdentity: ' + predecessorMeta.artifactIdentity);
+    });
+
+    it('only eligible (non-stale) candidates are selectable in Start suggested stage', async () => {
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(project);
+
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+
+      const staleMeta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'stale-run-uuid',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: 'some-stale-hash',
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        staleMeta,
+      );
+
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const freshFingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const freshMeta = makeV1ArtifactMeta({
+        version: 2,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'fresh-run-uuid',
+        stageId: 'plan',
+        chainId: 'c2',
+        chainMode: 'pipeline-start',
+        resultFingerprint: freshFingerprint,
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v2-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        freshMeta,
+      );
+
+      let offeredCandidates: any[] = [];
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => {
+        offeredCandidates = candidates;
+        return Promise.resolve(candidates[0] || null);
+      });
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        implement: { agent: 'opencode', model: MODEL },
+      });
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(offeredCandidates.length).toBe(1);
+      expect(offeredCandidates[0]!.pipelineRunId).toBe('fresh-run-uuid');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('Start suggested stage is aborted immediately and does not run provider if no eligible candidates exist', async () => {
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+
+      const staleMeta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'stale-run-uuid',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: 'some-stale-hash',
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        staleMeta,
+      );
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('stop');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(vi.mocked(promptCandidateSelection)).not.toHaveBeenCalled();
+      expect(adapter.run).not.toHaveBeenCalled();
+    });
+
+    it('rejects execution safely if the predecessor target changes after menu rendering but before confirmation', async () => {
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(project);
+
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+
+      const meta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'fresh-run-uuid',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: fingerprint,
+      });
+
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        meta,
+      );
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('stop');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce(async (candidates) => {
+        writeFileSync(planPath, '# Plan - Modified!\n');
+        return candidates[0] || null;
+      });
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(adapter.run).not.toHaveBeenCalled();
+    });
+
+    it('resolves successor bindings scoped to pipelineId and executes only the correct one', async () => {
+      writeFileSync(join(continueProject, '.orc-smash.yaml'), JSON.stringify({
+        schemaVersion: 1,
+        roles: { implementer: 'roles/testRole.md' },
+        skills: {
+          evaluate: { file: 'skills/evaluate.md', role: 'implementer', runnerProfile: 'default' },
+          task1: { file: 'skills/evaluate.md', role: 'implementer', runnerProfile: 'default' },
+          task2: { file: 'skills/repair.md', role: 'implementer', runnerProfile: 'default' },
+        },
+        loops: {
+          plan: {
+            type: 'approval-loop',
+            target: { path: 'docs/dev/plan.md', kind: 'file' },
+            inputs: [],
+            evaluate: {
+              skill: 'evaluate',
+              output: { pattern: 'docs/dev/plan-audit-v{version}-{provider}.md', contract: 'decision-artifact', decision: { heading: 'Verdict', accepted: 'YES', retry: 'NO' } },
+            },
+            repair: {
+              skill: 'evaluate',
+              output: { pattern: 'docs/dev/repair-v{version}-{provider}.md', contract: 'completion-artifact' },
+            },
+          },
+        },
+        tasks: {
+          t1: {
+            skill: 'task1',
+            target: { path: 'docs/dev/t1.md', kind: 'file' },
+            output: { pattern: 'docs/dev/t1-v{version}-{provider}.md', contract: 'completion-artifact' },
+            inputs: [{ source: 'outputPath' }],
+          },
+          t2: {
+            skill: 'task2',
+            target: { path: 'docs/dev/t2.md', kind: 'file' },
+            output: { pattern: 'docs/dev/t2-v{version}-{provider}.md', contract: 'completion-artifact' },
+            inputs: [{ source: 'outputPath' }],
+          },
+        },
+        pipelines: {
+          pipe1: {
+            stages: [
+              { stageId: 'plan', loop: 'plan' },
+              { stageId: 'shared-successor', task: 't1' },
+            ],
+          },
+          pipe2: {
+            stages: [
+              { stageId: 'plan', loop: 'plan' },
+              { stageId: 'shared-successor', task: 't2' },
+            ],
+          },
+        },
+      }));
+
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(continueProject);
+
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const targetFingerprint = captureTargetFingerprint(continueProject, config.manifest.loops.plan!.target, config.manifest);
+
+      const meta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'pipe2',
+        pipelineRunId: 'run-pipe2-uuid',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: targetFingerprint,
+      });
+
+      mkdirSync(join(continueProject, 'docs/dev'), { recursive: true });
+      writeFileSync(join(continueProject, 'docs/dev/plan.md'), '# Plan\n');
+      writeFileSync(join(continueProject, 'docs/dev/t2.md'), '# Target\n');
+
+      writeArtifactWithMeta(
+        join(continueProject, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nYES\n',
+        meta,
+      );
+
+
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('stop');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => {
+        return Promise.resolve(candidates[0] || null);
+      });
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        task2: { agent: 'opencode', model: MODEL },
+      });
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      let executedSkill: string | null = null;
+      const t2Adapter: AgentAdapter = {
+        name: 'opencode',
+        capabilities: { resumeSession: true, effort: true },
+        buildRun: () => ({ command: 't2-command', args: [] }),
+        run: async (input) => {
+          executedSkill = input.skillId ?? null;
+          const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+          if (match?.[1]) {
+            const outputPath = resolve(input.cwd, match[1].trim());
+            mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+            writeFileSync(outputPath, '# Task outcome\n\n## Outcome\n\nCOMPLETED\n');
+          }
+          return { stdout: 'done', exitCode: 0, sessionId: 's' };
+        },
+      };
+
+      const customReg: AgentRegistry = {
+        adapters: new Map([['opencode', t2Adapter]]),
+      };
+
+      const result = await smashAction({
+        project: continueProject,
+        output,
+        createAdapterRegistry: () => customReg,
+      } as any);
+
+      if (result.exitCode !== 0) {
+        console.log('TEST FAILURE ERROR:', result.message);
+      }
+      expect(result.exitCode).toBe(0);
+      expect(executedSkill).toBe('task2');
+    });
+
+    it('distinguishes and binds the correct candidate when multiple candidates exist in the same pipeline run', async () => {
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(project);
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+
+      const meta1 = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'fake',
+        provider: 'fake',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'shared-run-id',
+        stageId: 'plan',
+        chainId: 'c1',
+        chainMode: 'pipeline-start',
+        resultFingerprint: fingerprint,
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-fake.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        meta1,
+      );
+
+      const meta2 = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'shared-run-id',
+        stageId: 'plan',
+        chainId: 'c2',
+        chainMode: 'pipeline-start',
+        resultFingerprint: fingerprint,
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        meta2,
+      );
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => {
+        return Promise.resolve(candidates.find(c => c.predecessorArtifactIdentity === meta2.artifactIdentity) || null);
+      });
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        implement: { agent: 'opencode', model: MODEL },
+      });
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+
+      const implArtifact = readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8');
+      expect(implArtifact).toContain('parentArtifactIdentity: ' + meta2.artifactIdentity);
+      expect(implArtifact).not.toContain('parentArtifactIdentity: ' + meta1.artifactIdentity);
     });
   });
 });

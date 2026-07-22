@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { select, confirm, input } from '@inquirer/prompts';
 import {
   promptRunners,
+  promptCandidateSelection,
 } from '../src/interactive.js';
 import { DEFAULT_REGISTRY } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
@@ -292,5 +293,78 @@ describe('Interactive registry selection', () => {
     const runners = await promptRunners(['plan-audit'], config, prodRegistry);
     expect(runners['plan-audit']).toEqual({ agent: 'opencode', model: 'opencode-model', effort: 'high', sessionStrategy: undefined });
     expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('promptCandidateSelection', () => {
+  it('returns null when candidates list is empty', async () => {
+    const result = await promptCandidateSelection([]);
+    expect(result).toBeNull();
+  });
+
+  it('renders a confirmation select menu even for a single candidate and returns it on select', async () => {
+    const candidate = {
+      pipelineId: 'default',
+      pipelineRunId: 'run-123',
+      successorStageId: 'implement',
+      predecessorStageId: 'plan',
+      predecessorArtifactIdentity: 'artifact-abc',
+      label: 'Pipeline default | Run: run-123 | Successor: implement | Predecessor: plan | Artifact: plan.md | Identity: artifact-abc | Decision: accepted | Fingerprint: valid',
+    };
+
+    const expectedKey = 'default:run-123:implement:artifact-abc';
+    vi.mocked(select).mockResolvedValueOnce(expectedKey);
+
+    const result = await promptCandidateSelection([candidate]);
+
+    expect(vi.mocked(select)).toHaveBeenCalledWith({
+      message: 'Select a pipeline stage to advance:',
+      choices: [
+        { name: candidate.label, value: expectedKey },
+        { name: 'Cancel (Go back)', value: 'cancel' }
+      ]
+    });
+    expect(result).toEqual(candidate);
+  });
+
+  it('returns null when Cancel is chosen', async () => {
+    const candidate = {
+      pipelineId: 'default',
+      pipelineRunId: 'run-123',
+      successorStageId: 'implement',
+      predecessorStageId: 'plan',
+      predecessorArtifactIdentity: 'artifact-abc',
+      label: 'Pipeline default | Run: run-123 | Successor: implement | Predecessor: plan | Artifact: plan.md | Identity: artifact-abc | Decision: accepted | Fingerprint: valid',
+    };
+
+    vi.mocked(select).mockResolvedValueOnce('cancel');
+
+    const result = await promptCandidateSelection([candidate]);
+    expect(result).toBeNull();
+  });
+
+  it('correctly distinguishes and returns the selected candidate when multiple choices are offered', async () => {
+    const cand1 = {
+      pipelineId: 'default',
+      pipelineRunId: 'run-123',
+      successorStageId: 'implement',
+      predecessorStageId: 'plan',
+      predecessorArtifactIdentity: 'art-1',
+      label: 'Cand 1',
+    };
+    const cand2 = {
+      pipelineId: 'default',
+      pipelineRunId: 'run-123',
+      successorStageId: 'implement',
+      predecessorStageId: 'plan',
+      predecessorArtifactIdentity: 'art-2',
+      label: 'Cand 2',
+    };
+
+    const key2 = 'default:run-123:implement:art-2';
+    vi.mocked(select).mockResolvedValueOnce(key2);
+
+    const result = await promptCandidateSelection([cand1, cand2]);
+    expect(result).toEqual(cand2);
   });
 });

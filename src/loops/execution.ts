@@ -30,6 +30,7 @@ export interface LoopExecutionDeps {
   maxIterations: number;
   ownership?: OwnershipContext | null;
   runContext?: RunContext;
+  providerCallCount?: { value: number };
 }
 
 export interface ExecuteLoopStep {
@@ -55,6 +56,7 @@ export async function executeLoopStep(
   request: ExecuteLoopStep
 ): Promise<ExecuteLoopStepOutcome> {
   const { runner, prompt, spawnLabel, kind, skillId, version, iteration, continuity } = request;
+
   const startedAtMs = Date.now();
   const labels = resolveLoopLabels(deps.loopSpec, deps.config.manifest);
   let lastProgressMessage = '';
@@ -158,7 +160,9 @@ export async function executeLoopStep(
         `Running ${activeLabel} v${version}...`,
         liveInFlight,
         latestVersion(deps.steps),
-        false
+        false,
+        [],
+        deps.providerCallCount?.value
       );
     });
   }
@@ -288,6 +292,11 @@ export async function executeLoopStep(
         return { kind: 'ownership-lost' };
       }
     }
+
+    if (deps.providerCallCount) {
+      deps.providerCallCount.value++;
+    }
+    deps.output.note(`Round ${iteration}/${deps.maxIterations} - provider calls ${deps.providerCallCount?.value ?? 0}`);
 
     const runInput = {
       prompt,

@@ -8,6 +8,21 @@ import { createTestAdapterRegistry, resetFakeAdapterState } from '../src/adapter
 import { createMockOutput } from './helpers/mock-output.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 
+vi.mock('../src/interactive.js', () => ({
+  promptIterationExtension: vi.fn(),
+}));
+
+vi.mock('../src/run-ownership.js', async (importOriginal) => {
+  const original = await importOriginal<any>();
+  return {
+    ...original,
+    mayStartStep: vi.fn((control, active, now, ownership) => {
+      if ((global as any).__mockFenceReject) return false;
+      return original.mayStartStep(control, active, now, ownership);
+    }),
+  };
+});
+
 const testRegistry = createTestAdapterRegistry();
 const mockOutput = createMockOutput();
 
@@ -20,6 +35,7 @@ describe('generic execution-completeness and artifact gates', () => {
   });
 
   afterEach(() => {
+    delete (global as any).__mockFenceReject;
     vi.restoreAllMocks();
     removeTempDir(tempWorkspace);
   });
@@ -84,7 +100,7 @@ describe('generic execution-completeness and artifact gates', () => {
   it('requires a valid repair artifact before starting the next evaluation', async () => {
     const root = setupProject();
     const originalRun = fakeAdapter.run;
-    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+    const spy = vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
       const outputMatch = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
       const outputPath = outputMatch?.[1]?.trim();
       if (input.kind === 'evaluate' && outputPath) {
@@ -101,9 +117,134 @@ describe('generic execution-completeness and artifact gates', () => {
       output: { ...mockOutput, stepFailed: (event: any) => stepFailed.push(event) }
     });
 
+    spy.mockRestore();
+
     expect(result).toMatchObject({ success: false, verdict: 'unknown' });
     expect(result.message).toContain('produced no artifact at docs/dev/plan-followup-v1-fake.md');
     expect(existsSync(join(root, 'docs/dev/plan-audit-v2-fake.md'))).toBe(false);
     expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'repair', errorKind: 'missing_output' }));
+  });
+
+  it('closes immediately on final round acceptance with no extension prompt', async () => {
+    const root = setupProject();
+    fakeAdapterState.verdicts = ['REJECTED', 'APPROVED'];
+
+    const { promptIterationExtension } = await import('../src/interactive.js');
+    vi.mocked(promptIterationExtension).mockClear();
+
+    const result = await runPlan(root, { maxIterations: 2 });
+
+    expect(result).toMatchObject({ success: true, verdict: 'accepted' });
+    expect(promptIterationExtension).not.toHaveBeenCalled();
+  });
+
+  it('offers extension choices on final round retry and applies selected extension', async () => {
+    const root = setupProject();
+    fakeAdapterState.verdicts = ['REJECTED', 'REJECTED', 'APPROVED'];
+
+    const { promptIterationExtension } = await import('../src/interactive.js');
+    vi.mocked(promptIterationExtension).mockResolvedValueOnce('extend-3');
+
+    const result = await runPlan(root, { maxIterations: 2, interactive: true });
+
+    expect(result).toMatchObject({ success: true, verdict: 'accepted' });
+    expect(promptIterationExtension).toHaveBeenCalledTimes(1);
+    expect(promptIterationExtension).toHaveBeenLastCalledWith(2, 2, 3); // currentBudget, roundsUsed, providerCalls
+  });
+
+  it('tracks accurate round and provider call counts', async () => {
+    const root = setupProject();
+    fakeAdapterState.verdicts = ['REJECTED', 'REJECTED', 'APPROVED'];
+
+    const notes: string[] = [];
+    const customOutput = {
+      ...mockOutput,
+      note: (msg: string) => { notes.push(msg); }
+    };
+
+    const result = await runPlan(root, { maxIterations: 3, output: customOutput });
+
+    expect(result).toMatchObject({ success: true, verdict: 'accepted' });
+    expect(notes).toEqual([
+      'Round 1/3 - provider calls 1',
+      'Round 1/3 - provider calls 2',
+      'Round 2/3 - provider calls 3',
+      'Round 2/3 - provider calls 4',
+      'Round 3/3 - provider calls 5'
+    ]);
+  });
+
+  it('does not increment providerCallCount if ownership fence rejects the provider spawn', async () => {
+    const root = setupProject();
+    const { runLoop } = await import('../src/loop.js');
+
+    const controlRecord = {
+      schemaVersion: 1 as const,
+      runId: 'active-run',
+      ownerTokenHash: 'somehash',
+      projectRoot: root,
+      hostInstanceId: 'host',
+      leaseIssuedMs: Date.now(),
+      leaseTtlMs: 100000,
+      leaseExpiresMs: Date.now() + 100000,
+      issuerRevision: 1,
+    };
+    const activeRecord = {
+      schemaVersion: 1 as const,
+      cliIdentity: {
+        pid: process.pid,
+        startMs: Date.now() - 5000,
+        command: 'node bin/orc.js',
+      },
+      groups: [],
+      state: 'running',
+      cliRevision: 1,
+    };
+
+    const runDir = join(root, '.orc-smash');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'control.json'), JSON.stringify(controlRecord));
+    writeFileSync(join(runDir, 'active.json'), JSON.stringify(activeRecord));
+
+    const { chmodSync } = await import('node:fs');
+    chmodSync(runDir, 0o700);
+    chmodSync(join(runDir, 'control.json'), 0o600);
+    chmodSync(join(runDir, 'active.json'), 0o600);
+
+    (global as any).__mockFenceReject = true;
+
+    const notes: string[] = [];
+    const customOutput = {
+      ...mockOutput,
+      note: (msg: string) => { notes.push(msg); }
+    };
+
+    const config = loadConfig(root);
+    const result = await runLoop(
+      root,
+      'plan',
+      config.manifest.loops.plan!,
+      config,
+      { evaluate: { agent: 'fake', model: 'fake-model' }, repair: { agent: 'fake', model: 'fake-model' } },
+      {
+        maxIterations: 1,
+        registry: testRegistry,
+        output: customOutput,
+        interactive: false,
+        ownership: {
+          token: 'tok',
+          runId: 'active-run',
+          stateDir: runDir,
+          projectDir: root,
+          runDir,
+          control: controlRecord,
+          env: {},
+        }
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.outcome?.kind).toBe('ownership-lost');
+    expect(notes.length).toBe(0);
   });
 });

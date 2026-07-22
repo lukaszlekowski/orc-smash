@@ -53,6 +53,7 @@ export interface PanelContext {
   } | null;
   latestVersion: number;
   readOnly: boolean;
+  providerCalls?: number;
 }
 
 export interface ResolvedRunnerDisplay {
@@ -74,7 +75,8 @@ export function buildPanelContext(
   inFlight: PanelContext['inFlight'] = null,
   latestVersion: number = 0,
   readOnly: boolean = false,
-  resolvedRunners: ResolvedRunnerDisplay[] = []
+  resolvedRunners: ResolvedRunnerDisplay[] = [],
+  providerCalls?: number
 ): PanelContext {
   return {
     projectRoot,
@@ -87,7 +89,8 @@ export function buildPanelContext(
     nextStepMessage,
     inFlight,
     latestVersion,
-    readOnly
+    readOnly,
+    providerCalls
   };
 }
 

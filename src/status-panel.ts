@@ -10,7 +10,9 @@ export function renderStatusPanel(context: PanelContext): string {
 
   const iterationValue = context.readOnly
     ? 'not running'
-    : `${context.currentIteration}/${context.maxIterations}`;
+    : context.providerCalls !== undefined
+      ? `Round ${context.currentIteration}/${context.maxIterations} - provider calls ${context.providerCalls}`
+      : `${context.currentIteration}/${context.maxIterations}`;
 
   let activeStr = 'None';
   if (context.activeSkillRunner) {

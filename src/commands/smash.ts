@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, relative } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scanGlobalSnapshot } from '../state.js';
 import { runLoop, runTask } from '../loop.js';
@@ -11,6 +11,7 @@ import {
   promptTopLevelMenu,
   promptLoopSubmenu,
   promptPipelineLaunchContext,
+  promptCandidateSelection,
 } from '../interactive.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
@@ -23,7 +24,9 @@ import { makeRunEvent } from '../run-event.js';
 import { continueRunContext, mintRunContext, type RunContext, recoverInProgressRun } from '../pipeline-state.js';
 import { bindingHasInProgressChain, bindingHasCompletedAcceptance, resolveDefaultLoop } from '../loop-selector.js';
 import { renderStatusPanel } from './status.js';
+import { pipelineSuggestions } from '../next-step.js';
 import { buildTopLevelMenu, buildLoopSubmenu, pipelineLaunchContexts } from '../stage-menu.js';
+import type { SuggestedStageAction } from '../stage-menu.js';
 import type { BindingKind } from '../loops/binding-engine.js';
 import type { LoopReturn, RunOutcome } from '../loops/runtime.js';
 
@@ -323,6 +326,51 @@ async function resolveSmashRunSetup(
   };
 }
 
+/** Convert pipeline candidates into selectable suggested-stage actions. */
+function buildSuggestedStageActions(projectRoot: string, manifest: V1Manifest): SuggestedStageAction[] {
+  const candidates = pipelineSuggestions(projectRoot, manifest);
+  return candidates.map(c => {
+    const relArtifact = relative(projectRoot, c.predecessorArtifactPath);
+    const decisionText = c.evidence.decision ?? c.evidence.completionOutcome ?? 'completed';
+    const matchText = c.stale ? 'stale' : 'valid';
+    const label = `Pipeline: ${c.pipelineId} | Run: ${c.pipelineRunId} | Successor: ${c.successorStageId} | Predecessor: ${c.predecessorStageId} | Artifact: ${relArtifact} | Identity: ${c.artifactIdentity.slice(0, 8)}... | Decision/Outcome: ${decisionText} | Fingerprint Match: ${matchText}`;
+    return {
+      pipelineId: c.pipelineId,
+      pipelineRunId: c.pipelineRunId,
+      successorStageId: c.successorStageId,
+      predecessorStageId: c.predecessorStageId,
+      predecessorArtifactIdentity: c.artifactIdentity,
+      label,
+    };
+  });
+}
+
+/** Resolve the binding (loop or task) for a suggested stage's successor stage ID. */
+export function resolveBindingForSuggested(
+  manifest: V1Manifest,
+  selected: SuggestedStageAction,
+): SelectedBinding | null {
+  const pipeline = manifest.pipelines?.[selected.pipelineId];
+  if (!pipeline) return null;
+
+  const successorIndex = pipeline.stages.findIndex(s => s.stageId === selected.successorStageId);
+  if (successorIndex === -1) return null;
+
+  const predecessorStage = pipeline.stages[successorIndex - 1];
+  if (!predecessorStage || predecessorStage.stageId !== selected.predecessorStageId) {
+    return null;
+  }
+
+  const stage = pipeline.stages[successorIndex];
+  if (stage.loop && manifest.loops[stage.loop]) {
+    return { kind: 'loop', id: stage.loop, binding: manifest.loops[stage.loop]! };
+  }
+  if (stage.task && manifest.tasks?.[stage.task]) {
+    return { kind: 'task', id: stage.task, binding: manifest.tasks[stage.task]! };
+  }
+  return null;
+}
+
 type InteractiveSelectionResult =
   | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string }
   | { kind: 'exit'; reason: string }
@@ -348,6 +396,13 @@ async function runInteractiveBindingSelection(
 
   while (true) {
     const topActions = buildTopLevelMenu(manifest, snapshot.missingInputs);
+    const suggestedActions = buildSuggestedStageActions(projectRoot, manifest);
+    if (suggestedActions.length > 0) {
+      const suggestedStageAction = topActions.find(a => a.id === 'start-suggested-stage');
+      if (suggestedStageAction) {
+        suggestedStageAction.disabledReason = undefined;
+      }
+    }
     const topActionId = await promptTopLevelMenu(topActions);
 
     // Stop for manual review
@@ -369,6 +424,43 @@ async function runInteractiveBindingSelection(
         lastPickedLoop = await promptLoopSelect(loopIds, defaultLoop);
       }
       continue;
+    }
+
+    // F9: Start suggested stage — show eligible candidates, let the operator
+    // pick one, and bind that candidate's pipeline identity into the executor.
+    if (topActionId === 'start-suggested-stage') {
+      const candidates = buildSuggestedStageActions(projectRoot, manifest);
+      if (candidates.length === 0) return { kind: 'retry' };
+      const selected = await promptCandidateSelection(candidates);
+      if (!selected) return { kind: 'retry' };
+
+      // Recompute eligibility to prevent TOCTOU drift
+      const currentEligible = pipelineSuggestions(projectRoot, manifest);
+      const stillEligible = currentEligible.some(c =>
+        c.pipelineId === selected.pipelineId &&
+        c.pipelineRunId === selected.pipelineRunId &&
+        c.successorStageId === selected.successorStageId &&
+        c.artifactIdentity === selected.predecessorArtifactIdentity
+      );
+      if (!stillEligible) {
+        options.output.error(`Selected candidate is no longer eligible (target files have been modified since selection).`);
+        return { kind: 'retry' };
+      }
+
+      const binding = resolveBindingForSuggested(manifest, selected);
+      if (!binding) return { kind: 'retry' };
+
+      return {
+        kind: 'selected',
+        selected: binding,
+        runContext: mintRunContext({
+          mode: 'stage-continuation',
+          pipelineId: selected.pipelineId,
+          pipelineRunId: selected.pipelineRunId,
+          stageId: selected.successorStageId,
+          parentArtifactIdentity: selected.predecessorArtifactIdentity,
+        }),
+      };
     }
 
     // Execute one-off task

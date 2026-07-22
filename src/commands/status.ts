@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { loadConfig, type Config } from '../config.js';
 import { scanAllForStatus } from '../state.js';
-import { resolveNextStep } from '../next-step.js';
+import { resolveNextStep, allPipelineCandidates } from '../next-step.js';
 import { assembleNextStepMessage, assembleInterruptedMessage, buildPanelContext } from '../status.js';
 import { setActiveProjectRoot } from '../interrupted-artifact.js';
 import type { CliOutput } from '../cli-output.js';
@@ -79,6 +79,47 @@ export function renderStatusPanel(
         ? 'No active approval loop detected.'
         : 'No approval loop selected; task artifacts are shown in the global snapshot.';
     }
+  }
+
+  // F9: compute pipeline suggestions with full evidence and add to nextStepMessage
+  const allCandidates = allPipelineCandidates(projectRoot, config.manifest);
+  const eligible = allCandidates.filter(c => !c.stale);
+  const stale = allCandidates.filter(c => c.stale);
+
+  const lines: string[] = [];
+  if (eligible.length > 0) {
+    lines.push('=== Eligible Pipeline Suggestions ===');
+    for (const c of eligible) {
+      lines.push(`Suggested Stage: ${c.successorStageId}`);
+      lines.push(`  Pipeline: ${c.pipelineId}`);
+      lines.push(`  Run ID: ${c.pipelineRunId}`);
+      lines.push(`  Predecessor Stage: ${c.predecessorStageId}`);
+      lines.push(`  Completion Artifact: ${c.predecessorArtifactPath}`);
+      lines.push(`  Artifact Identity: ${c.artifactIdentity}`);
+      lines.push(`  Decision/Outcome: ${c.evidence.decision ?? c.evidence.completionOutcome ?? 'completed'}`);
+      lines.push(`  Fingerprint Match: ${c.resultFingerprint} (valid)`);
+    }
+  }
+
+  if (stale.length > 0) {
+    lines.push('=== Unavailable Pipeline Suggestions (Stale) ===');
+    for (const c of stale) {
+      lines.push(`Suggested Stage: ${c.successorStageId} [STALE DRIFT]`);
+      lines.push(`  Pipeline: ${c.pipelineId}`);
+      lines.push(`  Run ID: ${c.pipelineRunId}`);
+      lines.push(`  Predecessor Stage: ${c.predecessorStageId}`);
+      lines.push(`  Completion Artifact: ${c.predecessorArtifactPath}`);
+      lines.push(`  Artifact Identity: ${c.artifactIdentity}`);
+      lines.push(`  Decision/Outcome: ${c.evidence.decision ?? c.evidence.completionOutcome ?? 'completed'}`);
+      lines.push(`  Recorded Fingerprint: ${c.resultFingerprint}`);
+      lines.push(`  Current Fingerprint:  ${c.targetFingerprintNow}`);
+    }
+  }
+
+  if (lines.length > 0) {
+    nextStepMessage = nextStepMessage
+      ? `${nextStepMessage}\n${lines.join('\n')}`
+      : lines.join('\n');
   }
 
   const panelCtx = buildPanelContext(
