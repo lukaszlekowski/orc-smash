@@ -1,4 +1,5 @@
 import type { RunEvent } from './run-event.js';
+import { eventLevelAccent, type EventLevel } from './terminal-accent.js';
 
 function fmtTime(atMs: number): string {
   const d = new Date(atMs);
@@ -6,7 +7,7 @@ function fmtTime(atMs: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function level(event: RunEvent): string {
+function level(event: RunEvent): EventLevel {
   switch (event.type) {
     case 'config.failed':
     case 'runner.rejected':
@@ -29,6 +30,10 @@ function level(event: RunEvent): string {
   }
 }
 
+function formatLevel(lvl: EventLevel): string {
+  return eventLevelAccent(lvl)(lvl);
+}
+
 function quote(s: string): string {
   if (/[\s"\\\x00-\x1f]/.test(s)) {
     return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t').replace(/[\x00-\x1f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}"`;
@@ -38,7 +43,7 @@ function quote(s: string): string {
 
 function fmtEvent(event: RunEvent): string {
   const ts = fmtTime(event.atMs);
-  const lvl = level(event);
+  const lvl = formatLevel(level(event));
 
   switch (event.type) {
     case 'run.started':

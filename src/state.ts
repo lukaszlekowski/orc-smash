@@ -57,11 +57,17 @@ export interface Step {
   sessionStrategy?: string;
 }
 
+export interface BindingInputAvailability {
+  target: 'available' | 'missing';
+  files: Record<string, 'available' | 'missing'>;
+}
+
 export interface GlobalSnapshot {
   steps: Step[];
   byBinding: Map<string, Step[]>;
   unclassified: Step[];
   missingInputs: Map<string, string[]>;
+  inputAvailability: Map<string, BindingInputAvailability>;
   interruptedMarker?: InterruptedMarker | null;
 }
 

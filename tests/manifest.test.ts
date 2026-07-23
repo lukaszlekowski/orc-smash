@@ -9,7 +9,7 @@ const manifestPath = resolve(toolRoot, 'config/orc-smash.yaml');
 
 describe('v1 manifest contract', () => {
   it('loads loops, tasks, and the linear pipeline from the packaged manifest', () => {
-    const manifest = loadManifest(manifestPath, DEFAULT_REGISTRY);
+    const { manifest, declarationOrder } = loadManifest(manifestPath, DEFAULT_REGISTRY);
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.loops.plan).toBeDefined();
     expect(manifest.loops.review).toBeDefined();
@@ -17,6 +17,9 @@ describe('v1 manifest contract', () => {
     expect(manifest.loops.implement).toBeUndefined();
     expect(manifest.pipelines.default?.stages.map(stage => stage.stageId)).toEqual(['plan', 'implement', 'review']);
     expect(manifest.pipelines.default?.stages[1]).toEqual({ stageId: 'implement', task: 'implement' });
+    expect((manifest as any).manifestDeclarationOrder).toBeUndefined();
+    expect(declarationOrder.loops).toEqual(['plan', 'review']);
+    expect(declarationOrder.tasks).toEqual(['implement']);
   });
 
   it('rejects unsupported schema versions and malformed output patterns', () => {
@@ -141,5 +144,34 @@ describe('v1 manifest contract', () => {
         },
       },
     })).toThrow();
+  });
+
+  it('rejects unreferenced files: keys that are not referenced in inputs', () => {
+    const schema = buildManifestSchema(DEFAULT_REGISTRY);
+    expect(() => schema.parse({
+      schemaVersion: 1,
+      roles: { auditor: 'roles/auditor.md' },
+      skills: { audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' } },
+      loops: {
+        check: {
+          type: 'approval-loop',
+          target: { path: '.', kind: 'worktree' },
+          inputs: [],
+          files: { unreferencedKey: 'docs/some.md' },
+          evaluate: {
+            skill: 'audit',
+            output: {
+              pattern: 'docs/eval-v{version}-{provider}.md',
+              contract: 'decision-artifact',
+              decision: { heading: 'Decision', accepted: 'PASS', retry: 'FAIL' },
+            },
+          },
+          repair: {
+            skill: 'audit',
+            output: { pattern: 'docs/repair-v{version}-{provider}.md', contract: 'completion-artifact' },
+          },
+        },
+      },
+    })).toThrow(/not referenced as a source in inputs/);
   });
 });

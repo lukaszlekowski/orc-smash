@@ -1,5 +1,5 @@
 import { formatDurationMs, formatSessionId, type PanelContext } from './status.js';
-import { roleAccent, statusAccent, kindAccent } from './status-accent.js';
+import { roleAccent, statusAccent, kindAccent, resultAccent, toResultState } from './terminal-accent.js';
 
 export function resolveTerminalWidth(): number {
   const envColumns = process.env['COLUMNS'];
@@ -118,18 +118,25 @@ export function renderPlainPanel(context: PanelContext): string {
 
       const timestamp = new Date(s.mtime).toISOString().slice(0, 19).replace('T', ' ');
 
-      let resultText = '';
-      if (s.status === 'interrupted') {
-        // No verdict/outcome for an interrupted step; the status line carries
-        // the literal "interrupted" signal.
-        resultText = '—';
-      } else {
-        resultText = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome ?? 'unknown';
-      }
-
+      const rawRes = s.status === 'interrupted'
+        ? '—'
+        : (s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome ?? 'unknown');
+      const resultText = s.status === 'interrupted'
+        ? '—'
+        : resultAccent(toResultState(rawRes))(rawRes);
       const statusAcc = statusAccent(s.status);
-      const detailLine = `   ${timestamp}  result: ${resultText}   time: ${formatDurationMs(s.durationMs)}   session: ${formatSessionId(s.sessionId)}   status: ${statusAcc.label}`;
-      lines.push(detailLine);
+      const statusStr = statusAcc.chalk(statusAcc.label);
+
+      const plainDetailLine = `   ${timestamp}  result: ${rawRes}   time: ${formatDurationMs(s.durationMs)}   session: ${formatSessionId(s.sessionId)}   status: ${statusAcc.label}`;
+      if (plainDetailLine.length <= width) {
+        lines.push(`   ${timestamp}  result: ${resultText}   time: ${formatDurationMs(s.durationMs)}   session: ${formatSessionId(s.sessionId)}   status: ${statusStr}`);
+      } else {
+        lines.push(`   ${timestamp}`);
+        lines.push(`   result: ${resultText}`);
+        lines.push(`   time: ${formatDurationMs(s.durationMs)}`);
+        lines.push(`   session: ${formatSessionId(s.sessionId)}`);
+        lines.push(`   status: ${statusStr}`);
+      }
 
       if (i < context.timeline.length - 1) {
         lines.push('---');

@@ -3,7 +3,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { z } from 'zod';
-import { loadManifest, type V1Manifest } from './manifest.js';
+import { loadManifest, type V1Manifest, type ManifestDeclarationOrder } from './manifest.js';
 
 /** Supported session strategies. */
 export const SESSION_STRATEGIES = ['fresh-per-invocation', 'resume-per-skill'] as const;
@@ -180,6 +180,7 @@ export interface Config {
   manifestRoot: string;
   registry: ModelRegistry;
   manifest: V1Manifest;
+  manifestDeclarationOrder: ManifestDeclarationOrder;
 }
 
 /**
@@ -228,7 +229,7 @@ export function loadConfig(
   if (manifestPath === resolve(TOOL_ROOT, 'config', 'orc-smash.yaml')) {
     manifestRoot = TOOL_ROOT;
   }
-  const manifest = loadManifest(manifestPath, registry, {
+  const { manifest, declarationOrder } = loadManifest(manifestPath, registry, {
     manifestRoot,
     projectRoot: resolvedProjectRoot,
   });
@@ -239,6 +240,7 @@ export function loadConfig(
     manifestRoot,
     registry,
     manifest,
+    manifestDeclarationOrder: declarationOrder,
   };
 }
 

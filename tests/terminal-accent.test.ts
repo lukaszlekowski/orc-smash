@@ -1,10 +1,20 @@
 import { describe, it, expect } from 'vitest';
+import chalk from 'chalk';
 import {
   roleAccent,
   kindAccent,
   statusAccent,
-  panelBorderColor
-} from '../src/status-accent.js';
+  panelBorderColor,
+  resultAccent,
+  toResultState,
+  availabilityAccent,
+  emphasisAccent,
+  unclassifiedAccent,
+  staleAccent,
+  type ResultState,
+  type AvailabilityState,
+  type EmphasisState
+} from '../src/terminal-accent.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
 
@@ -45,7 +55,7 @@ function stripAnsi(s: string): string {
   return s.replace(/\u001B\[[0-9;]*m/g, '');
 }
 
-describe('status-accent accent map', () => {
+describe('terminal-accent accent map', () => {
   it('roleAccent returns the documented semantic label for every known role', () => {
     expect(roleAccent('auditor').label).toBe('auditor');
     expect(roleAccent('planner').label).toBe('planner');
@@ -80,11 +90,59 @@ describe('status-accent accent map', () => {
     expect(statusAccent('interrupted').label).toBe('interrupted');
   });
 
-  it('does NOT assert chalk object identity (semantic-label contract)', () => {
-    const a = roleAccent('auditor');
-    expect(a).toHaveProperty('chalk');
-    expect(a).toHaveProperty('label');
-    expect(typeof a.chalk).toBe('function');
+  it('resultAccent maps all domain result states exhaustively', () => {
+    const origLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      const states: ResultState[] = ['accepted', 'completed', 'retry', 'failed', 'blocked', 'unknown', 'interrupted', 'valid'];
+      for (const st of states) {
+        const fn = resultAccent(st);
+        expect(typeof fn).toBe('function');
+        expect(stripAnsi(fn(st))).toBe(st);
+      }
+    } finally {
+      chalk.level = origLevel;
+    }
+  });
+
+  it('availabilityAccent maps available, unavailable, and missing-inputs exhaustively', () => {
+    const origLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      const states: AvailabilityState[] = ['available', 'unavailable', 'missing-inputs'];
+      for (const st of states) {
+        const fn = availabilityAccent(st);
+        expect(typeof fn).toBe('function');
+        expect(stripAnsi(fn(st))).toBe(st);
+      }
+    } finally {
+      chalk.level = origLevel;
+    }
+  });
+
+  it('emphasisAccent maps identity, binding-identity, supporting, placeholder, recommended, warning exhaustively', () => {
+    const origLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      const states: EmphasisState[] = ['identity', 'binding-identity', 'supporting', 'placeholder', 'recommended', 'warning'];
+      for (const st of states) {
+        const fn = emphasisAccent(st);
+        expect(typeof fn).toBe('function');
+        expect(stripAnsi(fn(st))).toBe(st);
+      }
+    } finally {
+      chalk.level = origLevel;
+    }
+  });
+
+  it('unclassifiedAccent distinguishes 0 vs > 0 counts', () => {
+    expect(stripAnsi(unclassifiedAccent(0)('0'))).toBe('0');
+    expect(stripAnsi(unclassifiedAccent(3)('3'))).toBe('3');
+  });
+
+  it('staleAccent distinguishes true vs false staleness', () => {
+    expect(stripAnsi(staleAccent(true)('stale'))).toBe('stale');
+    expect(stripAnsi(staleAccent(false)('fresh'))).toBe('fresh');
   });
 });
 
@@ -132,3 +190,23 @@ describe('panelBorderColor (stage-driven border color)', () => {
   });
 });
 
+describe('toResultState', () => {
+  it('maps known result states accurately', () => {
+    expect(toResultState('accepted')).toBe('accepted');
+    expect(toResultState('APPROVED')).toBe('approved');
+    expect(toResultState('completed')).toBe('completed');
+    expect(toResultState('retry')).toBe('retry');
+    expect(toResultState('rejected')).toBe('rejected');
+    expect(toResultState('failed')).toBe('failed');
+    expect(toResultState('blocked')).toBe('blocked');
+    expect(toResultState('interrupted')).toBe('interrupted');
+    expect(toResultState('valid')).toBe('valid');
+  });
+
+  it('maps undefined, null, or unmapped strings safely to valid/unknown defaults without throwing', () => {
+    expect(toResultState(undefined)).toBe('valid');
+    expect(toResultState(null)).toBe('valid');
+    expect(toResultState('')).toBe('valid');
+    expect(toResultState('unmapped_custom_state')).toBe('unknown');
+  });
+});

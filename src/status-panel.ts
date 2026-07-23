@@ -1,12 +1,11 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
-import chalk from 'chalk';
 import { formatDurationMs, formatSessionId, type PanelContext } from './status.js';
-import { roleAccent, statusAccent, panelBorderColor } from './status-accent.js';
+import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
 
 export function renderStatusPanel(context: PanelContext): string {
-  const pName = chalk.cyan(context.projectRoot);
-  const lName = chalk.yellow(context.loopName);
+  const pName = emphasisAccent('identity')(context.projectRoot);
+  const lName = emphasisAccent('binding-identity')(context.loopName);
 
   const iterationValue = context.readOnly
     ? 'not running'
@@ -16,7 +15,7 @@ export function renderStatusPanel(context: PanelContext): string {
 
   let activeStr = 'None';
   if (context.activeSkillRunner) {
-    activeStr = chalk.green(
+    activeStr = emphasisAccent('identity')(
       `${context.activeSkillRunner.skillId} (${context.activeSkillRunner.agent} · ${context.activeSkillRunner.model})`
     );
   }
@@ -24,21 +23,21 @@ export function renderStatusPanel(context: PanelContext): string {
   const contentLines: string[] = [
     `Project:          ${pName}`,
     `Loop:             ${lName}`,
-    `Iteration:        ${chalk.magenta(iterationValue)}`,
+    `Iteration:        ${emphasisAccent('supporting')(iterationValue)}`,
     `Active Runner:    ${activeStr}`,
-    `Next Step:        ${chalk.white(context.nextStepMessage)}`,
+    `Next Step:        ${emphasisAccent('identity')(context.nextStepMessage)}`,
     `Latest version:   v${context.latestVersion}`
   ];
 
   if (context.resolvedRunners && context.resolvedRunners.length > 0) {
     contentLines.push('');
-    contentLines.push(chalk.bold('Run configuration'));
+    contentLines.push(emphasisAccent('identity')('Run configuration'));
     for (const runner of context.resolvedRunners) {
       const phaseLabel = runner.phase ? runner.phase.charAt(0).toUpperCase() + runner.phase.slice(1) : 'Skill';
       const roleStr = runner.role ? ` (${runner.role})` : '';
       const effortStr = runner.effort ?? 'provider default';
       const stratStr = runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation';
-      contentLines.push(`  ${phaseLabel.padEnd(10)} ${`${runner.skillId}${roleStr}`.padEnd(24)} ${chalk.green(`${runner.agent} · ${runner.model}`)}  ${effortStr}  ${stratStr}`);
+      contentLines.push(`  ${phaseLabel.padEnd(10)} ${`${runner.skillId}${roleStr}`.padEnd(24)} ${emphasisAccent('identity')(`${runner.agent} · ${runner.model}`)}  ${effortStr}  ${stratStr}`);
     }
   }
 
@@ -53,13 +52,13 @@ export function renderStatusPanel(context: PanelContext): string {
           ? `fresh session (provider unsupported${pendingStr})`
           : `fresh session (no compatible session${pendingStr})`;
     contentLines.push('');
-    contentLines.push(chalk.bold('Active invocation'));
+    contentLines.push(emphasisAccent('identity')('Active invocation'));
     contentLines.push(`  ${active.skillId} v${active.version} — ${modeStr}`);
   }
 
   const timelineSection = renderTimelineSection(context);
   contentLines.push('');
-  contentLines.push(chalk.bold('Timeline:'));
+  contentLines.push(emphasisAccent('identity')('Timeline:'));
   contentLines.push(timelineSection);
 
   const inFlightSection = renderInFlightSection(context);
@@ -69,7 +68,7 @@ export function renderStatusPanel(context: PanelContext): string {
   }
 
   return boxen(contentLines.join('\n'), {
-    title: chalk.bold.blue(' ORC SMASH STATUS PANEL '),
+    title: emphasisAccent('identity')(' ORC SMASH STATUS PANEL '),
     titleAlignment: 'center',
     padding: 1,
     margin: 0,
@@ -87,16 +86,16 @@ function renderInFlightSection(context: PanelContext): string | null {
   const elapsedStr = formatDurationMs(Date.now() - context.inFlight.startedAtMs);
 
   const detailLines = [
-    `${chalk.bold('Active Step:')} ${chalk.gray(`(elapsed ${elapsedStr})`)}`,
-    `Spawn:            ${chalk.white(context.inFlight.spawnLabel)}`
+    `${emphasisAccent('identity')('Active Step:')} ${emphasisAccent('supporting')(`(elapsed ${elapsedStr})`)}`,
+    `Spawn:            ${emphasisAccent('identity')(context.inFlight.spawnLabel)}`
   ];
 
   if (context.inFlight.toolCallCount > 0) {
-    detailLines.push(`Tool calls:       ${chalk.white(String(context.inFlight.toolCallCount))}`);
+    detailLines.push(`Tool calls:       ${emphasisAccent('identity')(String(context.inFlight.toolCallCount))}`);
   }
 
   if (context.inFlight.progressMessage) {
-    detailLines.push(`Progress:         ${chalk.white(context.inFlight.progressMessage)}`);
+    detailLines.push(`Progress:         ${emphasisAccent('identity')(context.inFlight.progressMessage)}`);
   }
 
   return detailLines.join('\n');
@@ -116,19 +115,13 @@ function renderTimelineSection(context: PanelContext): string {
       resultStr = '—';
     } else {
       const result = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome;
-      if (result === 'accepted' || result === 'completed') {
-        resultStr = chalk.bold.green(result);
-      } else if (result === 'retry') {
-        resultStr = chalk.bold.red(result);
-      } else if (result === 'blocked') {
-        resultStr = chalk.bold.yellow(result);
-      } else {
-        resultStr = result ? chalk.bold.yellow(result) : '';
+      if (result) {
+        resultStr = resultAccent(toResultState(result))(result);
       }
     }
 
     if (index === latestIndex) {
-      resultStr += ` ${chalk.blue('*')}`;
+      resultStr += ` ${emphasisAccent('supporting')('*')}`;
     }
 
     const statusAcc = statusAccent(s.status);
@@ -141,7 +134,7 @@ function renderTimelineSection(context: PanelContext): string {
       s.model,
       s.effort ?? 'default',
       resultStr,
-      chalk.gray(formatDurationMs(s.durationMs)),
+      emphasisAccent('supporting')(formatDurationMs(s.durationMs)),
       formatSessionId(s.sessionId),
       statusStr
     ];
@@ -157,7 +150,7 @@ function renderTimelineSection(context: PanelContext): string {
       context.inFlight.model,
       context.inFlight.effort ?? 'default',
       '\u2014',
-      chalk.gray(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
+      emphasisAccent('supporting')(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
       '\u2014',
       statusAcc.chalk(statusAcc.label)
     ]);

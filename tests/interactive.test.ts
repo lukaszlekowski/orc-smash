@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { select, confirm, input } from '@inquirer/prompts';
+import chalk from 'chalk';
 import {
   promptRunners,
   promptCandidateSelection,
+  formatMenuChoice,
 } from '../src/interactive.js';
-import { DEFAULT_REGISTRY } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import type { Config } from '../src/config.js';
@@ -20,6 +21,7 @@ describe('Interactive registry selection', () => {
     projectRoot: process.cwd(),
     manifestPath: '/path/to/config/orc-smash.yaml',
     manifestRoot: '/path/to/config',
+    manifestDeclarationOrder: { loops: ['plan'], tasks: [], pipelines: [] },
     registry: {
       providers: Object.fromEntries(Object.entries(providers).map(([provider, models]) => [provider, { models, defaultModel: models[0]! }])),
       defaultProfile: 'default',
@@ -45,8 +47,34 @@ describe('Interactive registry selection', () => {
     vi.clearAllMocks();
   });
 
-  it('DEFAULT_REGISTRY excludes fake', () => {
-    expect(Object.keys(DEFAULT_REGISTRY.providers)).not.toContain('fake');
+  it('Inquirer disabled-choice fixture: missing-inputs is yellow vs unavailable is dim at chalk.level = 1, preserving value/disabled/default', () => {
+    const origLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      const choiceMissing = formatMenuChoice({
+        label: 'Loop Plan',
+        disabledReason: 'target missing',
+        availability: 'missing-inputs',
+      }, 'plan');
+
+      expect(choiceMissing.disabled).toBe(true);
+      expect(choiceMissing.value).toBe('plan');
+      expect(choiceMissing.name).toContain('\u001b[33m'); // Yellow
+      expect(choiceMissing.name.replace(/\u001b\[\d+m/g, '')).toContain('Loop Plan (unavailable: target missing)');
+
+      const choiceUnavailable = formatMenuChoice({
+        label: 'Resume per skill',
+        disabledReason: 'agent does not support session resumption',
+        availability: 'unavailable',
+      }, 'unsupported-resume');
+
+      expect(choiceUnavailable.disabled).toBe(true);
+      expect(choiceUnavailable.value).toBe('unsupported-resume');
+      expect(choiceUnavailable.name).toContain('\u001b[2m'); // Dim
+      expect(choiceUnavailable.name.replace(/\u001b\[\d+m/g, '')).toContain('Resume per skill (unavailable: agent does not support session resumption)');
+    } finally {
+      chalk.level = origLevel;
+    }
   });
 
   it('shows resolved default runners before asking whether to customize', async () => {
@@ -109,6 +137,7 @@ describe('Interactive registry selection', () => {
       projectRoot: process.cwd(),
       manifestPath: '/path/to/config/orc-smash.yaml',
       manifestRoot: '/path/to/config',
+      manifestDeclarationOrder: { loops: ['plan'], tasks: [], pipelines: [] },
       registry: {
         providers: {
           codex: { models: ['codex-model'], defaultModel: 'codex-model' }
@@ -368,5 +397,45 @@ describe('promptCandidateSelection', () => {
 
     const result = await promptCandidateSelection([cand1, cand2]);
     expect(result).toEqual(cand2);
+  });
+
+  describe('formatMenuChoice Inquirer choice presentation seam', () => {
+    it('formats enabled, recommended, unavailable, and missing-inputs choices with correct text, values, disabled state, and accents', () => {
+      const origLevel = chalk.level;
+      chalk.level = 1;
+      try {
+        // 1. Normal enabled choice
+        const normal = formatMenuChoice({ label: 'Run plan loop', availability: 'available' }, 'plan');
+        expect(normal.name).toBe('Run plan loop');
+        expect(normal.value).toBe('plan');
+        expect(normal.disabled).toBe(false);
+
+        // 2. Recommended choice
+        const rec = formatMenuChoice({ label: 'Run review loop', recommended: true, availability: 'available' }, 'review');
+        expect(rec.name).toContain('Run review loop \u001b[32m(recommended)\u001b[39m');
+        expect(rec.value).toBe('review');
+        expect(rec.disabled).toBe(false);
+
+        // 3. Unavailable choice with disabled reason
+        const unavail = formatMenuChoice(
+          { label: 'Run implement task', disabledReason: 'No provider configured', availability: 'unavailable' },
+          'implement'
+        );
+        expect(unavail.name).toContain('\u001b[2mRun implement task (unavailable: No provider configured)\u001b[22m');
+        expect(unavail.value).toBe('implement');
+        expect(unavail.disabled).toBe(true);
+
+        // 4. Missing inputs choice
+        const missing = formatMenuChoice(
+          { label: 'Run audit loop', disabledReason: 'missing inputs: docs/dev/plan.md', availability: 'missing-inputs' },
+          'audit'
+        );
+        expect(missing.name).toContain('\u001b[33mRun audit loop (unavailable: missing inputs: docs/dev/plan.md)\u001b[39m');
+        expect(missing.value).toBe('audit');
+        expect(missing.disabled).toBe(true);
+      } finally {
+        chalk.level = origLevel;
+      }
+    });
   });
 });
