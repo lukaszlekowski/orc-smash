@@ -106,5 +106,5 @@ Deterministic tests use the test-only `fake` adapter. `opencode`, `codex`, and
 adapter/seam coverage and is manually verified from an authenticated shell.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the
-architecture, [docs/dev/research.md](./docs/dev/research.md) for rationale,
-and [AGENTS.md](./AGENTS.md) for repository invariants.
+architecture, the active audited [docs/dev/plan.md](./docs/dev/plan.md) for
+planned work, and [AGENTS.md](./AGENTS.md) for repository invariants.
