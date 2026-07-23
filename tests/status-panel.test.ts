@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import chalk from 'chalk';
 import { renderStatusPanel } from '../src/status-panel.js';
-import { roleAccent, panelBorderColor } from '../src/status-accent.js';
+import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
 

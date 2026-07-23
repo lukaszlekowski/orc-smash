@@ -268,4 +268,19 @@ if (mode === 'auth-error') {
     expect(implementationRun.merged).toContain('artifact.verified path=docs/dev/impl-v1-opencode.md result=valid');
     expect(implementationRun.merged).toContain('stage.completed binding=task/implement');
   });
+
+  it('NO_COLOR=1 piped subprocess test: zero ANSI escape codes produced in smash --plain and orc status', async () => {
+    const project = createProject('no-color-piped');
+    const runResult = await runCompiled([
+      'smash', '--plain', '--project', project, '--loop', 'plan', '--max-iterations', '1'
+    ], { env: { NO_COLOR: '1' } });
+
+    expect(runResult.merged).not.toMatch(/[\u001b\u009b]/);
+
+    const statusResult = await runCompiled([
+      'status', '--project', project
+    ], { env: { NO_COLOR: '1' } });
+
+    expect(statusResult.merged).not.toMatch(/[\u001b\u009b]/);
+  });
 });

@@ -37,7 +37,11 @@ orc status --project <path> [--all] [--config <path>]
 
 On launch, interactive `orc smash` renders a compact startup snapshot displaying the project root, config path, configured pipelines, suggested loop & reason, and a compact per-binding state summary (binding kind, target path, latest evaluate/repair/task steps with decision/outcome, provider/model, effort, session strategy/ID, missing inputs, and unclassified count).
 
-All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. `Execute one-off task` opens a generic task chooser listing all configured tasks, followed by a task detail confirmation. Pressing `Back` on task detail returns to the task chooser, while pressing `Back` on the chooser returns to the main menu without re-scanning or re-printing the startup header.
+Every operator-facing surface consumes one shared semantic terminal styling vocabulary (`terminal-accent.ts`). Statuses, decisions, warnings, availability, and lifecycle states use consistent accents across compact snapshots, interactive menus, the live status panel, detailed project status (`orc status`), and line-oriented plain-mode event output. Output remains 100% complete and understandable when colour is unsupported or disabled (`NO_COLOR=1`, non-TTY, or piped execution emit zero ANSI escape codes).
+
+All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. Unavailable choices, missing input blockers, and recommendations carry explicit, typed availability categories (`available`, `unavailable`, `missing-inputs`). `Execute one-off task` opens a generic task chooser listing all configured tasks, followed by a task detail confirmation. Pressing `Back` on task detail returns to the task chooser, while pressing `Back` on the chooser returns to the main menu without re-scanning or re-printing the startup header.
+
+Both interactive **Display pipeline and project state** and `orc status --project <path>` include a manifest-derived **Prompt Contracts** section. The contract details how each prompt recipe is assembled (role ID & path, skill ID & path, ordered inputs with typed resolution annotations, output pattern, output contract, decision tokens, and validator) without performing content reads or printing source file contents.
 
 Runner selection is independent per skill. Global overrides are
 `--agent`, `--model`, and `--effort`; repeatable per-skill overrides are

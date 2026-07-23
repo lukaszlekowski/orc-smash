@@ -71,10 +71,13 @@ snapshot, classifies each artifact through `artifact-contract.ts`, sorts the
 timeline chronologically, validates lineage, and ignores `docs/dev/archived/`.
 `project-snapshot-view.ts` derives a pure view model (`ProjectSnapshotView`)
 containing per-binding state summaries (latest evaluate/repair/task steps with
-provenance, missing inputs, unclassified counts), eligible/stale pipeline
-candidates, and suggested loop reasons without re-scanning disk.
+provenance, missing inputs, unclassified counts), manifest-derived prompt contracts
+(`promptContracts`), eligible/stale pipeline candidates, and suggested loop reasons
+without re-scanning disk. `terminal-accent.ts` provides a single shared semantic styling
+source for results, availability, emphasis, roles, and lifecycle states.
 `project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
-and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model.
+and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model
+without performing any filesystem reads or prompt content calls.
 
 ## Runner and provider boundaries
 

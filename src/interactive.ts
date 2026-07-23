@@ -4,18 +4,24 @@ import { isValidModelForAgent, resolveRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { TopMenuAction, LoopSubmenuItem, TaskMenuItem, PipelineLaunchContext, SuggestedStageAction } from './stage-menu.js';
 
-export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean }>(
+import { availabilityAccent, emphasisAccent, type AvailabilityState } from './terminal-accent.js';
+
+export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean; availability?: AvailabilityState }>(
   item: T,
   value: string,
 ): { name: string; value: string; disabled: boolean } {
   const isRecommended = Boolean(item.recommended && !item.disabledReason);
-  let name = item.label;
+  let baseLabel = item.label;
   if (isRecommended) {
-    name += ' (recommended)';
+    baseLabel += ` ${emphasisAccent('recommended')('(recommended)')}`;
   }
   if (item.disabledReason) {
-    name += ` (unavailable: ${item.disabledReason})`;
+    baseLabel += ` (unavailable: ${item.disabledReason})`;
   }
+
+  const avail = item.availability ?? (item.disabledReason ? 'unavailable' : 'available');
+  const name = availabilityAccent(avail)(baseLabel);
+
   return {
     name,
     value,
@@ -84,13 +90,13 @@ export interface TaskDetailView {
  * Show task details and prompt for confirmation (Run task / Back).
  */
 export async function promptTaskDetailConfirmation(detail: TaskDetailView): Promise<'run' | 'back'> {
-  console.log(`\nTask Details: ${detail.taskId}`);
-  console.log(`  Bound skill:  ${detail.skillId} (${detail.skillPath})`);
-  console.log(`  Role:         ${detail.role}`);
-  console.log(`  Target:       ${detail.targetPath}`);
-  console.log(`  Output:       ${detail.outputPattern} (${detail.contract})`);
+  console.log(`\n${emphasisAccent('identity')(`Task Details: ${detail.taskId}`)}`);
+  console.log(`  ${emphasisAccent('supporting')(`Bound skill:  ${detail.skillId} (${detail.skillPath})`)}`);
+  console.log(`  ${emphasisAccent('supporting')(`Role:         ${detail.role}`)}`);
+  console.log(`  ${emphasisAccent('supporting')(`Target:       ${detail.targetPath}`)}`);
+  console.log(`  ${emphasisAccent('supporting')(`Output:       ${detail.outputPattern} (${detail.contract})`)}`);
   if (detail.missingInputs && detail.missingInputs.length > 0) {
-    console.log(`  Missing:      ${detail.missingInputs.join(', ')}`);
+    console.log(`  ${availabilityAccent('missing-inputs')(`Missing:      ${detail.missingInputs.join(', ')}`)}`);
   }
   console.log('');
 
@@ -196,12 +202,12 @@ export async function promptRunners(
   // them. These include any CLI override, so accepting the default is never a
   // blind choice.
   if (!opts?.forceSelect && defaultRunners.size > 0) {
-    console.log('Default skill runners:');
+    console.log(emphasisAccent('identity')('Default skill runners:'));
     for (const [skillId, runner] of defaultRunners) {
       const parts = [`${skillId}: ${runner.agent} (${runner.model})`];
       parts.push(`effort: ${runner.effort ?? 'provider default'}`);
       parts.push(`session: ${runner.sessionStrategy ?? 'fresh-per-invocation'}`);
-      console.log(`  ${parts.join(', ')}`);
+      console.log(`  ${emphasisAccent('supporting')(parts.join(', '))}`);
     }
   }
 
@@ -290,7 +296,7 @@ export async function promptRunners(
     ];
     if (adapter && !adapter.capabilities.effort) {
       effortChoices.push(
-        formatMenuChoice({ label: 'Configure effort', disabledReason: `${agent} does not support effort` }, 'unsupported-effort')
+        formatMenuChoice({ label: 'Configure effort', disabledReason: `${agent} does not support effort`, availability: 'unavailable' }, 'unsupported-effort')
       );
     } else if (effortLevels.length > 0) {
       for (const level of effortLevels) {
@@ -298,7 +304,7 @@ export async function promptRunners(
       }
     } else {
       effortChoices.push(
-        formatMenuChoice({ label: 'Configure effort', disabledReason: `no effort levels for model '${selectedModel}'` }, 'unsupported-effort')
+        formatMenuChoice({ label: 'Configure effort', disabledReason: `no effort levels for model '${selectedModel}'`, availability: 'unavailable' }, 'unsupported-effort')
       );
     }
     const pickedEffort = await select({
@@ -316,7 +322,7 @@ export async function promptRunners(
     ];
     if (adapter && !adapter.capabilities.resumeSession) {
       sessionChoices.push(
-        formatMenuChoice({ label: 'Resume per skill (reuse last session)', disabledReason: `${agent} does not support session resumption` }, 'unsupported-resume')
+        formatMenuChoice({ label: 'Resume per skill (reuse last session)', disabledReason: `${agent} does not support session resumption`, availability: 'unavailable' }, 'unsupported-resume')
       );
     } else if (adapter?.capabilities.resumeSession) {
       sessionChoices.push(

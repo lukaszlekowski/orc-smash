@@ -1,4 +1,5 @@
 import type { V1Manifest } from './manifest.js';
+import type { AvailabilityState } from './terminal-accent.js';
 
 // ---- F9: Candidate types ----
 
@@ -18,12 +19,14 @@ export interface TopMenuAction {
   label: string;
   group: 'start-loop' | 'change-loop' | 'run-task' | 'start-suggested-stage' | 'display-status' | 'stop';
   disabledReason?: string;
+  availability: AvailabilityState;
 }
 
 export interface LoopSubmenuItem {
   id: 'continue-current-loop' | 'start-fresh-loop' | 'run-second-opinion' | 'back';
   label: string;
   disabledReason?: string;
+  availability: AvailabilityState;
   recommended: boolean;
 }
 
@@ -33,6 +36,7 @@ export interface TaskMenuItem {
   role: string;
   label: string;
   disabledReason?: string;
+  availability: AvailabilityState;
 }
 
 export interface PipelineLaunchContext {
@@ -59,6 +63,7 @@ export function buildTopLevelMenu(
     label: 'Start loop',
     group: 'start-loop',
     disabledReason: hasLoops ? undefined : 'no loops configured in manifest',
+    availability: hasLoops ? 'available' : 'unavailable',
   });
 
   actions.push({
@@ -66,6 +71,7 @@ export function buildTopLevelMenu(
     label: 'Execute one-off task',
     group: 'run-task',
     disabledReason: hasTasks ? undefined : 'no tasks configured in manifest',
+    availability: hasTasks ? 'available' : 'unavailable',
   });
 
   actions.push({
@@ -73,6 +79,7 @@ export function buildTopLevelMenu(
     label: 'Change loop',
     group: 'change-loop',
     disabledReason: hasLoops ? undefined : 'no loops configured in manifest',
+    availability: hasLoops ? 'available' : 'unavailable',
   });
 
   actions.push({
@@ -80,18 +87,21 @@ export function buildTopLevelMenu(
     label: 'Start suggested stage',
     group: 'start-suggested-stage',
     disabledReason: hasEligibleCandidates ? undefined : 'no eligible pipeline stage candidates',
+    availability: hasEligibleCandidates ? 'available' : 'unavailable',
   });
 
   actions.push({
     id: 'display-status',
     label: 'Display pipeline and project state',
     group: 'display-status',
+    availability: 'available',
   });
 
   actions.push({
     id: 'stop',
     label: 'Stop for manual review',
     group: 'stop',
+    availability: 'available',
   });
 
   return actions;
@@ -109,14 +119,16 @@ export function buildTaskMenu(
     const missing = missingInputs?.get(taskId);
     const skillDef = manifest.skills[taskSpec.skill];
     const role = skillDef?.role ?? 'unknown';
+    const isMissing = Boolean(missing && missing.length > 0);
     items.push({
       taskId,
       skillId: taskSpec.skill,
       role,
       label: `${taskId} — ${taskSpec.skill} · ${role}`,
-      disabledReason: missing && missing.length > 0
-        ? `Missing project input${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`
+      disabledReason: isMissing
+        ? `Missing project input${missing!.length > 1 ? 's' : ''}: ${missing!.join(', ')}`
         : undefined,
+      availability: isMissing ? 'missing-inputs' : 'available',
     });
   }
   return items;
@@ -135,38 +147,48 @@ export function buildLoopSubmenu(
   loopMissingInputs?: string[],
   continueDetail?: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string },
 ): LoopSubmenuItem[] {
-  const freshDisabledReason = loopMissingInputs && loopMissingInputs.length > 0
-    ? `Missing project input${loopMissingInputs.length > 1 ? 's' : ''}: ${loopMissingInputs.join(', ')}`
+  const isMissing = Boolean(loopMissingInputs && loopMissingInputs.length > 0);
+  const freshDisabledReason = isMissing
+    ? `Missing project input${loopMissingInputs!.length > 1 ? 's' : ''}: ${loopMissingInputs!.join(', ')}`
     : undefined;
 
   const continueLabel = continueDetail
     ? `Continue current ${loopName} loop (next: ${continueDetail.skillId} ${continueDetail.phase} v${continueDetail.version}, ${continueDetail.agent}/${continueDetail.model}${continueDetail.effort ? `/${continueDetail.effort}` : ''}${continueDetail.sessionStrategy ? `, ${continueDetail.sessionStrategy}` : ''})`
     : `Continue current ${loopName} loop`;
 
+  const continueDisabled = hasInProgressChain
+    ? freshDisabledReason
+    : 'no in-progress loop to continue';
+  const continueAvailability: AvailabilityState = hasInProgressChain
+    ? (isMissing ? 'missing-inputs' : 'available')
+    : 'unavailable';
+
   return [
     {
       id: 'continue-current-loop',
       label: continueLabel,
-      disabledReason: hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0)
-        ? undefined
-        : (hasInProgressChain ? freshDisabledReason : 'no in-progress loop to continue'),
-      recommended: hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0),
+      disabledReason: continueDisabled,
+      availability: continueAvailability,
+      recommended: hasInProgressChain && !isMissing,
     },
     {
       id: 'start-fresh-loop',
       label: `Start fresh ${loopName} loop`,
       disabledReason: freshDisabledReason,
-      recommended: !hasInProgressChain && (!loopMissingInputs || loopMissingInputs.length === 0),
+      availability: isMissing ? 'missing-inputs' : 'available',
+      recommended: !hasInProgressChain && !isMissing,
     },
     {
       id: 'run-second-opinion',
       label: `Run second opinion for ${loopName}`,
       disabledReason: hasSecondOpinionTarget ? undefined : 'no completed loop to review',
+      availability: hasSecondOpinionTarget ? 'available' : 'unavailable',
       recommended: false,
     },
     {
       id: 'back',
       label: 'Back to main menu',
+      availability: 'available',
       recommended: false,
     },
   ];

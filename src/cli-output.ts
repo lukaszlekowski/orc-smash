@@ -1,12 +1,12 @@
 import type { PanelContext } from './status.js';
 import { renderStatusPanel } from './status-panel.js';
 import ora, { Ora } from 'ora';
-import chalk from 'chalk';
 import type { StepKind } from './provenance.js';
 import { debugHarnessEvent } from './debug-spawn.js';
 import { makeRunEvent, type RunEvent, type RunEventInput, type RunEventSink } from './run-event.js';
 import { renderRunEvent } from './plain-event-renderer.js';
 import { EventWriter } from './event-writer.js';
+import { resultAccent, emphasisAccent } from './terminal-accent.js';
 
 const ENTER_ALT_SCREEN = '\u001B[?1049h';
 const EXIT_ALT_SCREEN = '\u001B[?1049l';
@@ -121,12 +121,12 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
       emitEvent({ type: 'note', atMs: Date.now(), message });
-      console.log(chalk.gray(message));
+      console.log(emphasisAccent('supporting')(message));
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
       emitEvent({ type: 'warning', atMs: Date.now(), message });
-      console.warn(chalk.yellow(`Warning: ${message}`));
+      console.warn(emphasisAccent('warning')(`Warning: ${message}`));
     },
     error(message: string) {
       const line = `Error: ${message}`;
@@ -135,7 +135,7 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       if (liveActive) {
         pendingFailures.push(line);
       } else {
-        console.error(chalk.red(`${timestamp()} ${line}`));
+        console.error(resultAccent('failed')(`${timestamp()} ${line}`));
       }
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
@@ -152,19 +152,19 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       });
       if (liveActive) return;
       if (spinner) spinner.stop();
-      spinner = ora(chalk.blue(ctx.message)).start();
+      spinner = ora(emphasisAccent('binding-identity')(ctx.message)).start();
     },
     stepSucceeded(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
       if (liveActive) {
-        console.log(chalk.green(ctx.message));
+        console.log(resultAccent('completed')(ctx.message));
         return;
       }
       if (spinner) {
-        spinner.succeed(chalk.green(ctx.message));
+        spinner.succeed(resultAccent('completed')(ctx.message));
         spinner = null;
       } else {
-        console.log(chalk.green(ctx.message));
+        console.log(resultAccent('completed')(ctx.message));
       }
     },
     stepFailed(ctx) {
@@ -174,10 +174,10 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
         return;
       }
       if (spinner) {
-        spinner.fail(chalk.red(`${timestamp()} ${ctx.message}`));
+        spinner.fail(resultAccent('failed')(`${timestamp()} ${ctx.message}`));
         spinner = null;
       } else {
-        console.error(chalk.red(`${timestamp()} ${ctx.message}`));
+        console.error(resultAccent('failed')(`${timestamp()} ${ctx.message}`));
       }
     },
     renderPanel(context: PanelContext) {
@@ -188,26 +188,26 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       restoreMainScreen();
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
       for (const failure of pendingFailures) {
-        console.error(chalk.red(`${timestamp()} ${failure}`));
+        console.error(resultAccent('failed')(`${timestamp()} ${failure}`));
       }
       pendingFailures.length = 0;
 
       if (eventLog.length > 0) {
-        console.log(chalk.cyan('\n── Harness Event Log ──'));
+        console.log(emphasisAccent('binding-identity')('\n── Harness Event Log ──'));
         for (const line of eventLog) {
-          console.log(chalk.gray(line));
+          console.log(emphasisAccent('supporting')(line));
         }
         eventLog.length = 0;
       }
 
       if (ctx.success) {
-        console.log(chalk.bold.green(`\n${timestamp()} Success: ${ctx.message}`));
+        console.log(resultAccent('completed')(`\n${timestamp()} Success: ${ctx.message}`));
       } else {
-        console.log(chalk.bold.red(`\n${timestamp()} Loop terminated: ${ctx.message}`));
+        console.log(resultAccent('failed')(`\n${timestamp()} Loop terminated: ${ctx.message}`));
       }
       if (ctx.details && ctx.details.length > 0) {
-        console.log(chalk.cyan('Current project snapshot:'));
-        for (const detail of ctx.details) console.log(chalk.gray(`  ${detail}`));
+        console.log(emphasisAccent('binding-identity')('Current project snapshot:'));
+        for (const detail of ctx.details) console.log(emphasisAccent('supporting')(`  ${detail}`));
       }
     },
     writeStatic(text: string) {

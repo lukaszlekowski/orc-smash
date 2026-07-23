@@ -11,6 +11,8 @@ import { createMockOutput } from './helpers/mock-output.js';
 import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
+import { loadConfig } from '../src/config.js';
+import { scanGlobalSnapshot } from '../src/artifact-index.js';
 
 vi.mock('../src/interactive.js', () => {
   return {
@@ -1040,6 +1042,38 @@ describe('generic smash dispatch', () => {
       const implArtifact = readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8');
       expect(implArtifact).toContain('parentArtifactIdentity: ' + meta2.artifactIdentity);
       expect(implArtifact).not.toContain('parentArtifactIdentity: ' + meta1.artifactIdentity);
+    });
+
+    it('B5c preflight scan-then-delete: deleting input file after initial scan blocks run before runner resolution, ownership, or spawn', async () => {
+      // 1. Create file and perform initial scan
+      writeFileSync(join(project, 'docs/dev/plan.md'), '# Plan\n');
+      const testConfig = loadConfig(project);
+      const snapshotInitial = scanGlobalSnapshot(project, testConfig.manifest);
+      expect(snapshotInitial.inputAvailability.get('plan')?.target).toBe('available');
+
+      // 2. Delete input file after scan
+      unlinkSync(join(project, 'docs/dev/plan.md'));
+
+      // 3. Execute smashAction and observe execution preflight rejection
+      const events: RunEvent[] = [];
+      const testOutput = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        loop: 'plan',
+        agent: 'opencode',
+        model: MODEL,
+        output: testOutput,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('Project inputs missing: target: docs/dev/plan.md');
+
+      expect(events.some(e => e.type === 'input.missing')).toBe(true);
+      expect(events.some(e => e.type === 'runner.resolved')).toBe(false);
+      expect(events.some(e => e.type === 'ownership.opened')).toBe(false);
+      expect(adapter.run).not.toHaveBeenCalled();
     });
   });
 });

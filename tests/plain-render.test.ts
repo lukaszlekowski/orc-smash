@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import chalk from 'chalk';
 import {
   renderPlainPanel,
   resolveTerminalWidth,
@@ -246,6 +247,54 @@ describe('renderPlainPanel — wrapField integration and Latest version (review 
     const continuation = lines[headerIdx + 1];
     expect(continuation).toBeDefined();
     expect(continuation!.length).toBeGreaterThan(0);
+  });
+
+  it('ANSI-aware width COLUMNS=40 case: renderPlainPanel at COLUMNS=40 and chalk.level = 1 preserves wrapping and text', () => {
+    const originalColumns = process.env.COLUMNS;
+    const originalLevel = chalk.level;
+    process.env.COLUMNS = '40';
+    chalk.level = 1;
+    try {
+      const sampleContext: PanelContext = {
+        projectRoot: '/tmp/test-project-with-very-long-name',
+        loopName: 'plan',
+        currentIteration: 1,
+        maxIterations: 5,
+        readOnly: false,
+        activeSkillRunner: null,
+        timeline: [
+          {
+            kind: 'evaluate',
+            role: 'auditor',
+            agent: 'opencode',
+            model: 'opencode-go/deepseek-v4-flash',
+            decision: 'accepted',
+            version: 1,
+            artifactPath: '/path/to/eval-v1-opencode.md',
+            mtime: Date.now(),
+            status: 'done'
+          }
+        ],
+        nextStepMessage: 'Ready',
+        inFlight: null,
+        latestVersion: 1,
+      };
+
+      const rendered = renderPlainPanel(sampleContext);
+      expect(rendered).toMatch(/\u001b\[/);
+
+      const stripped = rendered.replace(/\u001b\[\d+m/g, '');
+      const lines = stripped.split('\n');
+      for (const line of lines) {
+        expect(line.length).toBeLessThanOrEqual(40);
+      }
+      expect(stripped).toContain('Loop: plan');
+      expect(stripped).toContain('result: accepted');
+    } finally {
+      if (originalColumns !== undefined) process.env.COLUMNS = originalColumns;
+      else delete process.env.COLUMNS;
+      chalk.level = originalLevel;
+    }
   });
 });
 

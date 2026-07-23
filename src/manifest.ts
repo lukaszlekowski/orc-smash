@@ -223,7 +223,7 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
       validateInputSource(ctx, ['loops', loopId, 'inputs', i], input.source, loop.files ?? {});
     }
     if (loop.files) {
-      validateFilesMap(ctx, ['loops', loopId, 'files'], loop.files);
+      validateFilesMap(ctx, ['loops', loopId, 'files'], loop.files, loop.inputs);
     }
   }
 
@@ -244,7 +244,7 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
       validateInputSource(ctx, ['tasks', taskId, 'inputs', i], input.source, task.files ?? {});
     }
     if (task.files) {
-      validateFilesMap(ctx, ['tasks', taskId, 'files'], task.files);
+      validateFilesMap(ctx, ['tasks', taskId, 'files'], task.files, task.inputs);
     }
   }
 
@@ -330,7 +330,9 @@ function validateFilesMap(
   ctx: z.RefinementCtx,
   path: (string | number)[],
   files: Record<string, string>,
+  inputs: InputSpec[],
 ): void {
+  const referencedSources = new Set(inputs.map(i => i.source));
   for (const key of Object.keys(files)) {
     if ((BUILT_IN_SOURCES as readonly string[]).includes(key)) {
       ctx.addIssue({
@@ -339,10 +341,44 @@ function validateFilesMap(
         message: `Files key '${key}' shadows built-in input name; choose a different key.`,
       });
     }
+    if (!referencedSources.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...path, key],
+        message: `Files key '${key}' is defined in files: but not referenced as a source in inputs.`,
+      });
+    }
   }
 }
 
+export interface ManifestDeclarationOrder {
+  loops: string[];
+  tasks: string[];
+  pipelines: string[];
+}
+
+export function extractDeclarationOrder(content: string): ManifestDeclarationOrder {
+  const doc = YAML.parseDocument(content);
+  const getKeys = (sectionKey: string): string[] => {
+    const node = doc.get(sectionKey);
+    if (YAML.isMap(node)) {
+      return node.items.map((item: any) => String(item.key));
+    }
+    return [];
+  };
+  return {
+    loops: getKeys('loops'),
+    tasks: getKeys('tasks'),
+    pipelines: getKeys('pipelines'),
+  };
+}
+
 export type V1Manifest = z.infer<typeof V1ManifestSchema>;
+
+export interface LoadedManifest {
+  manifest: V1Manifest;
+  declarationOrder: ManifestDeclarationOrder;
+}
 
 export function buildManifestSchema(_registry: ModelRegistry) {
   return V1ManifestSchema;
@@ -363,18 +399,19 @@ export function loadManifest(
   filePath: string,
   registry: ModelRegistry,
   pathOptions?: ManifestPathOptions,
-): V1Manifest {
+): LoadedManifest {
   const content = readFileSync(filePath, 'utf-8');
   const parsed = YAML.parse(content);
+  const declarationOrder = extractDeclarationOrder(content);
   const version = validateSchemaVersion(parsed);
   if (version !== null && version !== V1_MANIFEST_SCHEMA_VERSION) {
     throw new Error(`Invalid manifest at ${filePath}: unsupported schemaVersion ${version} (expected ${V1_MANIFEST_SCHEMA_VERSION})`);
   }
   const schema = buildManifestSchema(registry);
   try {
-    const manifest = schema.parse(parsed);
+    const manifest = schema.parse(parsed) as V1Manifest;
     if (pathOptions) validateManifestPaths(manifest, pathOptions);
-    return manifest;
+    return { manifest, declarationOrder };
   } catch (err: any) {
     if (err instanceof z.ZodError || err?.issues) {
       const msg = err instanceof z.ZodError ? err.message : String(err);

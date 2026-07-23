@@ -51,7 +51,7 @@ export function createTestConfig(options: CreateTestConfigOptions = {}): Config 
   if (manifestPath === resolve(TOOL_ROOT, 'config', 'orc-smash.yaml')) {
     manifestRoot = TOOL_ROOT;
   }
-  const manifest = loadManifest(manifestPath, registry);
+  const { manifest, declarationOrder } = loadManifest(manifestPath, registry);
 
   return {
     projectRoot,
@@ -59,5 +59,6 @@ export function createTestConfig(options: CreateTestConfigOptions = {}): Config 
     manifestRoot,
     registry,
     manifest,
+    manifestDeclarationOrder: declarationOrder,
   };
 }

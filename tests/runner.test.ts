@@ -6,6 +6,7 @@ const config: Config = {
   projectRoot: process.cwd(),
   manifestPath: '/path/to/config/orc-smash.yaml',
   manifestRoot: '/path/to/config',
+  manifestDeclarationOrder: { loops: ['plan'], tasks: [], pipelines: [] },
   registry: {
     providers: {
       opencode: { models: ['opencode-go/x'], defaultModel: 'opencode-go/x' },

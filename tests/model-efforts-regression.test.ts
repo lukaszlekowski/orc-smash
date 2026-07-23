@@ -15,6 +15,7 @@ const mockConfig: Config = {
   projectRoot: process.cwd(),
   manifestPath: '/path/to/config/orc-smash.yaml',
   manifestRoot: '/path/to/config',
+  manifestDeclarationOrder: { loops: ['plan'], tasks: ['implement'], pipelines: [] },
   registry: {
     providers: {
       opencode: {

@@ -5,7 +5,7 @@ import { runLoop, runTask } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { fakeAdapterState } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
-import { panelBorderColor } from '../src/status-accent.js';
+import { panelBorderColor } from '../src/terminal-accent.js';
 import type { PanelContext, PanelContextSnapshot } from './helpers/panel-context.js';
 import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';

@@ -5,7 +5,7 @@ import { patternToRegex } from './patterns.js';
 import type { V1Manifest } from './manifest.js';
 import { classifyArtifact } from './artifact-contract.js';
 import { validateImplementLedger } from './implement-ledger.js';
-import { roleForKind, type Step, type GlobalSnapshot } from './state.js';
+import { roleForKind, type Step, type GlobalSnapshot, type BindingInputAvailability } from './state.js';
 import { computeArtifactIdentity, expectedPredecessor } from './pipeline-state.js';
 import { readInterruptedMarker } from './interrupted-artifact.js';
 
@@ -142,25 +142,42 @@ export function scanGlobalSnapshot(
     });
   }
 
-  for (const [bindingId, binding] of Object.entries(manifest.loops ?? {})) {
+  const inputAvailability = new Map<string, BindingInputAvailability>();
+
+  const scanBindingAvailability = (bindingId: string, targetSpec: { kind: string; path: string }, filesMap?: Record<string, string>) => {
+    const targetMissing = targetSpec.kind === 'file' && targetSpec.path !== '.' && !existsSync(resolve(projectRoot, targetSpec.path));
+    const targetStatus: 'available' | 'missing' = targetMissing ? 'missing' : 'available';
+
+    const filesStatus: Record<string, 'available' | 'missing'> = {};
     const missing: string[] = [];
-    if (binding.target.kind === 'file' && binding.target.path !== '.' && !existsSync(resolve(projectRoot, binding.target.path))) {
-      missing.push(`target: ${binding.target.path}`);
+
+    if (targetMissing) {
+      missing.push(`target: ${targetSpec.path}`);
     }
-    for (const [key, file] of Object.entries(binding.files ?? {})) {
-      if (!existsSync(resolve(projectRoot, file))) missing.push(`file: ${key}=${file}`);
+
+    for (const [key, file] of Object.entries(filesMap ?? {})) {
+      const exists = existsSync(resolve(projectRoot, file));
+      filesStatus[key] = exists ? 'available' : 'missing';
+      if (!exists) {
+        missing.push(`file: ${key}=${file}`);
+      }
     }
-    if (missing.length > 0) missingInputs.set(bindingId, missing);
+
+    inputAvailability.set(bindingId, {
+      target: targetStatus,
+      files: filesStatus,
+    });
+
+    if (missing.length > 0) {
+      missingInputs.set(bindingId, missing);
+    }
+  };
+
+  for (const [bindingId, binding] of Object.entries(manifest.loops ?? {})) {
+    scanBindingAvailability(bindingId, binding.target, binding.files);
   }
   for (const [bindingId, binding] of Object.entries(manifest.tasks ?? {})) {
-    const missing: string[] = [];
-    if (binding.target.kind === 'file' && binding.target.path !== '.' && !existsSync(resolve(projectRoot, binding.target.path))) {
-      missing.push(`target: ${binding.target.path}`);
-    }
-    for (const [key, file] of Object.entries(binding.files ?? {})) {
-      if (!existsSync(resolve(projectRoot, file))) missing.push(`file: ${key}=${file}`);
-    }
-    if (missing.length > 0) missingInputs.set(bindingId, missing);
+    scanBindingAvailability(bindingId, binding.target, binding.files);
   }
 
   for (const file of allFiles) {
@@ -466,5 +483,5 @@ export function scanGlobalSnapshot(
   unclassified.sort((a, b) => a.mtime - b.mtime);
 
   const interruptedMarker = readInterruptedMarker(projectRoot);
-  return { steps, byBinding, unclassified, missingInputs, interruptedMarker };
+  return { steps, byBinding, unclassified, missingInputs, inputAvailability, interruptedMarker };
 }

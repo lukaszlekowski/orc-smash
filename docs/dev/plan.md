@@ -1,5 +1,5 @@
 ---
-status: draft
+status: done
 date: 2026-07-22
 scope: operator-surface-semantics-and-prompt-contracts
 confidence: 0.96

@@ -29,7 +29,10 @@ itself.
   inputs affect action availability/preflight and do not invalidate the manifest.
 - `prompt-composer.ts` renders declared inputs generically. Built-ins are `target`,
   `version`, `priorArtifact`, and `outputPath`; additional project-file inputs are
-  keys in a binding's `files:` map.
+  keys in a binding's `files:` map. Unreferenced `files:` keys (keys declared in `files:`
+  but never referenced in any step's `inputs:`) fail manifest validation at load time.
+- Manifest declaration order is preserved during loading via AST parsing (`YAML.parseDocument`),
+  establishing exact YAML key insertion order as the authoritative binding presentation order.
 - Workflow artifacts and their provenance—not hardcoded filename categories—are
   the durable source of run, chain, stage, runner, effort, session, and lineage
   state. Old artifacts without the v1 identity contract are unclassified rather

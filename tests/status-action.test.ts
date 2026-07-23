@@ -61,6 +61,8 @@ describe('generic status snapshot', () => {
         skill: '30-simple-implement',
         role: 'implementer',
         target: '.',
+        inputFingerprint: 'in-1',
+        resultFingerprint: 'res-1',
       }),
     );
     await statusAction({ project, output, all: true });
@@ -198,5 +200,30 @@ describe('generic status snapshot', () => {
     expect(text).toContain('run-AAA');
     expect(text).toContain('run-BBB');
     expect(text.indexOf('run-AAA')).toBeLessThan(text.indexOf('run-BBB'));
+  });
+
+  it('B5d no-leak sentinel assertion: statusAction output operates purely on metadata and does not leak role, skill, target, or prior artifact file content', async () => {
+    const ROLE_SENTINEL = 'CONFIDENTIAL_ROLE_FILE_SENTINEL';
+    const SKILL_SENTINEL = 'CONFIDENTIAL_SKILL_FILE_SENTINEL';
+    const TARGET_SENTINEL = 'CONFIDENTIAL_TARGET_FILE_SENTINEL';
+    const PRIOR_ART_SENTINEL = 'CONFIDENTIAL_PRIOR_ARTIFACT_SENTINEL';
+
+    mkdirSync(join(project, 'roles'), { recursive: true });
+    mkdirSync(join(project, 'skills/plan-audit'), { recursive: true });
+    writeFileSync(join(project, 'roles/auditor.md'), `# Role\n${ROLE_SENTINEL}`);
+    writeFileSync(join(project, 'skills/plan-audit/SKILL.md'), `# Skill\n${SKILL_SENTINEL}`);
+    writeFileSync(join(project, 'docs/dev/plan.md'), `# Target\n${TARGET_SENTINEL}`);
+    writeArtifactWithMeta(
+      join(project, 'docs/dev/plan-audit-v1-fake.md'),
+      `# Prior Artifact\n${PRIOR_ART_SENTINEL}`,
+      makeV1ArtifactMeta({ version: 1, agent: 'fake', provider: 'fake', bindingId: 'plan', kind: 'evaluate' }),
+    );
+
+    await statusAction({ project, output, all: true });
+
+    expect(output.lastStaticText).not.toContain(ROLE_SENTINEL);
+    expect(output.lastStaticText).not.toContain(SKILL_SENTINEL);
+    expect(output.lastStaticText).not.toContain(TARGET_SENTINEL);
+    expect(output.lastStaticText).not.toContain(PRIOR_ART_SENTINEL);
   });
 });
