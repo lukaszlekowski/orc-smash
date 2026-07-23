@@ -191,10 +191,12 @@ itself.
 
 ## 6. Plan before implementation; verify every real provider path
 
-- `docs/dev/plan.md` is the design source of truth for the active migration and
-  `docs/dev/research.md` records its product rationale. Implement the plan's
-  release boundaries and acceptance gates even where the current source or
-  legacy descriptions differ. Do not use an old audit artifact as an architectural
+- `docs/dev/plan.md` is the design source of truth for active planned work and
+  is audited and repaired through the configured `plan` approval loop before
+  implementation. A separate `docs/dev/research.md` is not a universal
+  prerequisite and is not a stage in the current pipeline. Implement the
+  approved plan's release boundaries and acceptance gates even where legacy
+  descriptions differ. Do not use an old audit artifact as an architectural
   constraint; audit-response bookkeeping remains in versioned artifacts.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The

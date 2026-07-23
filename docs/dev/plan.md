@@ -1,930 +1,981 @@
 ---
-status: done
+status: draft
 date: 2026-07-22
-scope: operator-surface-correction
+scope: operator-surface-semantics-and-prompt-contracts
+confidence: 0.96
 ---
 
-# Plan: Informative and Persistent Interactive Operator Surface
+# Plan: Shared terminal semantics and inspectable prompt contracts
 
 ## Goal
 
-Make the existing config-driven workflow understandable and usable from the
-interactive CLI without changing its workflow engine. On entry, the operator
-must see what project and configuration were scanned, what valid and invalid
-workflow evidence exists, which runners produced the latest artifacts, and why
-a loop or pipeline stage is suggested. Menus must retain a small stable
-hierarchy, disabled actions must explain themselves clearly, and read-only
-status must remain visible in ordinary terminal scrollback.
-
-This is primarily a presentation and navigation correction over the completed
-generic engine. It also includes one narrowly demonstrated reader/writer
-consistency repair: descendants of a pipeline-start chain must survive a disk
-rescan with the same classification they had during live execution. It must not
-otherwise reinterpret artifacts, relax pipeline eligibility, infer pipeline
-identity, or change execution and process-safety behavior.
-
-## Confirmed Problems
-
-1. `scanGlobalSnapshot()` runs before the top-level prompt, but its information
-   is used mainly for availability checks and is not presented on entry.
-2. Configured tasks are flattened into top-level actions such as
-   `Execute one-off task: implement`; the intended generic action plus task
-   chooser was not implemented.
-3. Inquirer appends string-valued disabled reasons without punctuation, yielding
-   ambiguous text such as `Start suggested stage No eligible ...`.
-4. `Display pipeline and project state` renders through the alternate-screen
-   panel and immediately returns to the prompt. The next draw replaces the
-   panel, and alternate-screen output is unavailable in normal scrollback.
-5. The loop submenu has the same ambiguous disabled-reason presentation.
-6. Existing tests primarily inspect menu data objects. They do not adequately
-   prove the text, hierarchy, persistence, and return navigation experienced by
-   an operator.
-7. Runner selection resolves the full evaluate/repair provider, model, effort,
-   and session policy before execution, but the live panel receives an empty
-   resolved-runner list and shows only the active runner. The operator therefore
-   loses the configuration summary when execution enters the alternate screen.
-8. A real pipeline-start loop completed successfully in memory, but a later
-   status scan rejected its repair and second evaluation because the scanner
-   incorrectly required every artifact carrying `chainMode: pipeline-start` to
-   have a null parent. Only the chain root has a null parent; descendants must
-   point to their immediate predecessor.
-
-## Recommended Implementation Direction (Normative)
-
-Treat the work as six ordered, reviewable slices. Do not combine it into a UI
-rewrite. Each slice must leave typecheck and its focused tests green before the
-next begins.
-
-| Order | Slice | Required direction | Must remain untouched |
-| ---: | --- | --- | --- |
-| 1 | Characterization | Encode the demonstrated three-artifact rescan failure and current terminal/menu behavior before production edits. | Artifacts, providers, ownership |
-| 2 | Scanner repair | Correct only the pipeline-start root/descendant invariant and surface existing unclassified reasons. | Fingerprints, eligibility rules, artifact writer |
-| 3 | Snapshot model | Build one immutable global display model from one scan and pure derivations. | Scanner/classifier decisions |
-| 4 | Static output | Add persistent normal-screen rendering and explicit return navigation. | Live-region event flow |
-| 5 | Menus | Introduce the generic task chooser and common disabled-choice formatting. | Direct non-interactive dispatch |
-| 6 | Live panel | Thread already-selected runners and already-resolved invocation continuity into the panel. | Runner and continuity resolution |
-
-If a slice requires editing a provider adapter, `run-ownership.ts`,
-`kill-gate.ts`, supervisor-contract code, signal handling, timeout policy, or
-artifact-writing schema, stop and amend/re-audit the plan. Those changes are not
-an acceptable incidental implementation technique.
-
-### Source-of-truth data flow
-
-Use these one-way flows; renderers and prompts never rediscover domain facts:
-
-```text
-Static project state
-  loadConfig
-    -> scanGlobalSnapshot (once)
-    -> pure default-loop / in-progress / pipeline-candidate derivations
-    -> ProjectSnapshotView
-    -> compact or detailed text renderer
-    -> CliOutput.writeStatic
-
-Live run state
-  promptRunners / resolveRunner
-    -> immutable selected runner map
-    -> binding engine resolves continuity for the current invocation
-    -> executeLoopStep
-    -> PanelContext { selected runners, active invocation }
-    -> live panel renderer
-```
-
-Where current convenience wrappers rescan internally, extract or reuse a pure
-core that accepts the already-built `GlobalSnapshot`; keep the public wrapper as
-a delegating compatibility boundary if existing callers still need it. Do not
-copy default-loop, candidate-eligibility, lineage, runner, or continuity logic
-into a view module.
-
-Concretely, the pipeline-suggestion evidence the detailed view must reproduce —
-and that `tests/status-action.test.ts` covers today — is produced by
-`allPipelineCandidates` / `pipelineSuggestions` (`src/next-step.ts:110,138`),
-each of which calls `scanGlobalSnapshot` internally (`next-step.ts:114,142`) and
-`buildTargetSnapshots` (`next-step.ts:88`) on top of the single scan the caller
-already performed. The view module (`project-snapshot-view.ts`) must **not**
-call those wrappers. Instead map the single scan's `snapshot.steps` to
-`ArtifactRecord` and call the pure core `pipelineStageCandidates(artifacts,
-manifest, targetSnapshots)` (`src/pipeline-state.ts:290`) directly;
-`eligibleNextStages` (`pipeline-state.ts:278`) is the non-stale filter over the
-same pure core. Compute `targetSnapshots` once via `buildTargetSnapshots`
-against the same scanned state so staleness evidence is derived, not re-scanned;
-if `buildTargetSnapshots` cannot be reached without rescanning, extract its body
-into a pure helper that takes the already-scanned manifest/target facts. The
-suggested-loop reason is likewise composed from the single passed
-`GlobalSnapshot` via `recoverInProgressRun` (see Startup Project Snapshot
-Contract) — `bindingHasInProgressChain` and `resolveDefaultLoop` rescan and must
-not be called from the view.
-
-### Deliberate behavior changes versus preserved behavior
-
-Only these behavior changes are authorized:
-
-- interactive startup prints a compact project snapshot;
-- interactive tasks move behind one `Execute one-off task` chooser;
-- disabled reasons use explicit, grammatical labels;
-- read-only status becomes persistent normal-screen output;
-- the live panel displays the complete selected runner/session policy;
-- valid non-root artifacts in a pipeline-start chain survive disk rescanning;
-- unclassified artifacts expose the reason already determined by the scanner.
-
-Everything else is preservation work. In particular, `--loop`, `--task`, and
-`--pipeline` remain direct non-interactive dispatch paths; typed event schemas,
-debug logging, prompt composition, runner precedence, session selection,
-artifact contents, ownership admission, provider spawning, termination, and
-exit-code mapping remain unchanged.
-
-## Product Decisions
-
-### 1. Inform the operator; never auto-advance
-
-The startup view may recommend a loop and may show eligible pipeline-stage
-suggestions, but it must not select or execute either automatically. Every
-execution still requires an explicit operator action.
-
-The startup view must distinguish these concepts:
-
-- **Suggested loop:** the loop the existing default-loop resolver would place
-  first/default in loop selection, together with a human-readable reason.
-- **Eligible pipeline stage:** a successor returned by the existing pipeline
-  eligibility rules, together with its evidence.
-- **Unavailable suggestion:** no eligible candidate, or candidates invalidated
-  by stale input, unclassified evidence, missing input, or another existing
-  eligibility rule.
-
-Do not describe a filename-only or unclassified artifact as workflow
-completion. Historical artifacts that fail the current provenance contract
-remain unclassified and cannot enable continuation, second opinion, or a
-pipeline successor.
-
-### 2. Static information belongs to the normal terminal screen
-
-The terminal alternate screen is reserved for a genuinely live, repeatedly
-updated execution region. The following are static and must render on the
-normal screen so they remain in scrollback:
-
-- the startup project snapshot;
-- `Display pipeline and project state`;
-- standalone `orc status`;
-- menus and disabled reasons;
-- errors and return-to-menu messages.
-
-Displaying static status must not attach a timer or live region. Returning from
-the detailed status view requires an explicit `Back`/Enter acknowledgement; the
-application must not redraw the menu over the status immediately.
-
-### 3. Tasks are bindings, not raw skills
-
-The top-level action is always `Execute one-off task`. Selecting it opens a
-chooser containing the configured task bindings. Do not list every raw skill:
-a task is the executable contract that supplies its target, inputs, output
-pattern, validator, and skill binding.
-
-Each task choice must make these facts available before execution:
-
-- task ID;
-- bound skill ID;
-- role;
-- resolved skill-definition path;
-- target;
-- output pattern and contract;
-- availability, with the exact missing-input reason when unavailable.
-
-The concise selector label should contain the task ID, skill, and role. After a
-task is selected, show its full detail and require `Run task` or `Back`. Runner
-selection occurs only after `Run task` is confirmed. `Back` returns to the task
-chooser, and the chooser has its own `Back to main menu` action.
-
-### 4. Disabled choices use one explicit format
-
-All interactive menus use the same presentation rule:
-
-```text
-Start suggested stage (unavailable: no eligible pipeline stage candidates)
-Continue current plan loop (unavailable: no in-progress loop to continue)
-Run second opinion for plan (unavailable: no completed loop to review)
-```
-
-The displayed choice name owns the explanatory text. Pass a boolean disabled
-state to Inquirer rather than relying on Inquirer to concatenate a string
-reason. Enabled choices do not include an unavailable suffix. Recommended
-choices use a separate `(recommended)` suffix and must never be recommended
-while disabled.
-
-The same formatter is used by the top-level menu, loop submenu, task chooser,
-pipeline launch-context chooser, suggested-stage chooser, runner capability
-choices, and any other menu with a disabled reason.
-
-### 5. Keep selected runner policy visible throughout a live run
-
-Runner configuration and observed session outcome are different facts and must
-not be collapsed into a single `Session` timeline cell:
-
-- **Selected runner policy (known before execution):** skill, role, provider,
-  exact model, effort (`provider default` when absent), and session strategy
-  (`fresh-per-invocation` or `resume-per-skill`).
-- **Current invocation mode (known immediately before spawn):** `fresh` with a
-  reason, or `resumed` with the prior session ID. A fresh invocation may show
-  `new session ID: pending` until the provider reports one.
-- **Observed outcome (known after completion):** the actual session ID returned
-  by the provider, or `none`.
-
-The live panel adds a stable `Run configuration` section above the timeline,
-with one row for every skill selected up front (for an approval loop, evaluate
-and repair). It remains visible while either skill is active. The active-step
-section additionally shows that invocation's resolved continuity mode:
-
-```text
-Run configuration
-  Evaluate  plan-audit      claude · glm-5.2[1m]               default  resume per skill
-  Repair    plan-follow-up  agy · Claude Opus 4.6 (Thinking)  default  fresh per invocation
-
-Active invocation
-  plan-audit v2 — resuming session *a5fb1
-```
-
-Use `session policy`, `fresh`, and `resumed`; do not label continuity merely
-`on/off`. The existing timeline remains the historical record and shows the
-session outcome after completion.
-
-This change passes already-resolved runner and invocation facts into the live
-view by reusing the existing `PanelContext.resolvedRunners` plumbing — it does
-not add a parallel `selectedRunners` field, re-resolve runners, change
-continuity selection, or wait until completion to decide whether an existing
-session will be resumed. See "Live run configuration" for the exact type/field
-reuse and the `resolveContinuity` return-type extension.
-
-### 6. Pipeline-start describes the chain origin, not every artifact's position
-
-`chainMode: pipeline-start` identifies how the chain was created and remains on
-later evaluate/repair artifacts in that chain. Enforce the null-parent rule only
-for the actual root artifact. Later same-chain artifacts must carry their
-immediate predecessor's `artifactIdentity` and continue through the existing
-structural and chain-order lineage validation.
-
-The demonstrated valid sequence is:
-
-```text
-pipeline-start evaluate v1 REJECTED  parent=null
-repair v1 COMPLETED                  parent=evaluate-v1
-evaluate v2 APPROVED                 parent=repair-v1
-```
-
-After a fresh disk scan, all three must remain classified and preserve their
-model, duration, decision/outcome, session policy, session ID, chain identity,
-and parent identity. The final state must remain accepted. Do not rewrite or
-migrate correctly stamped artifacts to repair this defect; correct the reader's
-root-versus-descendant invariant.
-
-Implement the invariant per `(pipelineId, pipelineRunId, chainId)`:
-
-1. Every artifact whose chain was created by `pipeline-start` still belongs to
-   the pipeline's configured first stage; preserve that check for roots and
-   descendants.
-2. The chain has exactly one root artifact with
-   `parentArtifactIdentity: null`.
-3. A non-root artifact must have a non-null parent that resolves to the
-   immediate prior valid artifact in the same pipeline, run, stage, binding,
-   and chain.
-4. Root status is determined from lineage, not merely from `kind`, `version`,
-   filename, or `chainMode`; later evaluations can have higher versions while
-   remaining in the same pipeline-start chain.
-5. Existing fixpoint and chain-order validation remain the authority for
-   descendant linkage. Do not add a second permissive shortcut around them.
-
-The preferred correction is to narrow/remove the unconditional null-parent
-check in the first-pass pipeline-start validation and let the later lineage
-passes distinguish roots from descendants. If those passes do not currently
-enforce uniqueness and immediacy strongly enough, strengthen the existing pass
-rather than adding a parallel validator.
-
-## Startup Project Snapshot Contract
-
-Render a compact snapshot before the first top-level prompt. Re-render it after
-an execution completes and returns to the action menu, and after any action that
-can change the scanned interpretation. The concrete re-render triggers are:
-
-- returning to the top-level menu after a loop/task/stage execution completes
-  (via `promptPostRunRecovery` in `src/commands/smash.ts`);
-- selecting `Change loop` and completing the loop-selection prompt;
-- selecting `Start suggested stage` and completing stage selection;
-- returning from `Display pipeline and project state` (the snapshot may have
-  been stale before the operator viewed the detail).
-
-Ordinary navigation between menus (entering the task chooser, viewing task
-detail, pressing Back) need not rescan or reprint the snapshot.
-
-The header contains:
-
-```text
-Project:  /absolute/project/path
-Config:   /absolute/path/to/orc-smash.yaml
-Pipelines: default
-Suggested loop: plan
-Reason: no valid in-progress loop; plan is the configured first loop stage
-```
-
-Pipeline header behavior by configuration:
-
-- **One pipeline:** show its ID (e.g. `Pipelines: default`).
-- **Multiple pipelines:** list all configured IDs comma-separated
-  (e.g. `Pipelines: default, canary`).
-- **No pipelines configured:** show `Pipelines: (none configured)`.
-
-The manifest has no "default pipeline" concept; `pipelines` is a plain
-`Record<string, PipelineSpec>`. The header lists all configured pipeline IDs
-from `Object.keys(manifest.pipelines)` in manifest order.
-
-The suggested-loop reason is **composed** in the view module from the single
-passed `GlobalSnapshot`: derive per-binding in-progress state from
-`GlobalSnapshot.byBinding` with the pure `recoverInProgressRun` helper, then use
-the interrupted marker, loop mtime ordering, and the manifest's first configured
-loop. Do not call `bindingHasInProgressChain` or `resolveDefaultLoop` from the
-view because those wrappers rescan. `resolveDefaultLoop` returns `{ loopName }`
-only; the view module produces the human-readable reason from the same already
-scanned facts.
-
-If there is no configured pipeline or no defensible loop suggestion, say so
-explicitly. Do not synthesize certainty from an empty or invalid history.
-
-For every configured loop and task, in manifest order, show a compact state
-summary:
-
-- binding ID and kind (`loop` or `task`);
-- target path;
-- latest valid artifact for each applicable step (`evaluate`, `repair`, or
-  `task`), or `none`;
-- decision/outcome;
-- provider, exact model, effort (`provider default` when absent), and session
-  strategy/session ID when present;
-- missing project inputs;
-- count of matching unclassified artifacts for the binding.
-
-The compact startup snapshot may summarize unclassified evidence by count. The
-detailed status view must list each matching unclassified artifact with its path
-and its per-artifact classification-failure reason sourced from
-`Step.unclassifiedReason` (see "Surface classification reasons at the source"
-below). This explains why visible historical files do not enable `Continue`,
-`Run second opinion`, or a suggested stage.
-
-### Surface classification reasons at the source
-
-Add an optional `unclassifiedReason?: string` field to the `Step` interface in
-`src/state.ts`. Capture it in `scanGlobalSnapshot` (`src/artifact-index.ts`) at
-every code path that sets `unclassified = true`:
-
-1. **Front-matter / identity-field validation failure** (line ~288): use
-   `classifiedMeta.reason` — the `parseArtifactMetaClassified` function in
-   `src/provenance.ts` already produces specific strings such as
-   `"Missing required identity fields: chainId, artifactIdentity"`,
-   `"Artifact has no v1 provenance front matter."`, and
-   `"Artifact filename provider/version does not match provenance."`.
-2. **Contract validation failure** (line ~329): set
-   `unclassifiedReason = 'Output contract validation failed.'`.
-3. **Parse / identity-verification exception** (line ~341 catch block): set
-   `unclassifiedReason = err.message ?? 'Artifact identity verification failed.'`.
-4. **Fixpoint structural lineage failure** (line ~413): the `invalidReason`
-   local variable already contains a specific string (e.g.
-   `"stage-continuation parent artifact '…' not found or is unclassified."`
-   or `"Same-chain parent artifact '…' not found or has mismatched chainId."`);
-   assign it to `step.unclassifiedReason`.
-5. **Chain-order lineage validation failure** (line ~452): set
-   `unclassifiedReason = 'Chain lineage invalid: parent artifact identity mismatch.'`.
-
-Default to a stable generic phrase (`'Unclassified: does not satisfy current provenance contract.'`) for any boolean-only branch that lacks a specific
-string.
-
-The reason-field addition **surfaces already-computed reasons** without changing
-classification. Test that addition independently from the deliberate
-pipeline-start descendant correction in Product Decision 6: reason plumbing
-alone must leave classified/unclassified path sets identical, while the focused
-reader correction must change only the falsely rejected valid descendants in
-its explicit regression fixture. Neither change modifies durable provenance or
-relaxes eligibility for stale, foreign-run, wrong-stage, or malformed evidence.
-`unclassifiedReason` is display-only `Step` state and must never be serialized
-into artifact front matter.
-
-The view module reads `Step.unclassifiedReason` and renders it; it does not
-rescan, reclassify, or reconstruct the cross-step fixpoint.
-
-For every eligible pipeline successor, show concise evidence:
-
-- pipeline and pipeline-run ID;
-- predecessor and successor stage;
-- completion artifact path and identity;
-- decision/outcome;
-- result/input fingerprint validity.
-
-Stale or otherwise ineligible candidates belong in the detailed view, with the
-existing reason. The startup view can summarize them as an unavailable count.
-
-## Detailed Project and Pipeline View
-
-`Display pipeline and project state` and `orc status` consume the same immutable
-view model. The detailed view contains:
-
-1. project/config paths and scan time;
-2. configured pipeline stages in order;
-3. all loop/task binding summaries;
-4. latest valid artifacts and their exact runner provenance;
-5. unclassified artifacts, each with its `unclassifiedReason` from `Step`;
-6. missing inputs scoped to their binding;
-7. eligible and unavailable pipeline suggestions with evidence;
-8. interrupted state, when present.
-
-The live execution panel is a separate view over the same run facts. It shows
-the complete selected runner policy for every skill plus the active invocation
-mode; it must not substitute the read-only single-loop status panel for the
-global project snapshot.
-
-The interactive action prints this view persistently and then offers
-`Back to main menu`. Standalone `orc status` prints it once and exits normally.
-It must not enter the alternate screen and must not wait for input.
-
-`orc status --all` retains its current global meaning. Any loop filter affects
-presentation only; scanning remains global.
-
-## Menu Hierarchy
-
-The top-level menu is stable and independent of the number of configured tasks:
-
-```text
-Start loop
-Execute one-off task
-Change loop
-Start suggested stage
-Display pipeline and project state
-Stop for manual review
-```
-
-Every action remains visible. When unavailable, it uses the standardized
-`(unavailable: reason)` label.
-
-`Execute one-off task` opens:
-
-```text
-implement — 30-simple-implement · implementer
-update-docs — update-docs · documenter
-Back to main menu
-```
-
-Unavailable tasks remain visible. Selecting an enabled task opens its detail
-and `Run task` / `Back` confirmation.
-
-`Start loop` keeps the current loop-selection behavior and then opens:
-
-```text
-Continue current <loop> loop
-Start fresh <loop> loop
-Run second opinion for <loop>
-Back to main menu
-```
-
-The existing continuation, fresh-chain, second-opinion, pipeline-context, and
-runner-selection semantics remain unchanged.
-
-## Architecture and Ownership
-
-### Project snapshot view model
-
-Add a purpose-named, pure module such as `src/project-snapshot-view.ts`. It
-builds a serializable display model from:
-
-- `Config` and its resolved manifest/config paths;
-- the existing `GlobalSnapshot`;
-- existing default-loop resolution;
-- existing eligible/stale pipeline-candidate resolution;
-- interrupted-state information already exposed by the status scan.
-
-It must not rescan files independently, classify artifacts, recompute
-fingerprints, or implement a second eligibility algorithm. It reads
-`Step.unclassifiedReason` as provided by the scan; it does not reconstruct
-the classification logic. Callers perform one scan and pass the resulting facts
-in. The model contains display facts, not ANSI codes or Inquirer choices.
-
-### Static snapshot renderer
-
-Add a purpose-named renderer such as `src/project-snapshot-renderer.ts` that
-turns the view model into compact or detailed text. Rendering is deterministic
-and independently testable. Color may be applied at the output boundary, but
-tests must be able to assert a stable color-free representation.
-
-Do not force the global multi-binding snapshot into the existing single-loop
-`PanelContext`; that type is oriented around a live run. Reusing it would retain
-the current mismatch between global project state and one detected loop.
-
-### Live run configuration
-
-Extend the live-run view model deliberately rather than reading configuration
-from the renderer. `runBinding` (`src/loops/binding-engine.ts:81`) already
-resolves every selected skill runner before the first provider call —
-`resolveBindingRunners(skillIds, config, options, runners)` at
-`binding-engine.ts:145` populates the `runners` map, and each step later reads
-`runners[request.skillId]` (`binding-engine.ts:169`). Thread that immutable
-runner map into `executeLoopStep` and `buildPanelContext` so the panel can show
-every selected skill, not just the active one.
-
-**Reuse the existing runner plumbing; do not add a parallel path.** The selected
-runner rows are carried by the existing `PanelContext.resolvedRunners` field
-(`src/status.ts:36`) and its element type `ResolvedRunnerDisplay`
-(`src/status.ts:59-65`), which `status-panel.ts` already renders at
-`src/status-panel.ts:33-40`. That renderer loop is currently dead because
-`executeLoopStep` passes `[]` as the `resolvedRunners` argument
-(`src/loops/execution.ts:164`) — exactly the "empty resolved-runner list" of
-Confirmed Problem #7. Fix the defect at the source rather than beside it:
-
-1. **Thread the `runners` map into `executeLoopStep`.** Today only the single
-   active runner reaches `executeLoopStep` (the `runner` step arg at
-   `binding-engine.ts:225`); add the immutable `runners` map (resolved once at
-   `binding-engine.ts:145`) to `executeLoopStep`'s deps or step args so
-   `buildPanelContext` can see every selected skill.
-2. **Extend `ResolvedRunnerDisplay`** (`src/status.ts:59-65`) with the display
-   facts it lacks. It already has `skillId`, `agent`, `model`, `source`, and
-   `inheritedFrom`; add `role`, `phase`, `effort`, and `sessionStrategy`:
-   ```ts
-   interface ResolvedRunnerDisplay {
-     skillId: string;
-     agent: string;
-     model: string;
-     source: 'selected' | 'inherited' | 'configured';
-     inheritedFrom?: { kind: StepKind; version: number; sessionId: string };
-     // display-only additions:
-     role: string;
-     phase: 'evaluate' | 'repair' | 'task';
-     effort: string | null;
-     sessionStrategy: 'fresh-per-invocation' | 'resume-per-skill';
-   }
-   ```
-3. **Populate `resolvedRunners`** in the `buildPanelContext` call
-   (`src/loops/execution.ts:153-167`) from the now-threaded `runners` map
-   instead of passing `[]`. The existing `status-panel.ts:33-40` block then
-   becomes the "Run configuration" section. Do **not** introduce a second
-   `selectedRunners` field next to `resolvedRunners`, and do not leave the
-   existing loop as dead code.
-
-The active invocation's resolved continuity is a distinct fact from the selected
-runner policy, so it rides a **separate, clearly-named field on `PanelContext`**
-(not a `resolvedRunners` element). Add one field, e.g.
-`activeInvocation?: ActiveInvocationDisplay`, whose value is:
+Make every operator-facing surface easier to scan and make the configured
+execution model inspectable before a run starts.
+
+This plan has two related outcomes:
+
+1. Introduce one shared semantic colour vocabulary for the interactive startup
+   snapshot, interactive menus, the live ORC SMASH status panel, detailed
+   project status, and plain-mode event output.
+2. Extend **Display pipeline and project state** and `orc status` with a
+   manifest-derived prompt contract for every configured loop and task. The
+   contract shows how a prompt is assembled—role, skill, ordered inputs, target,
+   output and validation—without printing the full role or skill contents.
+
+Colour remains an enhancement rather than a source of truth. Every decision,
+status, warning and unavailable reason must remain understandable after ANSI
+codes are removed and when colour is disabled.
+
+## Design decisions
+
+The following decisions are normative for this plan and are audited as part of
+the plan itself. This pipeline has no research stage, and a separate
+`docs/dev/research.md` is not an execution or approval prerequisite.
+
+- **Operator scanability (one shared vocabulary).** Every operator-facing
+  surface should use one semantic colour vocabulary so status, warnings,
+  results, and unavailability read consistently. Colour is enhancement; text is
+  authoritative. *Rejected alternative:* a parallel per-renderer colour
+  vocabulary.
+- **Colour-off and redirected-output requirement.** Output must stay complete
+  and understandable with ANSI stripped and colour disabled: the plain event
+  writer emits zero ANSI when colour is unsupported (`NO_COLOR=1`, non-TTY, or
+  piped), and the panel/interactive surfaces honour Chalk's terminal detection.
+  *Rejected alternatives:* forcing a global Chalk level in production; injecting
+  ANSI into redirected/log-file output.
+- **Prompt-contract redaction (recipe, not dump).** Project status shows the
+  prompt *recipe* — role/skill identity, ordered inputs, output contract — and
+  never the role/skill/target/prior-artifact *contents*. Prompt-contract view
+  construction and rendering perform no filesystem reads and never call
+  `prompt-composer.ts`; the builder's only filesystem read is the pre-existing
+  target-fingerprint computation (see B5d). *Rejected alternatives:* printing the
+  composed prompt or any source file contents in `orc status`.
+- **Generic manifest compatibility.** Prompt contracts and binding ordering
+  must render in manifest declaration order for *any* valid v1 manifest ID,
+  including integer-like IDs, so the feature is not coupled to this repository's
+  binding names. *Rejected alternative:* relying on JavaScript object-key
+  enumeration order.
+- **No hidden execution dependencies.** Every configured `files:` mapping must
+  be a declared input so the displayed prompt contract is the complete set of
+  inputs the run actually consumes. *Rejected alternative:* allowing
+  non-input `files:` keys that block a run without appearing in the contract.
+- **Operator-menu and lifecycle boundaries preserved.** Do not fork or replace
+  Inquirer, do not adopt a new TUI library, and do not change the
+  alternate-screen lifecycle, event ordering, runner resolution, ownership
+  admission, or prompt composition. *Rejected alternatives:* restyling by
+  replacing the prompt/menu libraries or the panel lifecycle.
+
+## Current state and problem
+
+- `src/status-accent.ts` owns role, step-kind, lifecycle-status and panel-border
+  colours, but these semantics are not shared by all operator surfaces.
+- `src/project-snapshot-renderer.ts` renders compact and detailed snapshots
+  without semantic colour hierarchy.
+- `src/interactive.ts` renders recommended and unavailable menu choices without
+  consistent accents.
+- `src/plain-render.ts` already applies some status accents, but it must use the
+  same vocabulary as the other surfaces rather than developing a parallel one.
+- The detailed project snapshot shows bindings, artifact history and pipeline
+  candidates, but it does not show the declarative execution contract that
+  produces a prompt.
+- The canonical prompt is assembled by `src/prompt-composer.ts` as
+  `Role content -> Skill content -> ordered Inputs`. The status view should
+  explain that recipe from the manifest; it must not reimplement prompt
+  composition or claim that unresolved runtime values are resolved.
+
+## Owned output surfaces (inventory)
+
+Every operator-facing terminal surface orc-smash owns must consume the shared
+semantic accent source. The inventory below is exhaustive; an unconverted owned
+surface fails CI. It is grouped by the live path that produces each surface.
+The "exhaustive surface coverage" test in the Verification strategy enumerates
+this list verbatim.
+
+**Interactive panel path — `createPanelCliOutput` (`src/cli-output.ts`)**, the
+default TTY experience. Every one of these applies Chalk *directly* today and
+must be routed through `src/terminal-accent.ts`, colouring only orc-smash-owned
+prefixes/labels/semantic tokens — never raw agent payloads:
+
+- `note` → `chalk.gray` (`cli-output.ts:124`)
+- `warn` → `chalk.yellow` (`:129`)
+- `error` → `chalk.red` (`:138`; also the pending-failure flush at `:191`)
+- `stepStarted` → `ora(chalk.blue(...))` spinner (`:155`)
+- `stepSucceeded` → `chalk.green` (`:160`, `:164`, `:167`)
+- `stepFailed` → `chalk.red` (`:177`, `:180`)
+- `finalSummary` → Harness Event Log header `chalk.cyan` (`:196`) and event
+  lines `chalk.gray` (`:198`), success `chalk.bold.green` (`:204`), failure
+  `chalk.bold.red` (`:206`), snapshot `chalk.cyan`/`chalk.gray` (`:209–210`)
+
+Spinner lifecycle, alternate-screen enter/exit, pending-failure buffering, and
+Harness Event Log **ordering and structure are unchanged** — only the semantic
+accent source changes.
+
+**Plain event path — `createPlainCliOutput` (`src/cli-output.ts`)**, the
+`--plain` experience:
+
+- `createPlainCliOutput.renderPanel` is intentionally a **no-op**
+  (`cli-output.ts:290–292`); panel snapshots are replaced by chronological
+  events. It is **not** a styled surface.
+- The real `--plain` dispatch is `createPlainCliOutput.emit` →
+  `renderRunEvent` → `EventWriter.write` (`src/plain-event-renderer.ts`).
+- `renderRunEvent` is currently **colourless by design** (no chalk import). A5
+  *introduces* conditional colouring there, gated on colour support and guarded
+  by the non-TTY zero-ANSI test. `EventWriter`'s line ordering is unchanged.
+
+**Auxiliary plain-snapshot renderer — `renderPlainPanel`
+(`src/plain-render.ts`)**:
+
+- `renderPlainPanel` has **no `src/` callers**; it is a utility renderer for
+  non-TTY/plain snapshot rendering and tests, already applying
+  `kindAccent`/`roleAccent`/`statusAccent` (`plain-render.ts:96–102`, `:130`).
+- **Decision:** it is a *supported auxiliary surface* (it ships in the package
+  and emits accents) and must be reconciled to the shared vocabulary and kept
+  colour-off-safe. The earlier framing that treated it as *the* plain-mode
+  surface is corrected: the live plain surface is `renderRunEvent`, not
+  `renderPlainPanel`.
+
+**Interactive prompts and detail views (`src/interactive.ts`)**:
+
+- `formatMenuChoice` (`interactive.ts:7`) builds Inquirer choice names; A3
+  reconciles it and consumes the typed availability field from Major 1.
+- The task-detail block writes directly via `console.log` (`interactive.ts:87–95`).
+- Runner selection (`promptRunners`, `interactive.ts:176+`) writes "Default
+  skill runners" and per-line detail via `console.log` (`:199`, `:204`) and
+  builds effort/session choices through `formatMenuChoice` (`:288–325`).
+
+These direct writes must be reconciled to the shared vocabulary (owned
+labels/metadata only), and the typed availability field must drive disabled
+category styling in both the action menus and the `promptRunners` choices.
+
+**Snapshot renderers (`src/project-snapshot-renderer.ts`)**:
+`renderCompactSnapshot` (A2) and `renderDetailedSnapshot` (A6 + Workstream B).
+
+**Live status panel (`src/status-panel.ts`)**: `renderStatusPanel` and
+`renderTimelineSection` (A4). `renderTimelineSection` currently has **inline**
+  result colouring (`status-panel.ts:119–127`: accepted/completed→bold green,
+  retry→bold red, blocked→bold yellow, falsy→empty); A4 moves this to the shared, exhaustive
+  `resultAccent`.
+
+## Design principles
+
+1. **One meaning, one accent.** The same semantic state uses the same accent in
+   every surface.
+2. **Text remains authoritative.** Do not replace labels, decisions, reasons or
+   symbols with colour-only indicators.
+3. **Warnings remain prominent.** Missing inputs, non-zero unclassified counts,
+   failures and blocked states must not be dimmed as secondary detail.
+4. **No forced colour.** Respect Chalk's terminal detection and conventional
+   `NO_COLOR` behavior. Do not set a global Chalk level in production.
+5. **Pure rendering.** Build display-ready view data before rendering. Snapshot
+   renderers must not read files, parse YAML, or independently resolve prompt
+   inputs.
+6. **Manifest remains authoritative.** Role, skill, input, output and pipeline
+   descriptions come from the loaded manifest and existing canonical resolver
+   rules.
+7. **Recipe, not prompt dump.** Do not print role/skill file contents or a large
+   generated prompt in project status.
+8. **Be honest about unresolved data.** Before runner selection, values such as
+   `{provider}` and the final output filename may be unresolved. Show the
+   configured pattern and source mapping rather than inventing a value.
+
+---
+
+## Workstream A: Shared semantic terminal styling
+
+### A1. Establish a shared semantic accent module
+
+Evolve `src/status-accent.ts` into the single source of truth for terminal
+semantics. If its broader responsibility makes the current name misleading,
+rename it to the precise domain name `src/terminal-accent.ts` and update all
+imports. A rename must update all three test importers
+(`tests/status-accent.test.ts`, `tests/status-panel.test.ts`,
+`tests/loop-live.test.ts`) in the same change alongside the two source importers
+(`src/plain-render.ts`, `src/status-panel.ts`). Do not create a generic
+`helpers.ts`, `common.ts` or `misc.ts` module.
+
+Retain the existing role, kind, lifecycle-status and panel-border APIs, and add
+small typed APIs for result, availability and display emphasis. The exact API
+shape may be adjusted during implementation, but it must provide one canonical
+mapping equivalent to:
 
 ```ts
-interface ActiveInvocationDisplay {
+resultAccent('accepted' | 'completed' | 'retry' | 'failed' | 'blocked' | 'unknown' | 'interrupted' | 'valid')
+availabilityAccent('available' | 'unavailable' | 'missing-inputs')
+emphasisAccent('identity' | 'supporting' | 'placeholder' | 'recommended')
+```
+
+**Exhaustiveness requirement (Major 5).** The accent API must cover the full
+domain it claims to own — it must not leave any state to ad-hoc inline colouring
+elsewhere. Concretely:
+
+- **Applicable decision** (`accepted`, `retry`, `unknown`) — consumed from
+  `Step.decision`.
+- **Completion** (`completed`, `blocked`, `valid`) — consumed from
+  `Step.completionOutcome` and the artifact contract; `valid` (a
+  contract-satisfying artifact with no explicit result) must read as neutral,
+  not as a warning.
+- **Lifecycle** (`running`, `done`, `failed`, `interrupted`) — replacing the
+  inline `chalk.bold.green/red/yellow` result logic in
+  `src/status-panel.ts:119–127` and the separate `level()` mapping in
+  `src/plain-event-renderer.ts:9–30`.
+- **Availability** (`available`, `unavailable`, `missing-inputs`).
+- **Unclassified** (zero vs non-zero) and **stale evidence**.
+
+`resultAccent` must therefore accept `failed` and `interrupted` (previously
+omitted) in addition to `accepted`, `completed`, `retry`, `blocked`, `unknown`,
+and `valid`. A state with no canonical accent is a defect: the implementation
+must either map it explicitly or fail typecheck.
+
+Required semantics:
+
+| Meaning | Treatment | Notes |
+|---|---|---|
+| accepted, completed | green | Successful terminal result |
+| retry, failed | red | Negative result or execution failure |
+| blocked, unknown, interrupted | yellow or magenta, consistently selected | Requires operator attention |
+| valid without an explicit result | neutral/default | Must not look like a warning |
+| running | yellow | Active work |
+| unavailable | dim | The textual reason remains visible |
+| missing inputs | yellow | Actionable execution blocker; never merely dim |
+| unclassified count = 0 | dim | Informational zero state |
+| unclassified count > 0 | yellow | Requires inspection |
+| placeholder such as `(none)` | dim | Absence without an error |
+| project identity/path | bold cyan | Primary context |
+| pipeline/loop/binding identity | one consistent identity accent | Do not assign arbitrary colours per renderer |
+| supporting paths and metadata | dim | Config path, runner metadata, session detail |
+| recommended | green or bold cyan, consistently selected | Recommendation is still stated in text |
+
+Existing role and step-kind distinctions must remain stable unless tests and
+all consuming surfaces are deliberately updated together.
+
+### A2. Apply semantics to the compact interactive snapshot
+
+Update `renderCompactSnapshot` in `src/project-snapshot-renderer.ts`:
+
+- emphasize the project root as the primary identity;
+- dim the config path and supporting reason text;
+- accent pipeline, suggested-loop and binding identities consistently;
+- apply shared result accents to evaluate, repair and task results;
+- dim runner/model/effort/session metadata;
+- dim `(none)` placeholders;
+- render missing inputs as warnings;
+- dim zero unclassified counts and warn on non-zero counts;
+- add one blank line between binding blocks, with no leading or trailing blank
+  block for a single binding.
+
+Do not remove or abbreviate any currently displayed information as part of the
+styling change.
+
+### A3. Apply semantics to interactive menus
+
+Update `formatMenuChoice` and related menu presentation in
+`src/interactive.ts`:
+
+- unavailable choices remain present and include
+  `(unavailable: <reason>)`;
+- unavailable choices are visually subdued without obscuring the reason;
+- `(recommended)` uses the shared recommendation accent;
+- enabled choices remain at normal intensity;
+- colour must not change choice values, disabled state, default selection, or
+  navigation behavior.
+
+If Inquirer's own styling conflicts with pre-styled choice names, resolve the
+conflict through the narrowest supported choice presentation seam. Do not fork
+or replace Inquirer for this plan.
+
+#### A3a. Typed availability category (Major 1)
+
+The current choice model cannot deterministically distinguish an ordinary
+unavailable choice (dim) from a missing-input blocker (yellow): `TopMenuAction`,
+`LoopSubmenuItem`, and `TaskMenuItem` in `src/stage-menu.ts` expose only a prose
+`disabledReason`, and `formatMenuChoice` (`src/interactive.ts:7`) is generic over
+`{ label; disabledReason?; recommended? }`. Inferring the category from reason
+text (e.g. `Missing project input...`) would make presentation depend on
+diagnostic wording and breaks the typed-semantic intent.
+
+Add a typed presentation/availability field and propagate it end to end:
+
+- add `availability: 'available' | 'unavailable' | 'missing-inputs'` to
+  `TopMenuAction`, `LoopSubmenuItem`, and `TaskMenuItem` in `src/stage-menu.ts`;
+- set it in `buildTopLevelMenu`, `buildLoopSubmenu`, and `buildTaskMenu`:
+  `missing-inputs` when the binding's `missingInputs`/`loopMissingInputs` is
+  non-empty (today's `Missing project input...` builders), `unavailable` for
+  every other disabled reason (e.g. `no loops configured`, `no in-progress
+  loop`, provider-capability reasons), and `available` otherwise;
+- give the effort and session-strategy choices built in `promptRunners`
+  (`src/interactive.ts:288–325`) the same explicit category —
+  `unavailable` for `${agent} does not support effort` /
+  `does not support session resumption`, never `missing-inputs`;
+- consume the field in `formatMenuChoice`: a `missing-inputs` choice is
+  yellow/warning (prominent), an `unavailable` choice is dim, an `available`
+  choice is normal intensity. `value`, `disabled`, default selection, and
+  navigation behavior must be unchanged.
+
+`disabledReason` text is retained verbatim for the operator and must survive
+ANSI stripping; only the *category* that selects the accent is typed.
+
+### A4. Reconcile the live status panel
+
+Update `src/status-panel.ts` to consume the shared semantic mappings while
+preserving its current layout, stage-driven border behavior, timeline data and
+live refresh behavior.
+
+- role, kind, running, done, failed and interrupted states must use the shared
+  vocabulary;
+- the **inline** result colouring in `renderTimelineSection`
+  (`src/status-panel.ts:119–127`, which hand-maps accepted/completed→bold green,
+  retry→bold red, blocked→bold yellow, falsy→empty) must be replaced by the shared,
+  exhaustive `resultAccent` so every result state is decided in one place;
+- border colour and active-row meaning must remain consistent;
+- no panel fields may be removed;
+- do not introduce a new TUI library or change the alternate-screen behavior in
+  this plan.
+
+### A5. Reconcile plain mode
+
+Update `src/plain-render.ts`, `src/plain-event-renderer.ts`, and any narrow
+shared event-formatting call sites. `src/plain-event-renderer.ts` is currently
+colourless by design — it imports no chalk and emits colourless lines. A5
+**introduces** conditional colouring there (gated on colour support, with the
+non-TTY zero-ANSI test below as the guard). `src/plain-render.ts` already applies
+accents and must be reconciled to the shared vocabulary.
+
+Plain mode means line-oriented, durable terminal output; it does **not** mean
+colourless output. Apply shared semantic accents when the output supports
+colour, while preserving:
+
+- one event per emitted line/milestone;
+- existing text and event ordering;
+- readable redirected/log-file output with no required ANSI interpretation;
+- errors, warnings, lifecycle events and results as explicit text;
+- existing logging and error-handling behavior.
+
+Do not colour raw agent payloads or arbitrary model text. Colour only
+orc-smash-owned prefixes, labels and semantic tokens.
+
+**Surface distinction (per the inventory).** The live `--plain` dispatch is
+`createPlainCliOutput.emit` → `renderRunEvent` → `EventWriter.write`
+(`src/plain-event-renderer.ts`); `createPlainCliOutput.renderPanel` is a no-op.
+`renderPlainPanel` (`src/plain-render.ts`) is an auxiliary utility renderer with
+no `src/` callers; reconcile it to the shared vocabulary and keep it
+colour-off-safe, but do not treat it as the live plain path.
+
+**Style after layout (Minor 1).** `wrapField` (`src/plain-render.ts:18–38`) and
+the timeline wrapping in `renderPlainPanel` compute visible width with string
+`.length` and slice against `resolveTerminalWidth()`. Applying ANSI styling
+*before* those length checks corrupts wrapping and column math. Apply accents
+*after* layout, or route every visible-width calculation through an ANSI-aware
+visible-width helper. The implementation must add a `COLUMNS=40`,
+`chalk.level = 1` case proving the stripped lines retain the intended wrapping
+and text.
+
+### A6. Detailed status styling
+
+Apply the same restrained semantics to `renderDetailedSnapshot`:
+
+- section titles and configured identities may be emphasized;
+- success, retry, blocked, stale, missing-input and unclassified states use the
+  shared mappings;
+- long supporting paths and fingerprints may be dimmed;
+- content and ordering remain legible without ANSI colour.
+
+### A7. Reconcile direct presentation writes (cli-output and interactive)
+
+The interactive panel path (`createPanelCliOutput`, `src/cli-output.ts`) and the
+interactive detail/prompt writes (`src/interactive.ts`) currently apply Chalk or
+`console.*` directly, outside any shared vocabulary (see the inventory). Route
+them through `src/terminal-accent.ts`:
+
+- `note`, `warn`, `error`, `stepStarted` spinner text, `stepSucceeded`,
+  `stepFailed`, and the `finalSummary` success/failure/event-log/snapshot lines
+  use the shared result/warning/identity accents;
+- the task-detail block (`interactive.ts:87–95`) and the `promptRunners`
+  summary/detail lines (`interactive.ts:199`, `:204`) use shared identity and
+  supporting accents for owned labels and metadata;
+- style only orc-smash-owned prefixes/labels/tokens; never style raw agent
+  payloads, model text, or operator-entered values;
+- preserve spinner lifecycle, alternate-screen enter/exit, pending-failure
+  buffering, Harness Event Log ordering, and all `value`/`disabled`/default
+  behavior unchanged.
+
+The newly coloured `createPanelCliOutput` writers are covered by the
+`NO_COLOR=1` and piped-subprocess zero-ANSI tests in the Verification strategy.
+
+---
+
+## Workstream B: Manifest-derived prompt contracts
+
+### B1. Add prompt-contract data to the snapshot view model
+
+Extend `ProjectSnapshotView` with display-ready contract data for every loop and
+task binding. The view builder may use the loaded manifest and existing input
+label/resolution rules; renderers must receive already-normalized data.
+
+Use purposeful view types equivalent to:
+
+```ts
+interface BindingInputAvailability {
+  target: 'available' | 'missing';
+  files: Record<string, 'available' | 'missing'>;
+}
+
+interface PromptInputContractView {
+  label: string;
+  source: string;
+  resolutionKind: 'target' | 'runtime' | 'configured-file';
+  configuredKey?: string;
+  configuredValue?: string;
+  status: 'available' | 'missing' | 'runtime-resolved';
+  note?: string;
+}
+
+interface PromptStepContractView {
+  phase: 'evaluate' | 'repair' | 'task';
+  roleId: string;
+  rolePath: string;
   skillId: string;
-  version: number;
-  sessionMode: 'fresh' | 'resumed';
-  sessionId: string | null;
-  freshReason?: 'policy' | 'no-compatible-session' | 'provider-unsupported';
-  newSessionPending: boolean;
+  skillPath: string;
+  inputs: PromptInputContractView[];
+  outputPattern: string;
+  outputContract: string;
+  decision?: {
+    heading: string;
+    accepted: string;
+    retry: string;
+  };
+  validator?: string;
+}
+
+interface BindingPromptContractView {
+  bindingId: string;
+  bindingKind: 'loop' | 'task';
+  targetPath: string;
+  targetKind: 'file' | 'worktree';
+  composition: 'Role content -> Skill content -> ordered Inputs';
+  steps: PromptStepContractView[];
 }
 ```
 
-Build `activeInvocation` from the already-resolved `continuity` value.
-`resolveContinuity` is called per step at `binding-engine.ts:196` and its result
-is threaded into `executeLoopStep` at `binding-engine.ts:232`, so
-`executeLoopStep` already has the continuity decision in scope when it builds
-the panel context. `status-panel.ts` renders the "Run configuration" rows from
-`resolvedRunners` and the "Active invocation" line from `activeInvocation`.
+These are design-level shapes, not a requirement to use these exact names.
+Avoid duplicating manifest parsing or the behavioral rules in
+`prompt-composer.ts`. If a shared pure resolver is needed for input labels or
+configured file mappings, extract the narrow domain rule and use it from both
+the prompt path and snapshot-view path.
 
-`freshReason` is a display fact derived where continuity is resolved, never
-inferred from a missing session ID inside `status-panel.ts`. Today
-`resolveContinuity` (`src/loops/binding-engine.ts:751-798`) returns only
-`{ mode: 'fresh' | 'resumed'; sessionId?: string }` and discards which branch
-chose `fresh`. **Extend that return type** to carry `freshReason` alongside
-`mode`/`sessionId`, classified at each existing `return { mode: 'fresh' }` site
-with no change to the mode-selection logic:
+`roleId` and `rolePath` for each step are derived from the manifest as
+`manifest.skills[step.skill].role` → `manifest.roles[role]`. The contract view
+never invents a role independent of the manifest; `roleForKind`
+(`src/state.ts:9–13`) is a fallback for synthesized/interrupted steps only and
+must not be used for prompt-contract display.
 
-- `sessionStrategy === 'fresh-per-invocation'` (`:760`) → `'policy'`;
-- no chain-scoped matching predecessor, or predecessor has no usable session id
-  (`:780`, `:783`) → `'no-compatible-session'`;
-- predecessor session exists but agent/model/effort differ (`:784-788`) →
-  `'no-compatible-session'`;
-- adapter lookup throws (`:792-793`) or the provider cannot resume sessions
-  (`:795-797`) → `'provider-unsupported'`.
+Build prompt-contract views through a pure, independently-invocable helper (e.g.
+`buildBindingPromptContracts(manifest, snapshot)`) so the scoped no-read test in
+B5d can stub `readFileSync`/`composePrompt` around just that helper rather than
+around the full `buildProjectSnapshotView` (which performs the pre-existing
+fingerprint read).
 
-Thread the resulting `freshReason` (with `mode`/`sessionId`) through
-`continuity` into the `activeInvocation` field so the renderer only displays it.
+#### B1a. Manifest completeness: no hidden file dependencies (Major 2)
 
-The live view must not invoke `resolveRunner`, inspect provider history, or
-calculate continuity. Those decisions remain owned by the binding engine; the
-renderer only displays the selected policy and resolved invocation facts. These
-are display contracts, not new persisted state. This work threads
-already-resolved runner and continuity facts; it does not re-resolve runners,
-change continuity selection, or wait until completion to decide whether an
-existing session will be resumed.
+Today `V1ManifestSchema` permits a `files:` key that is never referenced by any
+entry in `inputs` (`FilesSchema`/`FileMapValueSchema` at `src/manifest.ts:56–57`;
+the binding schemas reference `files:` at `:88–108`; `validateInputSource` at
+`:314–327` only checks the converse). Yet every configured file is consumed at execution:
+`buildInputFingerprint` digests `binding.files` wholesale
+(`src/loops/binding-engine.ts:535`, `captureFileDigests` at `:545`),
+`scanGlobalSnapshot` checks each file's existence (`src/artifact-index.ts:147,
+151, 157, 161`), and `bindingMissingInputs` (`src/commands/smash.ts:133`) blocks
+on it. A hidden mapping can therefore block a run without appearing in the
+displayed prompt contract.
 
-### Output lifecycle
+**Contract decision:** make `V1ManifestSchema` **reject unreferenced `files:`
+keys**. In `validateFilesMap` (or a sibling refinement) add an issue for any
+`files:` key that is not the `source` of at least one declared `inputs` entry on
+the same binding. This makes the displayed prompt contract the complete,
+faithful set of inputs the run consumes, for *any* generic v1 manifest. The
+repository's own `config/orc-smash.yaml` already references every `files:` key
+(`planPath` is an input source on `review` and `implement`), so this is
+non-breaking for the packaged manifest; it is a documented compatibility
+decision that a previously-silent misconfiguration now fails loudly at load
+time rather than silently blocking a run.
 
-Give `CliOutput` one explicit static-output operation (recommended name:
-`writeStatic(text: string): void`) that writes persistent normal-screen content.
-Do not overload `renderPanel`, emit fabricated lifecycle events for display
-text, or make callers write escape sequences directly.
+Do **not** adopt the alternative of merely rendering hidden files in the view:
+that leaves a confusing class of inputs that affect execution and fingerprinting
+but are not operator-declared. Rejecting them is the source-of-truth fix.
 
-- Panel output (`createPanelCliOutput`) writes static text to the normal screen:
-  `writeStatic` ensures no alternate screen is active (leaving it if one is),
-  then writes once. Today a piped `orc status` goes through
-  `createPanelCliOutput.renderPanel` → `panelDraw` (`src/cli-output.ts:90-93`),
-  which emits `\x1b[?1049h` + `\x1b[H\x1b[2J` plus a boxen-wrapped panel; the
-  current defect is therefore alt-screen escape corruption of programmatic
-  output, not silence.
-- Plain output (`createPlainCliOutput`) writes the same static text without any
-  screen-control sequences. **`writeStatic` on the plain path is new behavior**:
-  today plain mode's `renderPanel` is a no-op (`src/cli-output.ts:284-286`) and
-  the plain path has no static-output operation at all.
-- The new static-output operation must be implemented on *both*
-  `createPanelCliOutput` and `createPlainCliOutput` so the two output kinds stay
-  consistent. `orc status` always uses `createPanelCliOutput` (the status command
-  has no `--plain` flag; `--plain` belongs only to the smash command at
-  `src/cli.ts:52,58`), so `orc status` exercises the panel `writeStatic` path.
-  The plain `writeStatic` is exercised by smash `--plain`, not by `orc status`.
-- `attachLiveRegion`/`detachLiveRegion` continue to own alternate-screen live
-  execution.
-- Static rendering is not recorded as a fabricated lifecycle event. Canonical
-  typed events and debug logging remain unchanged.
+#### B1b. Manifest declaration order (Major 3)
 
-Terminal ownership rules:
+The plan must render bindings in manifest declaration order for *any* valid v1
+ID. `SAFE_ID_REGEX` (`src/manifest.ts:137`) permits integer-like IDs such as
+`"10"` and `"2"`, and JavaScript enumerates integer-like string keys in numeric
+order, not insertion order. `buildProjectSnapshotView` currently iterates
+`Object.entries(manifest.loops)` (`src/project-snapshot-view.ts:140`) and
+`Object.entries(manifest.tasks)` (`:164`), so a manifest declaring loop `10`
+then loop `2` would render `2` before `10`. `YAML.parse` returns a plain object,
+so declaration order is already lost before the schema sees it.
 
-- `attachLiveRegion` is the only operation allowed to enter/start refreshing
-  the alternate screen.
-- `detachLiveRegion` stops refresh activity; finalization restores the normal
-  screen exactly once even after errors or interruption.
-- `writeStatic` first ensures no live region/alternate screen is active, then
-  writes once to the normal screen; it never starts an interval.
-- `Display pipeline and project state` calls `writeStatic`, waits for one
-  acknowledgement prompt, and returns via an explicit navigation result rather
-  than the missing-input retry path.
-- standalone `orc status` calls `writeStatic` once and exits without any prompt.
-- do not add a new `status --plain` flag as part of this plan; both output
-  implementations support `writeStatic` so programmatic/plain callers remain
-  consistent, while the public status command retains its current CLI surface.
+**Contract decision:** capture declaration order from the YAML mapping *before*
+it becomes a plain object, and have the view consume that representation rather
+than `Object.entries`.
 
-Avoid a generic `helpers.ts` or `common.ts`. Keep view construction, text
-rendering, menu construction, and terminal lifecycle as distinct
-responsibilities.
+- In `loadManifest` (`src/manifest.ts:362`), parse with `YAML.parseDocument`
+  and record the key order of `loops`, `tasks`, and `pipelines` from the
+  document mapping's `items`. Expose that order as a narrowly named
+  `ManifestDeclarationOrder` type in `src/manifest.ts`, returned from
+  `loadManifest` alongside `V1Manifest`.
+- In `loadConfig` (`src/config.ts:178–183`), carry
+  `ManifestDeclarationOrder` through `Config` as a precisely named
+  `manifestDeclarationOrder` field (`Config.manifestDeclarationOrder`),
+  added to the `loadConfig` return value alongside the existing `manifest`
+  field.
+- `buildProjectSnapshotView` (`src/project-snapshot-view.ts`) consumes
+  `config.manifestDeclarationOrder` to iterate bindings in captured order
+  (loops first, then tasks, each in declaration order) instead of
+  `Object.entries`.
+- The ordered representation is the single source consumed by both the view
+  builder and the `Prompt Contracts` renderer.
 
-### Menu presentation
+Rejecting integer-like IDs is explicitly **not** chosen: it would shrink the
+generic v1 contract and is unnecessary once declaration order is captured.
 
-Keep semantic menu items (`label`, `disabledReason`, `recommended`) separate
-from their Inquirer representation. One presentation function maps the semantic
-item to a choice with the standardized visible label and boolean disabled flag.
-Use it across all applicable prompts.
+### B2. Input presentation rules
 
-The shared formatter applies to every menu, but the `(recommended)` suffix is
-emitted only for items that carry a `recommended: true` flag. That flag exists
-today only on `LoopSubmenuItem` (`src/stage-menu.ts:27`); `TopMenuAction`
-(`stage-menu.ts:16-21`) does **not** carry `recommended`, so no top-level choice
-is ever marked recommended — the top-level loop suggestion is conveyed by the
-startup snapshot header, not a menu suffix. Do **not** add `recommended` to
-`TopMenuAction` in this plan. The recommended+disabled exclusion is therefore
-asserted only where `recommended` exists (the loop submenu); it holds trivially
-at the top level because no top-level item is ever recommended.
+For every declared input, show:
 
-Add task-specific semantic menu/detail types rather than overloading loop menu
-types.
+- the final display label (`input.label` or the canonical default label);
+- its manifest source;
+- the resolution kind (`target`, `runtime`, or `configured-file`);
+- for `configured-file`: the file-map key and its resolved path;
+- whether it is currently available, missing, or resolved only when execution
+  begins.
 
-Model interactive navigation as navigation, not setup failure. `Back`, status
-acknowledgement, cancelled candidate selection, and returning from task detail
-must remain inside the menu state machine and must not increment the outer setup
-retry counter. Only a genuine preflight retry may reach that counter.
+Examples:
 
-## Expected Files
+```text
+Target document <- target                          [file: docs/dev/plan.md]
+Version         <- version                         [resolved at execution]
+Prior artifact  <- priorArtifact                   [resolved from chain state]
+Output path     <- outputPath                       [pattern + selected provider]
+planPath        <- planPath                        [file: docs/dev/plan.md]
+missingFile     <- missingFile                     [file: not/found.txt; missing]
+```
 
-The implementer should confirm exact names during implementation, but the
-expected scope is:
+The bracket annotation carries resolution kind and `{key}: {value}` pairs.
+Renderers build the annotation from typed fields — they never infer kind from
+the `source` string.
 
-- `src/state.ts` — add `unclassifiedReason?: string` to the `Step` interface;
-- `src/artifact-index.ts` — capture `unclassifiedReason` at every code path
-  that sets `unclassified = true` (see "Surface classification reasons at the
-  source" above), and correct the pipeline-start root check so valid descendants
-  with immediate parents survive rescanning;
-- `src/project-snapshot-view.ts` — global display-model construction; reads
-  `Step.unclassifiedReason`;
-- `src/project-snapshot-renderer.ts` — compact/detailed persistent rendering;
-- `src/stage-menu.ts` — stable top-level actions and task-menu/detail models;
-- `src/interactive.ts` — task chooser, task confirmation, status acknowledgement,
-  and common disabled-choice presentation;
-- `src/commands/smash.ts` — scan/render at entry, navigate task submenu, refresh
-  after runs, and display detailed static status;
-- `src/commands/status.ts` — replace the `buildPanelContext(...) +
-  output.renderPanel(panelCtx)` pair (`status.ts:125-138`) with view-model
-  construction + `output.writeStatic(text)`, building and printing the shared
-  detailed static view;
-- `src/loops/binding-engine.ts`, `src/loops/execution.ts` — thread the immutable
-  `runners` map (resolved once at `binding-engine.ts:145`) into `executeLoopStep`
-  and populate `PanelContext.resolvedRunners` from it in the `buildPanelContext`
-  call (`execution.ts:153-167`) instead of `[]`; build the separate
-  `activeInvocation` field from the already-resolved `continuity`
-  (`binding-engine.ts:196`, threaded at `:232`); extend `resolveContinuity`
-  (`binding-engine.ts:751-798`) to return `freshReason` — all without changing
-  runner resolution or continuity-selection semantics;
-- `src/status.ts`, `src/status-panel.ts`, `src/plain-render.ts` — extend
-  `ResolvedRunnerDisplay` (`status.ts:59-65`) with `role`/`phase`/`effort`/
-  `sessionStrategy`, add the `activeInvocation?: ActiveInvocationDisplay` field
-  to `PanelContext`, and render the existing `resolvedRunners` loop
-  (`status-panel.ts:33-40`) as the "Run configuration" section plus the
-  "Active invocation" line (do not add a parallel runner field);
-- `src/cli-output.ts` — explicit normal-screen static-output lifecycle on both
-  `createPanelCliOutput` and `createPlainCliOutput`;
-- `src/cli.ts` — only if status output construction needs wiring changes;
-- `tests/helpers/mock-output.ts` — add a `writeStatic` capture (recording the
-  last static text) plus a base `writeStatic: () => {}` stub, so the
-  `tests/status-action.test.ts` migration can assert against rendered static
-  text;
-- focused unit and command-level interaction tests, including the full rewrite
-  of `tests/status-action.test.ts` onto the `writeStatic`-capture harness (see
-  "Migration of existing status assertions");
-- `README.md` and `docs/architecture/overview.md` — document the corrected
-  menus, snapshot, status behavior, and alternate-screen boundary.
+The display must preserve manifest input order because that is the order used
+by `composePrompt`.
 
-Do not modify the manifest schema merely to support display. All required task,
-skill, role, target, output, and runner information already exists in `Config`.
+Every input carries typed fields that the renderer uses to build the bracket
+annotation deterministically. The annotation is assembled from `resolutionKind`,
+`configuredValue`, `status`, and `note` — it is never inferred from the `source`
+string alone.
 
-## Implementation Review Checkpoints
+| Source | Status | Bracket annotation (built from fields) |
+|---|---|---|
+| `target` (file-kind, exists) | `available` | `[file: <path>]` |
+| `target` (file-kind, absent) | `missing` | `[missing target]` |
+| `target` (worktree-kind) | `available` | `[worktree: .]` |
+| `version` | `runtime-resolved` | `[resolved at execution]` |
+| `priorArtifact` | `runtime-resolved` | `[resolved from chain state]` |
+| `outputPath` | `runtime-resolved` | `[pattern + selected provider]` |
+| `files.<key>` (exists) | `available` | `[file: <path>]` |
+| `files.<key>` (missing) | `missing` | `[file: <path>; missing]` |
 
-The implementation agent should present the change in the same six slices (or
-commits) where practical. The reviewer should reject the implementation if any
-checkpoint fails:
+Input availability must be computed once during `scanGlobalSnapshot` and carried
+as structured data in a dedicated domain shape (e.g. `BindingInputAvailability`,
+defined in B1). The scan performs each existence check once, then derives the
+existing operator-facing `missingInputs` messages from that structured result
+(preserving current behavior). `buildProjectSnapshotView` consumes the
+structured snapshot data directly. Renderers must perform no filesystem access
+and must not parse diagnostic strings. If a small pure module is extracted, it
+must own the stable responsibility of binding-input availability — invoked by
+the scan once per snapshot, not by individual callers.
 
-1. **Characterization first:** the real failure shape is captured before the
-   scanner fix; fixtures use valid computed identities rather than hand-waved
-   placeholder digests.
-2. **Scanner containment:** the diff in classification logic is localized and
-   negative validation remains exercised; no artifact is rewritten.
-3. **One-scan snapshot:** one command/menu refresh performs one global scan;
-   pure derivations consume that snapshot.
-4. **Terminal containment:** no static path enters the alternate screen and no
-   live path loses cleanup/restoration.
-5. **Navigation containment:** menu Back/cancel/display paths do not reach
-   ownership admission, provider spawn, or the setup retry budget.
-6. **Display-only runner data:** selected runner and active continuity records
-   flow from the engine to the panel; UI modules contain no runner/session
-   decision logic.
-7. **Headless compatibility:** explicit `--loop`, `--task`, and `--pipeline`
-   runs do not see startup menus, task-detail confirmation, or acknowledgement
-   prompts.
-8. **No framework expansion:** no React, Ink, OpenTUI, Blessed, or other TUI
-   dependency is introduced.
+Do not read and print the contents of target, role, skill or prior-artifact
+files. The renderers are filesystem-free and `prompt-composer.ts`-free; the
+builder's only filesystem read is the pre-existing target-fingerprint computation
+(see B5d). The new prompt-contract additions introduce no further content reads
+and never call `prompt-composer.ts`. See the purity and redaction contract in B5d
+and its sentinel/scoped no-read tests.
 
-When reporting completion, the implementation artifact must identify which
-tests prove each checkpoint and explicitly list any production file changed
-outside the Expected Files section. An unexplained change outside that boundary
-requires review before acceptance.
+### B3. Output and decision presentation rules
 
-## Verification
+For each step show:
 
-### View-model and renderer tests
+- configured output pattern exactly as declared;
+- output contract;
+- decision heading plus accepted/retry tokens when configured;
+- validator when configured;
+- an explicit marker when the provider-dependent final path is not resolved.
 
-- Empty history shows every configured binding with `none`, not a fabricated
-  completion.
-- Latest valid evaluate/repair/task artifacts show path, normalized result,
-  provider, exact model, effort/default, and session facts.
-- Matching unclassified artifacts are counted per binding in compact mode and
-  listed with their path and `unclassifiedReason` in detailed mode. The test
-  must assert that the reason distinguishes the actual failure cause (identity
-  field mismatch vs. pattern mismatch vs. lineage invalid vs. contract failure);
-  a generic/fabricated reason must not pass.
-- A regression assertion verifies that adding `unclassifiedReason` does not
-  change classification outside the separately specified pipeline-start
-  descendant correction.
-- Direct scan-level fixtures cover every `unclassifiedReason` capture path:
-  missing/malformed identity, contract failure, identity verification exception,
-  structural lineage failure, and chain-order failure. Each asserts the
-  cause-specific reason rather than a generic fallback.
-- Artifact-writing tests assert that `unclassifiedReason` never appears in
-  durable front matter.
-- Missing inputs appear only on the affected binding.
-- Eligible and stale suggestions reuse existing candidate evidence and render
-  distinct availability/reasons.
-- Suggested-loop text includes a composed reason (derived from
-  the one passed snapshot via `recoverInProgressRun`, interrupted marker, loop
-  mtime ordering, and the manifest's first configured loop), never claims
-  automatic execution, and performs no additional project scan.
-- Compact and detailed output are stable without color.
+Do not substitute a guessed provider into `{provider}` before runner selection.
 
-### Menu tests
+### B4. Render contracts in detailed project state
 
-- The top-level menu contains exactly one `Execute one-off task` action whether
-  zero, one, or many tasks are configured.
-- With no tasks, that action remains visible and displays
-  `(unavailable: no tasks configured in manifest)`.
-- The task chooser lists configured tasks, not unbound skills.
-- Task details resolve role and skill paths against `manifestRoot`, while target
-  and output paths remain project-root based.
-- A missing-input task remains visible and cannot be selected for execution.
-- Task `Back` navigation does not consume the setup retry budget and never
-  admits ownership or spawns a provider.
-- Every disabled top-level, loop, task, pipeline, suggestion, effort, and session
-  choice uses the explicit standardized label and boolean disabled state.
-- Recommended and unavailable cannot appear on the same choice.
+Add a `Prompt Contracts` section to `renderDetailedSnapshot`. It must appear in
+both:
 
-### Static-output and command tests
+- interactive **Display pipeline and project state**; and
+- `orc status --project <path>`.
 
-- Interactive startup prints the compact snapshot before the first prompt.
-- `Display pipeline and project state` prints detailed state on the normal
-  screen, waits for acknowledgement, and then returns to the main menu.
-- Re-entering the menu does not erase the detailed view from captured output.
-- `orc status` writes no alternate-screen enter/exit or cursor-clear sequences,
-  prints once, and exits without prompting.
-- Live execution still enters the alternate screen only through the live-region
-  lifecycle and restores the main screen on success, failure, interruption, and
-  thrown errors.
-- **Plain-path static output** (new behavior): a direct
-  `createPlainCliOutput.writeStatic(text)` unit test in
-  `tests/cli-output.test.ts` asserts the written text is non-empty and contains
-  no `\x1b[?1049h`, `\x1b[?1049l`, or `\x1b[H\x1b[2J` sequences. This exercises
-  the plain `writeStatic` introduced for smash `--plain`; `orc status` always
-  uses the panel output and is covered by the no-ANSI assertion above, so do not
-  label this test "plain orc status" (that CLI mode does not exist).
-- Plain mode remains append-only and receives static snapshot/status text
-  without screen-control sequences.
-- Interaction tests exercise actual prompt choice objects and captured terminal
-  output, rather than only testing semantic menu arrays.
-- Explicit `--loop`, `--task`, and `--pipeline` command tests assert that no
-  interactive top-level/task/status acknowledgement prompt is called.
-- Existing typed-event sequences for a successful loop, provider failure,
-  timeout, interruption, and ownership loss remain identical except for static
-  display calls, which are not events.
+Place it after `Configured Pipelines` and before historical artifact details so
+the view reads in this order:
 
-### Live runner and continuity display tests
+1. project and suggestion summary;
+2. configured pipeline structure;
+3. configured execution/prompt contracts;
+4. observed binding/artifact state;
+5. unclassified artifacts and pipeline candidates.
 
-- Before the first provider call, the live panel lists every selected skill with
-  role, provider, exact model, effort/default, and session policy.
-- The "Run configuration" rows are carried by the existing
-  `PanelContext.resolvedRunners` field (the extended `ResolvedRunnerDisplay`),
-  populated from the already-resolved `runners` map in `executeLoopStep` — not a
-  parallel `selectedRunners` field. Assert `resolvedRunners` is non-empty during
-  a live multi-skill (evaluate + repair) run.
-- While evaluate runs, the repair selection remains visible, and vice versa.
-- A resumable matching predecessor renders `resumed` and its prior session ID
-  before spawn completes; a new invocation renders `fresh` plus the applicable
-  `freshReason` (sourced from the extended `resolveContinuity` return value,
-  never inferred inside the renderer) and `new session ID: pending` where
-  appropriate.
-- After completion, the timeline records the provider-reported session ID or
-  `none` without changing the selected policy row.
-- The display path receives continuity already resolved by the binding engine;
-  tests prove the renderer does not call runner or continuity resolution.
+**Binding ordering rule:** The `Prompt Contracts` section iterates
+`view.bindings` in manifest declaration order (loops first, then tasks, each in
+the order declared in the manifest). This order is produced by
+`buildProjectSnapshotView` from the **captured declaration-order representation**
+of B1b — *not* from `Object.entries` (which would mis-order integer-like IDs
+such as `"10"` before `"2"`; the previous `Object.entries` at
+`src/project-snapshot-view.ts:140` and `:164` is replaced). It is guarded by the
+"Multiple pipelines and bindings preserve manifest order" snapshot contract
+test and the `10`-then-`2` ordering test below.
 
-### Pipeline-start rescan regression
+### Required operator-facing example
 
-- Build a real three-artifact pipeline-start chain: evaluate v1 `REJECTED`,
-  repair v1 `COMPLETED`, evaluate v2 `APPROVED`.
-- Persist and rescan it through `scanGlobalSnapshot`; all three artifacts remain
-  classified and retain provider, exact model, duration, decision/outcome,
-  session strategy, session ID, chain/run/stage identity, and immediate parent.
-- Status resolves the final state as accepted, not
-  `latest evaluation is unparseable`, and the completed stage is eligible under
-  the existing pipeline rules.
-- Negative fixtures remain rejected: non-first-stage forged pipeline starts,
-  roots with non-null parents, descendants with missing/wrong-chain parents,
-  stale fingerprints, foreign runs, and wrong-stage bindings.
+With the repository's current manifest, the rendered information must be
+structurally equivalent to the following. Exact alignment and ANSI styling may
+vary, but no listed field may be omitted. Bindings appear in manifest
+declaration order: loops (`plan`, `review`) then tasks (`implement`).
 
-### Migration of existing status assertions
+```text
+Prompt Contracts:
 
-This plan retires the **entire** `renderPanel`-capture harness in
-`tests/status-action.test.ts`, not just the pipeline-suggestion lines. All eight
-tests in that file capture state through a single `renderPanel` override
-(`tests/status-action.test.ts:16-18`, where the module-level `panel` variable is
-assigned only inside `renderPanel`) and assert on `panel.loopName`,
-`panel.readOnly`, `panel.timeline`, and `panel.nextStepMessage`. Under this plan
-`statusAction` stops building a `PanelContext` and stops calling
-`output.renderPanel`; it builds the new view model and calls
-`output.writeStatic(text)` instead (the `buildPanelContext(...) +
-output.renderPanel(panelCtx)` pair at `src/commands/status.ts:125-138` is
-replaced by view-model construction + `output.writeStatic`). The shared mock
-`tests/helpers/mock-output.ts` has **no `writeStatic` capture** today
-(`mock-output.ts:16` stubs only `renderPanel: () => {}`), so without the changes
-below `panel` stays `null` and every one of the eight tests fails — not only the
-two the migration used to name.
+  [loop] plan
+    Target: docs/dev/plan.md [file]
+    Prompt recipe:  Role content -> Skill content -> ordered Inputs
+    Result contract: Pattern -> contract -> decision/validator
 
-The implementer must:
+    Evaluate:
+      Role:   auditor -> roles/auditor.md
+      Skill:  plan-audit -> skills/21-simple-plans-audit/SKILL.md
+      Inputs:
+        Target document <- target              [file: docs/dev/plan.md]
+        Version         <- version             [resolved at execution]
+        Prior artifact  <- priorArtifact       [resolved from chain state]
+        Output path     <- outputPath           [pattern + selected provider]
+      Result contract:
+        Pattern:  docs/dev/plan-audit-v{version}-{provider}.md
+        Contract: decision-artifact
+        Decision: heading=Verdict, accepted=APPROVED, retry=REJECTED
 
-1. Add a `writeStatic` capture to `tests/helpers/mock-output.ts` that records
-   the last static text written (mirroring the existing `renderPanel` override
-   pattern at `mock-output.ts:16`), and add a base `writeStatic: () => {}` stub
-   so non-status tests keep typechecking.
-2. Rewrite **all eight** tests to assert against the rendered static text (or
-   against the new `ProjectSnapshotView` model directly), preserving exactly
-   this coverage:
-   - fresh next-step text (`plan-audit`, `version 1`, read-only);
-   - retry as repair then the next evaluation (`plan-follow-up`, `version 2`);
-   - accepted evaluation as completed;
-   - `--all` task visibility (the `implement` binding appears);
-   - interrupted-marker text and the interrupted timeline step;
-   - eligible pipeline-suggestion evidence (stage, run id, predecessor,
-     completion artifact, artifact identity, decision/outcome, fingerprint
-     validity);
-   - stale pipeline-suggestion drift (recorded vs current fingerprint);
-   - concurrently eligible runs in stable order.
-3. Replace the `buildPanelContext(...) + output.renderPanel(panelCtx)` pair in
-   `src/commands/status.ts` (`:125-138`) with view-model construction +
-   `output.writeStatic(text)`.
+    Repair:
+      Role:   planner -> roles/planner.md
+      Skill:  plan-follow-up -> skills/22-simple-plans-follow-up/SKILL.md
+      Inputs:
+        Target document <- target              [file: docs/dev/plan.md]
+        Version         <- version             [resolved at execution]
+        Prior artifact  <- priorArtifact       [resolved from chain state]
+        Output path     <- outputPath           [pattern + selected provider]
+      Result contract:
+        Pattern:  docs/dev/plan-followup-v{version}-{provider}.md
+        Contract: completion-artifact
 
-Name `tests/helpers/mock-output.ts` and `src/commands/status.ts` in Expected
-Files for this work. The eligibility/stale-drift/stable-ordering coverage is
-**migrated, not silently dropped**; the migration must be called out in the
-implementation PR.
+  [loop] review
+    Target: . [worktree]
+    Prompt recipe:  Role content -> Skill content -> ordered Inputs
+    Result contract: Pattern -> contract -> decision/validator
 
-### Regression gates
+    Evaluate:
+      Role:   reviewer -> roles/reviewer.md
+      Skill:  review -> skills/40-simple-review/SKILL.md
+      Inputs:
+        planPath       <- planPath             [file: docs/dev/plan.md]
+        Target document <- target              [worktree: .]
+        Version        <- version              [resolved at execution]
+        Prior artifact <- priorArtifact        [resolved from chain state]
+        Output path    <- outputPath            [pattern + selected provider]
+      Result contract:
+        Pattern:  docs/dev/review-v{version}-{provider}.md
+        Contract: decision-artifact
+        Decision: heading=Verdict, accepted=APPROVED, retry=REJECTED
+
+    Repair:
+      Role:   implementer -> roles/implementer.md
+      Skill:  review-follow-up -> skills/42-simple-review-follow-up/SKILL.md
+      Inputs: same ordered binding inputs shown explicitly
+      Result contract:
+        Pattern:  docs/dev/review-followup-v{version}-{provider}.md
+        Contract: completion-artifact
+
+  [task] implement
+    Target: . [worktree]
+    Prompt recipe:  Role content -> Skill content -> ordered Inputs
+    Result contract: Pattern -> contract -> validator
+
+    Task:
+      Role:   implementer -> roles/implementer.md
+      Skill:  30-simple-implement -> skills/30-simple-implement/SKILL.md
+      Inputs:
+        planPath       <- planPath             [file: docs/dev/plan.md]
+        Version        <- version              [resolved at execution]
+        Prior artifact <- priorArtifact        [resolved from chain state]
+        Output path    <- outputPath            [pattern + selected provider]
+      Result contract:
+        Pattern:   docs/dev/impl-v{version}-{provider}.md
+        Contract:  required-artifact
+        Validator: implement-ledger
+```
+
+Do not literally print `same ordered binding inputs shown explicitly`; the real
+renderer must list every input. That abbreviation exists only to keep this plan
+example readable.
+
+### B5. Keep execution and display semantics aligned
+
+The display is descriptive and read-only. It must not affect next-step
+selection, runner resolution, session continuity, artifact scanning, pipeline
+eligibility, or prompt generation.
+
+Add two independently named parity tests targeting the correct runtime
+boundaries. Implementation must not add decision, contract or validator
+parameters to `composePrompt` merely to satisfy display parity.
+
+#### B5a. Prompt-composition parity
+
+Prove that the displayed prompt recipe reports the same values that `buildPrompt`
+(`src/loops/binding-engine.ts:508`) and `composePrompt`
+(`src/prompt-composer.ts:68`) consume:
+
+- role ID and role file;
+- skill ID and skill file;
+- target declaration;
+- ordered input labels and literal manifest sources;
+- configured `files:` mappings;
+- output pattern used by `outputPath` resolution.
+
+#### B5b. Artifact-result-contract parity
+
+Prove that the displayed result contract matches the manifest/runtime values
+consumed at the artifact-result boundary after provider execution:
+
+- output contract;
+- decision heading;
+- accepted and retry tokens;
+- validator when configured.
+
+Prefer testing shared normalized data over matching two separate hand-built
+strings.
+
+#### B5c. Execution-time preflight parity (Major 2)
+
+A snapshot is necessarily stale by the time an operator starts a binding: a
+file present at scan time can disappear before execution. The displayed
+availability must therefore never authorize a run. `bindingMissingInputs`
+(`src/commands/smash.ts:133`) already reruns the existence check at execution
+time (`smash.ts:230`) and returns/retries *before* runner resolution
+(`smash.ts:280`), ownership admission, and provider spawn. This ordering is a
+required invariant, not incidental.
+
+Preserve and assert it:
+
+- `bindingMissingInputs` is invoked once, immediately before runner resolution,
+  using the same narrow availability rule as the display scan (the shared
+  existsSync-against-project-root rule), never a cached snapshot result;
+- when inputs are missing at execution, the run emits the concrete
+  `input.missing` event and the `Project inputs missing: …` error and reaches
+  **neither** runner resolution, **nor** ownership admission, **nor** provider
+  spawn;
+- add a scan-then-delete regression: build a binding whose inputs exist at
+  snapshot/scan time, render the contract as available, then remove the file
+  and invoke the run path — assert the concrete missing-input error and that no
+  `runner.resolved`, ownership, or spawn event occurs.
+
+#### B5d. Display purity and redaction (Major 4)
+
+The **renderer** (`renderDetailedSnapshot` in `src/project-snapshot-renderer.ts`,
+which today imports only the view type) is and stays filesystem-free and
+`prompt-composer.ts`-free — a partial implementation that calls `composePrompt`
+or `readFileSync` to derive display text would silently leak contents while
+passing field-presence tests.
+
+The **builder** (`buildProjectSnapshotView`, `src/project-snapshot-view.ts`)
+performs exactly one, pre-existing class of filesystem read: the
+target-fingerprint computation via `buildTargetSnapshots` (`src/next-step.ts:88`
+→ `src/target-snapshot.ts:157`) used for pipeline stale-detection. That read
+happens through `captureTargetSnapshot` which hashes target contents
+(`sha256(readFileSync(...))` at `target-snapshot.ts:35`) and never surfaces them
+in the view. This read remains unchanged and does not invalidate the purity
+boundary.
+
+The **new prompt-contract view additions** must introduce no further content
+reads and must never call `composePrompt` or read role, skill, prior-artifact, or
+target *contents* beyond the pre-existing fingerprint path. `renderDetailedSnapshot`
+and all prompt-contract view construction must stay free of filesystem calls and
+`prompt-composer.ts` calls.
+
+Assert purity directly: in `tests/project-snapshot.test.ts` and
+`tests/status-action.test.ts`, use a project-local manifest whose role, skill,
+target, and prior-artifact files each contain a distinct sentinel string; after
+the scan, assert the detailed interactive/status text contains the paths and
+declared metadata but **none** of the sentinels. Add a focused no-read assertion
+**scoped to prompt-contract view construction and rendering** (stub `readFileSync`
+and `composePrompt` around prompt-contract view construction and rendering, not
+as a blanket stub over the full `buildProjectSnapshotView` call, which internally
+reads target files for fingerprinting). A future content read in the
+prompt-contract path fails the test; the pre-existing fingerprint path is
+unaffected. Keep the sentinel-content assertion as the primary redaction guard.
+
+---
+
+## Workstream C: Canonical documentation synchronization
+
+Update canonical documentation in the same implementation change so agents and
+operators see the shipped behavior rather than stale constraints:
+
+- `README.md` — describe the shared semantic colour behavior, colour-off and
+  redirected-output guarantees, and the manifest-derived Prompt Contracts
+  section available through interactive project state and `orc status`;
+- `docs/architecture/overview.md` — document the one-way data flow from
+  manifest plus structured `GlobalSnapshot` availability into
+  `ProjectSnapshotView`, the no-filesystem/no-prompt-content rendering boundary,
+  and the separate execution-time missing-input preflight;
+- `AGENTS.md` — review the repository invariants and update them only where the
+  implementation changes a durable invariant. It must not introduce a
+  `research.md` prerequisite: the configured pipeline contains plan,
+  implementation, and review stages only.
+
+Documentation must distinguish prompt-recipe metadata from prompt or file
+contents, and must not imply that plain output is necessarily colourless.
+
+---
+
+## Verification strategy
+
+### Semantic accent tests
+
+- Force `chalk.level = 1` only inside focused tests and restore the previous
+  value in cleanup.
+- Assert representative ANSI accents for results, warnings, unavailable states,
+  roles and lifecycle states.
+- Strip ANSI codes and assert the complete meaningful text is unchanged.
+- Run a colour-disabled case and assert output remains fully understandable.
+- Test zero and non-zero unclassified counts separately.
+- Test missing inputs as a warning rather than dim supporting text.
+- Test recommended and unavailable menu choices without changing their values,
+  disabled state or default behavior.
+- **Exhaustive surface coverage:** add a test that enumerates every
+  orc-smash-owned terminal surface from the inventory independently and verifies
+  each one with real ANSI output (not just import presence) at `chalk.level = 1`,
+  then strips ANSI and asserts the complete meaningful text remains present. An
+  unconverted surface must fail CI. The enumerated surfaces are:
+  1. `renderCompactSnapshot`;
+  2. `renderDetailedSnapshot`;
+  3. live `renderStatusPanel` (including the timeline result column now driven
+     by `resultAccent`, replacing the inline logic at `status-panel.ts:119–127`);
+  4. `createPanelCliOutput` direct writers — `note`, `warn`, `error`,
+     `stepStarted`/`stepSucceeded`/`stepFailed`, and `finalSummary` (incl. the
+     Harness Event Log) via `tests/cli-output.test.ts` and
+     `tests/cli-output-live.test.ts`;
+  5. `renderRunEvent` (the live `--plain` path);
+  6. `renderPlainPanel` (auxiliary utility renderer);
+   7. `formatMenuChoice` plus the interactive direct writes (task-detail and
+     `promptRunners`) via `tests/interactive.test.ts`.
+  The enumeration is hand-maintained: when a new owned surface is added, the
+  test must be updated in lockstep. Optionally reinforce this by also asserting
+  against the dynamic set of `chalk.` call sites in `src/` so the enumeration
+  cannot silently drift.
+- **State-by-surface ANSI matrix (Major 5):** "representative" samples do not
+  prove the same-state/same-colour guarantee. Add a matrix test that, for each
+  surface above, exercises every domain state through the exhaustive accent API
+  and asserts the colour level and the stripped text:
+
+  | Domain | States | Expected accent class |
+  | --- | --- | --- |
+  | Applicable decision | `accepted`, `retry`, `unknown` | green / red / attention |
+  | Completion | `completed`, `blocked`, `valid` | green / attention / neutral |
+  | Lifecycle | `running`, `done`, `failed`, `interrupted` | attention / neutral / red / attention |
+  | Availability | `available`, `unavailable`, `missing-inputs` | normal / dim / yellow |
+  | Unclassified | count `0` vs `> 0` | dim / yellow |
+  | Stale evidence | stale vs fresh | attention / neutral |
+
+  Each applicable state must resolve to one accent in every surface that renders
+  it; a state with no mapping fails. `resultAccent` must accept `failed` and
+  `interrupted` (previously omitted).
+- **Colour-off subprocess tests (Major 5):** assert zero ANSI in real
+  non-colour environments, not only at `chalk.level = 0` in-process. Add:
+  - a `NO_COLOR=1` child process running `smash --plain` and `orc status`,
+    asserting the captured stdout contains no ANSI escape codes; and
+  - a piped (non-TTY) child process for the same commands, asserting zero ANSI.
+  Cover the newly coloured `createPanelCliOutput` writers, `renderRunEvent`, and
+  `renderPlainPanel` independently in `tests/plain-render.test.ts`,
+  `tests/cli-output.test.ts`, and `tests/e2e/plain-compiled.test.ts`. Also keep
+  the in-process `chalk.level = 0` / `isTTY === false` zero-ANSI case for unit
+  speed.
+- **Inquirer rendering fixture (Major 1 / Major 5):** a unit test of only
+  `formatMenuChoice` is insufficient. Add a real Inquirer rendering fixture (or
+  the supported choice-presentation seam) that renders both disabled categories
+  — a `missing-inputs` choice and an ordinary `unavailable` choice — at
+  `chalk.level = 1`, and asserts the missing-input choice is yellow, the
+  ordinary unavailable choice is dim, all reason text survives ANSI stripping,
+  and `value`, `disabled`, and default selection are unchanged.
+- **ANSI-aware width (Minor 1):** add a `COLUMNS=40`, `chalk.level = 1` case in
+  `tests/plain-render.test.ts` proving `renderPlainPanel` stripped lines retain
+  the intended wrapping and text after accents are applied post-layout.
+
+### Snapshot contract tests
+
+- A loop with distinct evaluate/repair roles and skills renders both contracts.
+- A task renders its role, skill, ordered inputs, output contract and validator.
+- Custom input labels override default labels.
+- A `files:` input displays its configured path and missing/available state.
+- A `files:` input for a missing file shows an explicit text marker (`[file: <path>; missing]`) that survives ANSI stripping and colour-off output.
+- Runtime-only inputs are explicitly described as runtime-resolved.
+- Decision tokens are manifest-driven, not hardcoded to
+  `APPROVED`/`REJECTED` in TypeScript.
+- Multiple pipelines and bindings preserve manifest order.
+- **Declaration order for integer-like IDs (Major 3):** in
+  `tests/manifest.test.ts` and `tests/project-snapshot.test.ts`, declare loops
+  (and tasks) in `10`-then-`2` order and assert the rendered `Prompt Contracts`
+  (and binding list) appear in that exact declaration order — proving the view
+  consumes the captured order, not `Object.entries`.
+- **No hidden file dependencies (Major 2):** in `tests/manifest.test.ts`, assert
+  `V1ManifestSchema` *rejects* a binding whose `files:` map contains a key that
+  is not the `source` of any declared `inputs` entry, with a clear issue path.
+  Also assert the packaged `config/orc-smash.yaml` still loads (every `files:`
+  key is referenced).
+- **Execution preflight survives a disappeared input (Major 2):** in
+  `tests/smash-action.test.ts`, scan a binding whose inputs exist (contract
+  renders available), delete one file, then run — assert the concrete
+  `Project inputs missing: …` error / `input.missing` event and that no
+  `runner.resolved`, ownership, or provider-spawn event occurs (see B5c).
+- **No content leakage (Major 4):** in
+  `tests/project-snapshot.test.ts` and `tests/status-action.test.ts`, scan a
+  manifest whose role/skill/target/prior-artifact files contain distinct
+  sentinels and assert the detailed text shows paths and metadata but none of the
+  sentinels; the focused no-read assertion (stub `readFileSync`/`composePrompt`
+  scoped to prompt-contract construction and rendering, not as a blanket stub
+  over the full `buildProjectSnapshotView` call) fails if the prompt-contract
+  path reads role, skill, prior-artifact, or target contents beyond the
+  pre-existing fingerprint read (see B5d).
+- A `plan` binding whose target file (`docs/dev/plan.md`) does not exist renders
+  the target input (and the binding-level `Target:` line) as missing/prominent,
+  not silently available.
+- Invalid/unclassified artifacts do not alter the configured contract display.
+- The detailed interactive view and `orc status` use the same renderer/view
+  data and therefore show the same contracts.
+- **Full-manifest Prompt Contracts assertion:** add a test that calls
+  `renderDetailedSnapshot` against the full packaged `config/orc-smash.yaml`
+  manifest and asserts a `Prompt Contracts` entry for every binding and phase:
+  `plan` evaluate, `plan` repair, `implement`, `review` evaluate, and `review`
+  repair (five entries total). A partial conversion must fail CI. **Note:**
+  the five-entry list must be updated in lockstep with manifest binding/phase
+  changes. Prefer parameterizing the assertion over every manifest binding ×
+  phase so the test tracks the manifest automatically rather than requiring
+  manual synchronization.
+- **Inquirer disabled-choice behavior:** add a case in
+  `tests/interactive.test.ts` that asserts (at `chalk.level = 1`) that an
+  unavailable choice's reason text is fully present after ANSI stripping, that
+  `disabled === true`, and that `value` and default behavior are unchanged.
+
+### Regression verification
 
 Run:
 
@@ -935,61 +986,56 @@ pnpm test
 git diff --check
 ```
 
-The existing deterministic pipeline identity, artifact classification,
-continuity, runner selection, timeout, interruption, ownership, and kill-gate
-tests must remain green. The pipeline-start correction requires the focused
-persist/rescan regression above but no real-provider or macOS supervisor gate:
-it changes neither provider execution nor shared launcher/ownership boundaries.
-If implementation expands into one of those boundaries, the corresponding gate
-becomes mandatory.
+Also perform narrow manual checks in a colour-capable terminal:
 
-Explicitly note two deliberate output changes. (1) `orc status` today uses
-`createPanelCliOutput.renderPanel` → `panelDraw` (`src/cli-output.ts:90-93`),
-which emits `\x1b[?1049h` + `\x1b[H\x1b[2J` plus a boxen-wrapped panel even when
-piped; after this plan it calls `writeStatic`, so piped `orc status` becomes
-plain normal-screen text with no escape sequences. (2) Smash `--plain` gains a
-`writeStatic` operation it did not have (its `renderPanel` was a no-op). Both
-are **deliberate new behaviors**, not regressions. The regression gates must
-include the no-ANSI captured-stdout assertions (see Static-output and command
-tests above) so these changes are reviewed, not accidental.
+```bash
+./bin/orc.js smash -p /Volumes/projects/orc-smash
+./bin/orc.js status --project /Volumes/projects/orc-smash
+NO_COLOR=1 ./bin/orc.js status --project /Volumes/projects/orc-smash
+```
 
-## Acceptance Criteria
+Confirm that plain mode remains line-oriented and readable both interactively
+and when redirected to a file.
 
-The work is complete only when a manual run against a project with a mixture of
-valid, absent, and unclassified artifacts demonstrates all of the following:
-
-1. The first screen identifies the project and config and summarizes every
-   configured binding's latest evidence and exact runner.
-2. Any loop suggestion is accompanied by a reason and is not auto-executed.
-3. `Execute one-off task` opens a task chooser and task detail before runner
-   selection.
-4. Disabled actions are visibly and grammatically separated from their reasons.
-5. Detailed project state remains in terminal scrollback after returning to the
-   menu.
-6. Standalone `orc status` is persistent, non-interactive, and free of alternate
-   screen escape sequences.
-7. Historical/unclassified artifacts are explained with a per-artifact
-   classification-failure reason (sourced from `Step.unclassifiedReason`,
-   distinguishing the actual cause — identity mismatch, pattern mismatch,
-   lineage invalid, contract failure) and do not unlock workflow actions.
-8. Live provider execution, events, logging, ownership, and process safety are
-   behaviorally unchanged.
-9. The live panel continuously shows both selected skill runners, including
-   exact models, effort/default, and session policies, and separately identifies
-   the active invocation as fresh or resumed before it finishes.
-10. A completed pipeline-start evaluate/repair/evaluate chain rescans as the
-    same valid accepted chain; status does not replace descendant metadata with
-    `unknown` or report the latest evaluation as unparseable.
+---
 
 ## Non-goals
 
-- Replacing Inquirer or adopting a full TUI framework in this change.
-- Changing artifact provenance, fingerprints, or eligibility, or changing
-  classification beyond the explicitly demonstrated pipeline-start descendant
-  reader correction.
-- Migrating or blessing historical artifacts.
-- Automatically selecting or starting a suggested loop/stage.
-- Adding new task or skill definitions.
-- Changing runner/model/effort/session resolution.
-- Changing plain event schemas, debug logging, provider adapters, timeouts,
-  interruption handling, ownership, the supervisor contract, or signal logic.
+- Do not add or migrate to a new TUI library.
+- Do not redesign the live status-panel layout or alternate-screen lifecycle.
+- Do not change pipeline eligibility or suggested-stage selection.
+- Do not change loop/task state transitions, verdict parsing or follow-up gates.
+- Do not change runner selection, model/effort options or session continuity.
+- Do not change prompt composition or reorder manifest inputs.
+- Do not print full role, skill, target or artifact file contents.
+- Do not add user-configurable themes in this change.
+- Do not force ANSI colours into redirected output or log files.
+- Do not remove existing fields merely to make the display shorter.
+
+## Acceptance criteria
+
+1. All orc-smash-owned terminal surfaces use one shared semantic accent source.
+2. The same state has the same colour meaning in compact, detailed, panel and
+   plain output.
+3. Output remains complete and understandable with ANSI removed or colour
+   disabled.
+4. Missing inputs and non-zero unclassified counts are visually prominent.
+5. Interactive menu recommendation/unavailability styling does not affect menu
+   behavior.
+6. Detailed project status shows the configured prompt contract for every loop
+   phase and task.
+7. Each contract includes target, role ID/path, skill ID/path, ordered input
+   mappings, output pattern/contract, decision tokens and validator when
+   applicable.
+8. Runtime-dependent values are marked as unresolved rather than guessed.
+9. Interactive **Display pipeline and project state** and `orc status` show the
+   same contract information.
+10. Prompt generation, execution state, continuity, logging, errors and
+    pipeline behavior are unchanged for manifests that pass validation, apart
+    from the explicitly specified rejection of unreferenced `files:` keys and
+    preservation of manifest declaration order.
+11. Focused colour, no-colour, view-model and prompt-contract parity tests pass.
+12. Typecheck, production build, deterministic test suite and diff checks pass.
+13. `README.md`, `docs/architecture/overview.md`, and `AGENTS.md` are reviewed
+    and synchronized with the implemented operator-surface and snapshot
+    contracts, without adding a research-stage prerequisite.
