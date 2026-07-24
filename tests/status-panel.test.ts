@@ -301,7 +301,7 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
     const out = renderStatusPanel(makeContext({
       loopName: 'implement',
       timeline: [
-        { kind: 'implement', role: 'implementer', version: 1, agent: 'agy', model: 'Gemini 3.5 Flash (Medium)', status: 'interrupted', artifactPath: '/x/impl-v1-agy.md', mtime: 0 }
+        { kind: 'implement', role: 'implementer', version: 1, agent: 'agy', model: 'gemini-3.6-flash', status: 'interrupted', artifactPath: '/x/impl-v1-agy.md', mtime: 0 }
       ]
     }));
     expect(out).toContain('interrupted');

@@ -181,7 +181,7 @@ describe('Interactive registry selection', () => {
   it('selecting agy re-defaults to providers.agy[0] and does not mutate global defaults', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
-      agy: ['Gemini 3.5 Flash (Medium)', 'Claude Sonnet 4.6 (Thinking)']
+      agy: ['gemini-3.6-flash', 'claude-sonnet-4-6']
     }, { agent: 'opencode', model: 'opencode-model' });
 
     const prodRegistry = createProductionAdapterRegistry(); // now includes agy
@@ -189,7 +189,7 @@ describe('Interactive registry selection', () => {
     vi.mocked(confirm).mockResolvedValueOnce(false); // customize = false
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
-    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
+    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'gemini-3.6-flash' });
     // Global defaults pair is untouched.
     expect(config.registry.profiles.default.provider).toBe('opencode');
     expect(config.registry.providers.opencode.defaultModel).toBe('opencode-model');
@@ -198,38 +198,38 @@ describe('Interactive registry selection', () => {
   it('agy model choices come from providers.agy (foreign models are not offered)', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
-      agy: ['Gemini 3.5 Flash (Medium)', 'GPT-OSS 120B (Medium)']
+      agy: ['gemini-3.6-flash', 'gpt-oss-120b-medium']
     }, { agent: 'opencode', model: 'opencode-model' });
     const prodRegistry = createProductionAdapterRegistry();
 
     vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
     vi.mocked(select).mockResolvedValueOnce('agy'); // choose agent
-    vi.mocked(select).mockResolvedValueOnce('Gemini 3.5 Flash (Medium)'); // choose model
+    vi.mocked(select).mockResolvedValueOnce('gemini-3.6-flash'); // choose model
 
     await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
 
     // Second select (model) choices are the configured providers.agy names + custom.
     const modelSelectArgs = vi.mocked(select).mock.calls[1]![0] as any;
     const modelChoices = modelSelectArgs.choices.map((c: any) => c.value);
-    expect(modelChoices).toContain('Gemini 3.5 Flash (Medium)');
-    expect(modelChoices).toContain('GPT-OSS 120B (Medium)');
+    expect(modelChoices).toContain('gemini-3.6-flash');
+    expect(modelChoices).toContain('gpt-oss-120b-medium');
     expect(modelChoices).not.toContain('gpt-5.5');
   });
 
   it('custom-model validation for agy rejects foreign ids and accepts configured names', async () => {
     const config = dummyConfig({
       opencode: ['opencode-model'],
-      agy: ['Gemini 3.5 Flash (Medium)']
+      agy: ['gemini-3.6-flash']
     }, { agent: 'opencode', model: 'opencode-model' });
     const prodRegistry = createProductionAdapterRegistry();
 
     vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
     vi.mocked(select).mockResolvedValueOnce('agy'); // choose agent
     vi.mocked(select).mockResolvedValueOnce('custom'); // choose custom model
-    vi.mocked(input).mockResolvedValueOnce('  Gemini 3.5 Flash (Medium)  ');
+    vi.mocked(input).mockResolvedValueOnce('  gemini-3.6-flash  ');
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
-    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' });
+    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'gemini-3.6-flash' });
 
     // The input prompt carried the validate callback; drive it directly to prove
     // the custom-model path enforces the providers.agy allow-list.
@@ -238,7 +238,7 @@ describe('Interactive registry selection', () => {
     expect(validate('gpt-5.5')).not.toBe(true);
     expect(validate('opencode-go/deepseek-v4-flash')).not.toBe(true);
     expect(validate('claude-sonnet-4-6')).not.toBe(true);
-    expect(validate('Gemini 3.5 Flash (Medium)')).toBe(true);
+    expect(validate('gemini-3.6-flash')).toBe(true);
   });
 
   it('renders disabled effort/resume choices for a non-effort non-resume adapter', async () => {

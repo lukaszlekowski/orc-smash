@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveRunner, isValidModelForAgent } from '../src/runner.js';
+import { resolveRunner, isValidEffortForModel, isValidModelForAgent } from '../src/runner.js';
 import type { Config } from '../src/config.js';
 
 const config: Config = {
@@ -12,7 +12,15 @@ const config: Config = {
       opencode: { models: ['opencode-go/x'], defaultModel: 'opencode-go/x' },
       claude: { models: ['claude-x', 'claude-custom'], defaultModel: 'claude-x' },
       codex: { models: ['gpt-x'], defaultModel: 'gpt-x' },
-      agy: { models: ['Gemini'], defaultModel: 'Gemini' },
+      agy: {
+        models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro', 'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium'],
+        defaultModel: 'gemini-3.6-flash',
+        modelEfforts: {
+          'gemini-3.6-flash': ['low', 'medium', 'high'],
+          'gemini-3.5-flash': ['low', 'medium', 'high'],
+          'gemini-3.1-pro': ['low', 'high'],
+        },
+      },
       fake: { models: ['fake'], defaultModel: 'fake' }
     },
     defaultProfile: 'arbitrary-profile',
@@ -55,10 +63,13 @@ describe('runner selection', () => {
     expect(resolveRunner('audit', config, {}, undefined, { agent: 'claude' })).toMatchObject({ agent: 'claude', model: 'claude-x', agentSource: 'skill', modelSource: 'agent-default' });
     expect(resolveRunner('audit', config, {}, undefined, { agent: 'opencode' })).toMatchObject({ agent: 'opencode', model: 'opencode-go/x', agentSource: 'skill', modelSource: 'agent-default' });
     expect(resolveRunner('audit', config, {}, undefined, { agent: 'codex' })).toMatchObject({ agent: 'codex', model: 'gpt-x', agentSource: 'skill', modelSource: 'agent-default' });
-    expect(resolveRunner('audit', config, {}, undefined, { agent: 'agy' })).toMatchObject({ agent: 'agy', model: 'Gemini', agentSource: 'skill', modelSource: 'agent-default' });
+    expect(resolveRunner('audit', config, {}, undefined, { agent: 'agy' })).toMatchObject({ agent: 'agy', model: 'gemini-3.6-flash', agentSource: 'skill', modelSource: 'agent-default' });
   });
   it('keeps agy a strict catalogue allow-list', () => {
-    expect(isValidModelForAgent('agy', ' Gemini ', config.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', ' gemini-3.6-flash ', config.registry)).toBe(true);
+    expect(isValidModelForAgent('agy', 'Gemini 3.5 Flash (Medium)', config.registry)).toBe(false);
     expect(isValidModelForAgent('agy', 'gpt-x', config.registry)).toBe(false);
+    expect(isValidEffortForModel('agy', ' gemini-3.6-flash ', 'high', config.registry)).toBe(true);
+    expect(isValidEffortForModel('agy', 'gemini-3.1-pro', 'medium', config.registry)).toBe(false);
   });
 });

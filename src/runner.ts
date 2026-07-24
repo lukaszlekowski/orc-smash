@@ -34,8 +34,9 @@ export function isValidModelForAgent(agent: string, model: string, registry: Mod
 export function isValidEffortForModel(agent: string, model: string, effort: string, registry: ModelRegistry): boolean {
   const catalogue = registry.providers[agent];
   if (!catalogue) return false;
-  if (!catalogue.models.includes(model)) return false;
-  const levels = catalogue.modelEfforts?.[model] ?? catalogue.efforts;
+  const normalizedModel = agent === 'agy' ? model.trim() : model;
+  if (!catalogue.models.includes(normalizedModel)) return false;
+  const levels = catalogue.modelEfforts?.[normalizedModel] ?? catalogue.efforts;
   return !!levels && levels.includes(effort);
 }
 

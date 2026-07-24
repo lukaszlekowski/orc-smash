@@ -6,6 +6,7 @@ import {
   parseArtifactMeta,
   parseArtifactMetaClassified
 } from '../src/provenance.js';
+import { decodeAgySession, encodeAgySession } from '../src/adapters/agy-session.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { makeArtifactMeta } from './helpers/provenance.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
@@ -131,6 +132,20 @@ Auditor: codex-gpt-5
     const parsed = parseArtifactMeta(written, { agent: 'fake', version: 99 });
     expect(parsed.sessionMode).toBe('resumed');
     expect(parsed.sessionId).toBe('sess_abc123');
+  });
+
+  it('preserves the colon-bearing AGY composite session token through provenance', () => {
+    const projectId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const sessionId = encodeAgySession({ projectId, conversationId });
+    const meta = makeArtifactMeta({ version: 2, agent: 'agy', sessionId });
+
+    writeArtifactWithMeta(tempFile, '# Body\n', meta);
+    const written = readFileSync(tempFile, 'utf8');
+    const parsed = parseArtifactMeta(written, { agent: 'agy', version: 2 });
+
+    expect(parsed.sessionId).toBe(sessionId);
+    expect(decodeAgySession(parsed.sessionId!)).toEqual({ projectId, conversationId });
   });
 
   it('classifies the complete v1 identity tuple and rejects filename/provenance drift', () => {

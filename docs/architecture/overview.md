@@ -99,8 +99,12 @@ exists only in the test registry. Provider-specific model namespaces,
 autonomy flags, stream parsing, auth detection, watchdog behavior, and session
 arguments stay behind adapters. Continuity is capability-driven by
 `resumeSession`; no provider-name allowlist, `--last`, or shell history is
-used. `agy` reports no resume capability and strictly accepts configured human
-readable model names.
+used. `agy` explicitly binds fresh runs with `--new-project`, resumes only the
+captured `--project`/`--conversation` pair, and strictly accepts configured
+logical model slugs with separate effort choices. Its opaque
+`agy:v1:<project-uuid>:<conversation-uuid>` token is parsed by the purposeful
+`adapters/agy-session.ts` module from a temporary invocation log; `--continue`
+and provider history are not used.
 
 Typed events in `run-event.ts` are the canonical lifecycle stream consumed by
 plain and panel output. Provider and harness diagnostics are separate debug
@@ -157,6 +161,7 @@ pnpm test
 
 The deterministic suite proves harness behavior with `fake`, including mixed
 runners and target isolation. Real `opencode`, `codex`, and `claude` paths are
-env-gated contract checks. `agy` is covered by deterministic seams and manual
-verification from an already-authenticated shell. `pnpm build` is required
-before production execution.
+env-gated contract checks. AGY is covered by deterministic seams and the
+explicitly gated authenticated target/decoy plus write-capable capture-log
+contract from an already-authenticated shell. `pnpm build` is required before
+production execution.
