@@ -39,6 +39,7 @@ export type ApprovalReasonCode =
   | 'duplicate-position'
   | 'competing-position'
   | 'legacy-phase'
+  | 'non-evaluate-root'
   | 'unclassified-evidence';
 
 export type ApprovalChainState =
@@ -103,7 +104,7 @@ export function reduceApprovalChain(input: readonly ApprovalChainStep[]): Approv
   if (steps.some(step => step.bindingKind !== 'loop')) return unknownFor(steps, 'legacy-phase');
 
   const root = steps[0]!;
-  if (root.phase !== 'evaluate') return unknownFor(steps, 'evaluation-without-repair');
+  if (root.phase !== 'evaluate') return unknownFor(steps, 'non-evaluate-root');
   if (root.parentArtifactIdentity !== null && root.chainMode !== 'stage-continuation') {
     return unknownFor(steps, 'unclassified-evidence');
   }

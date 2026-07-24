@@ -5,6 +5,8 @@ import { selectDefaultLoop, bindingHasInProgressChain, bindingHasCompletedAccept
 import { loadConfig } from '../src/config.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import type { LoopSpec } from '../src/manifest.js';
+import { writeArtifactWithMeta } from '../src/provenance.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 const loop = (target: string): LoopSpec => ({
   type: 'approval-loop',
@@ -76,6 +78,46 @@ describe('F7 binding state checks', () => {
     removeTempDir(workspace);
   });
 
+  function writeEvaluation(
+    token: string,
+    options: { version?: number; provider?: string; chainId?: string } = {},
+  ) {
+    const version = options.version ?? 1;
+    const provider = options.provider ?? 'fake';
+    const meta = makeV1ArtifactMeta({
+      bindingId: 'plan',
+      kind: 'evaluate',
+      step: 'evaluate',
+      version,
+      provider,
+      agent: provider,
+      chainId: options.chainId ?? 'selector-chain',
+    });
+    writeArtifactWithMeta(
+      join(workspace, `test-v${version}-${provider}.md`),
+      `# Evaluation\n\n## Verdict\n\n${token}\n`,
+      meta,
+    );
+    return meta;
+  }
+
+  function writeRepair(parentArtifactIdentity: string) {
+    const meta = makeV1ArtifactMeta({
+      bindingId: 'plan',
+      kind: 'repair',
+      step: 'repair',
+      version: 1,
+      chainId: 'selector-chain',
+      parentArtifactIdentity,
+    });
+    writeArtifactWithMeta(
+      join(workspace, 'test-repair-v1-fake.md'),
+      '# Repair\n\n## Outcome\n\nCOMPLETED\n',
+      meta,
+    );
+    return meta;
+  }
+
   it('reports no in-progress chain when no artifacts exist', () => {
     const config = loadConfig(workspace);
     expect(bindingHasInProgressChain(workspace, config.manifest, 'plan')).toBe(false);
@@ -84,5 +126,64 @@ describe('F7 binding state checks', () => {
   it('reports no completed acceptance when no artifacts exist', () => {
     const config = loadConfig(workspace);
     expect(bindingHasCompletedAcceptance(workspace, config.manifest, 'plan')).toBe(false);
+  });
+
+  it('enables Continue with repair after a retry evaluation', () => {
+    writeEvaluation('NO');
+    const config = loadConfig(workspace);
+    expect(bindingHasInProgressChain(workspace, config.manifest, 'plan')).toBe(true);
+    expect(bindingHasCompletedAcceptance(workspace, config.manifest, 'plan')).toBe(false);
+  });
+
+  it('enables Continue with evaluation after completed repair', () => {
+    const evaluation = writeEvaluation('NO');
+    writeRepair(evaluation.artifactIdentity!);
+    const config = loadConfig(workspace);
+    expect(bindingHasInProgressChain(workspace, config.manifest, 'plan')).toBe(true);
+    expect(bindingHasCompletedAcceptance(workspace, config.manifest, 'plan')).toBe(false);
+  });
+
+  it('disables Continue and permits second opinion after accepted evaluation', () => {
+    writeEvaluation('YES');
+    const config = loadConfig(workspace);
+    expect(bindingHasInProgressChain(workspace, config.manifest, 'plan')).toBe(false);
+    expect(bindingHasCompletedAcceptance(workspace, config.manifest, 'plan')).toBe(true);
+  });
+
+  it('does not recommend an unresolved transition for unknown or conflicting evidence', () => {
+    writeEvaluation('MALFORMED');
+    const config = loadConfig(workspace);
+    expect(bindingHasInProgressChain(workspace, config.manifest, 'plan')).toBe(false);
+    expect(bindingHasCompletedAcceptance(workspace, config.manifest, 'plan')).toBe(false);
+
+    removeTempDir(workspace);
+    createTempDir('temp-loop-selector-state');
+    mkdirSync(join(workspace, 'docs/dev'), { recursive: true });
+    mkdirSync(join(workspace, 'roles'), { recursive: true });
+    mkdirSync(join(workspace, 'skills'), { recursive: true });
+    writeFileSync(join(workspace, 'roles/tester.md'), '# Tester\n');
+    writeFileSync(join(workspace, 'skills/SKILL.md'), '# Skill\n');
+    writeFileSync(join(workspace, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(workspace, '.orc-smash.yaml'), JSON.stringify({
+      schemaVersion: 1,
+      roles: { tester: 'roles/tester.md' },
+      skills: { 'test-skill': { file: 'skills/SKILL.md', role: 'tester', runnerProfile: 'default' } },
+      loops: {
+        plan: {
+          type: 'approval-loop',
+          target: { path: 'docs/dev/plan.md', kind: 'file' },
+          inputs: [],
+          evaluate: { skill: 'test-skill', output: { pattern: 'test-v{version}-{provider}.md', contract: 'decision-artifact', decision: { heading: 'Verdict', accepted: 'YES', retry: 'NO' } } },
+          repair: { skill: 'test-skill', output: { pattern: 'test-repair-v{version}-{provider}.md', contract: 'completion-artifact' } },
+        },
+      },
+      tasks: {},
+      pipelines: {},
+    }));
+    writeEvaluation('NO', { provider: 'fake' });
+    writeEvaluation('NO', { provider: 'opencode' });
+    const conflictConfig = loadConfig(workspace);
+    expect(bindingHasInProgressChain(workspace, conflictConfig.manifest, 'plan')).toBe(false);
+    expect(bindingHasCompletedAcceptance(workspace, conflictConfig.manifest, 'plan')).toBe(false);
   });
 });

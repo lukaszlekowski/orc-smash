@@ -466,6 +466,10 @@ export function scanGlobalSnapshot(
 
   }
 
+  // Approval reduction is intentionally one pass after structural lineage:
+  // chains are partitioned by complete pipeline/run/stage/chain identity, so
+  // marking an invalid artifact in one chain cannot change another chain's
+  // reduction state.
   const loopChains = new Map<string, Step[]>();
   for (const step of steps) {
     if (step.unclassified || step.bindingKind !== 'loop' || !step.chainId || !step.artifactIdentity) continue;

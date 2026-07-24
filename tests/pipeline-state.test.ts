@@ -71,6 +71,15 @@ function manifest(): V1Manifest {
           contract: 'required-artifact',
         },
       },
+      completionSource: {
+        skill: 'source-skill',
+        target: { path: '.', kind: 'worktree' },
+        inputs: [],
+        output: {
+          pattern: 'docs/dev/completion-source-v{version}-{provider}.md',
+          contract: 'completion-artifact',
+        },
+      },
     },
     pipelines: {
       delivery: {
@@ -83,6 +92,12 @@ function manifest(): V1Manifest {
         stages: [
           { stageId: 'task-source-stage', task: 'taskSource' },
           { stageId: 'task-sink-stage', task: 'sink' },
+        ],
+      },
+      completionDelivery: {
+        stages: [
+          { stageId: 'completion-source-stage', task: 'completionSource' },
+          { stageId: 'completion-sink-stage', task: 'sink' },
         ],
       },
     },
@@ -198,6 +213,103 @@ describe('pipeline run identity and eligibility', () => {
     expect(pipelineStageCandidates([retry, repair], config, new Map([['delivery:source-stage', 'source-state']]))).toEqual([]);
   });
 
+  it('does not unlock a successor after completed repair followed by another retry', () => {
+    const config = manifest();
+    const retry = artifact({ artifactIdentity: 'retry-v1', normalizedResult: 'retry', decision: 'retry' });
+    const repair = artifact({
+      artifactIdentity: 'repair-v1',
+      phase: 'repair',
+      contract: 'completion-artifact',
+      normalizedResult: 'completed',
+      decision: undefined,
+      completionOutcome: 'completed',
+      parentArtifactIdentity: 'retry-v1',
+    });
+    const retryAgain = artifact({
+      artifactIdentity: 'retry-v2',
+      version: 2,
+      normalizedResult: 'retry',
+      decision: 'retry',
+      parentArtifactIdentity: 'repair-v1',
+    });
+
+    expect(pipelineStageCandidates(
+      [retry, repair, retryAgain],
+      config,
+      new Map([['delivery:source-stage', 'source-state']]),
+    )).toEqual([]);
+  });
+
+  it('unlocks a completed completion-artifact task successor', () => {
+    const config = manifest();
+    const completed = artifact({
+      artifactIdentity: 'completion-task',
+      bindingKind: 'task',
+      bindingId: 'completionSource',
+      phase: 'task',
+      contract: 'completion-artifact',
+      normalizedResult: 'completed',
+      completionOutcome: 'completed',
+      decision: undefined,
+      pipelineId: 'completionDelivery',
+      stageId: 'completion-source-stage',
+    });
+
+    const candidates = eligibleNextStages(
+      [completed],
+      config,
+      new Map([['completionDelivery:completion-source-stage', 'source-state']]),
+    );
+    expect(candidates).toEqual([expect.objectContaining({
+      artifactIdentity: 'completion-task',
+      reason: 'eligible',
+    })]);
+  });
+
+  it('does not unlock a blocked completion-artifact task', () => {
+    const config = manifest();
+    const blocked = artifact({
+      artifactIdentity: 'blocked-task',
+      bindingKind: 'task',
+      bindingId: 'completionSource',
+      phase: 'task',
+      contract: 'completion-artifact',
+      normalizedResult: 'blocked',
+      completionOutcome: 'blocked',
+      decision: undefined,
+      pipelineId: 'completionDelivery',
+      stageId: 'completion-source-stage',
+    });
+
+    expect(eligibleNextStages(
+      [blocked],
+      config,
+      new Map([['completionDelivery:completion-source-stage', 'source-state']]),
+    )).toEqual([]);
+  });
+
+  it('does not unlock a validator-failing required-artifact task', () => {
+    const config = manifest();
+    const invalid = artifact({
+      artifactIdentity: 'invalid-required-task',
+      bindingKind: 'task',
+      bindingId: 'taskSource',
+      phase: 'task',
+      contract: 'required-artifact',
+      normalizedResult: 'valid',
+      contractValid: false,
+      decision: undefined,
+      pipelineId: 'taskDelivery',
+      stageId: 'task-source-stage',
+    });
+
+    expect(eligibleNextStages(
+      [invalid],
+      config,
+      new Map([['taskDelivery:task-source-stage', 'source-state']]),
+    )).toEqual([]);
+  });
+
   it('keeps distinct accepted chains separate and suppresses only an exact consumed edge', () => {
     const config = manifest();
     const first = artifact({ artifactIdentity: 'accepted-one', chainId: 'chain-one' });
@@ -257,6 +369,25 @@ describe('pipeline run identity and eligibility', () => {
       expect(source).not.toMatch(/contractValid\s*===\s*true\s*&&\s*decision\s*===\s*undefined\s*&&\s*completionOutcome\s*===\s*undefined/);
     }
 
+    const stageStateSource = stripComments(readFileSync(join(sourceRoot, 'pipeline-stage-state.ts'), 'utf8'));
+    const evidenceStart = stageStateSource.indexOf('export function completionEvidenceForStage');
+    const evidenceEnd = stageStateSource.indexOf('export function validateContinuationParent', evidenceStart);
+    const candidateStart = stageStateSource.indexOf('export function pipelineStageCandidates');
+    const candidateEnd = stageStateSource.indexOf('export function eligibleNextStages', candidateStart);
+    expect(evidenceStart).toBeGreaterThanOrEqual(0);
+    expect(evidenceEnd).toBeGreaterThan(evidenceStart);
+    expect(candidateStart).toBeGreaterThanOrEqual(0);
+    expect(candidateEnd).toBeGreaterThan(candidateStart);
+    const evidenceSource = stageStateSource.slice(evidenceStart, evidenceEnd);
+    const taskBranchStart = evidenceSource.indexOf("if (binding.kind === 'task')");
+    const loopBranchStart = evidenceSource.indexOf('const chains = new Map', taskBranchStart);
+    expect(taskBranchStart).toBeGreaterThanOrEqual(0);
+    expect(loopBranchStart).toBeGreaterThan(taskBranchStart);
+    const loopEligibilitySource = evidenceSource.slice(0, taskBranchStart) + evidenceSource.slice(loopBranchStart)
+      + stageStateSource.slice(candidateStart, candidateEnd);
+    expect(loopEligibilitySource).not.toMatch(/completionOutcome\s*===\s*['"]completed['"]/);
+    expect(loopEligibilitySource).not.toMatch(/contractValid\s*===\s*true\s*&&\s*decision\s*===\s*undefined\s*&&\s*completionOutcome\s*===\s*undefined/);
+
     const resolver = vi.fn(() => []);
     const candidates = pipelineStageCandidates(
       [artifact()],
@@ -267,5 +398,34 @@ describe('pipeline run identity and eligibility', () => {
     expect(candidates).toEqual([]);
     expect(resolver).toHaveBeenCalledWith(expect.any(Array), 'delivery', 'source-stage', expect.any(Object));
     expect(completionEvidenceForStage).toBeTypeOf('function');
+  });
+
+  it('does not suppress a predecessor consumed by a different pipeline run', () => {
+    const config = manifest();
+    const predecessor = artifact({ artifactIdentity: 'accepted-run-one', pipelineRunId: 'run-one' });
+    const otherRunSuccessor = artifact({
+      artifactIdentity: 'successor-run-two',
+      bindingKind: 'task',
+      bindingId: 'sink',
+      phase: 'task',
+      contract: 'required-artifact',
+      normalizedResult: 'valid',
+      decision: undefined,
+      pipelineId: 'delivery',
+      pipelineRunId: 'run-two',
+      stageId: 'sink-stage',
+      chainId: 'successor-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: 'accepted-run-one',
+    });
+
+    expect(pipelineStageCandidates(
+      [predecessor, otherRunSuccessor],
+      config,
+      new Map([['delivery:source-stage', 'source-state']]),
+    )).toEqual([expect.objectContaining({
+      artifactIdentity: 'accepted-run-one',
+      reason: 'eligible',
+    })]);
   });
 });

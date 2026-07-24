@@ -7,8 +7,11 @@ import { fakeAdapter } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { scanGlobalSnapshot } from '../src/state.js';
 import { continueRunContext, recoverInProgressRun, mintRunContext } from '../src/pipeline-state.js';
+import { writeArtifactWithMeta } from '../src/provenance.js';
+import { captureTargetFingerprint } from '../src/target-snapshot.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 describe('generic per-step continuity', () => {
   const workspace = resolve(process.cwd(), 'temp-loop-continuity-test');
@@ -23,6 +26,110 @@ describe('generic per-step continuity', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     removeTempDir(workspace);
+  });
+
+  it('completes a packaged stage-continuation review after rejection, repair, and re-evaluation', async () => {
+    const config = loadConfig(workspace);
+    const planMeta = makeV1ArtifactMeta({
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      step: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'review-cycle-run',
+      stageId: 'plan',
+      chainId: 'plan-chain',
+      chainMode: 'pipeline-start',
+      resultFingerprint: captureTargetFingerprint(workspace, config.manifest.loops.plan!.target, config.manifest),
+    });
+    writeArtifactWithMeta(
+      join(workspace, 'docs/dev/plan-audit-v1-fake.md'),
+      '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+      planMeta,
+    );
+    const parentMeta = makeV1ArtifactMeta({
+      bindingId: 'implement',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      pipelineId: 'default',
+      pipelineRunId: 'review-cycle-run',
+      stageId: 'implement',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: planMeta.artifactIdentity,
+      resultFingerprint: captureTargetFingerprint(workspace, config.manifest.tasks!.implement!.target, config.manifest),
+    });
+    writeArtifactWithMeta(
+      join(workspace, 'docs/dev/impl-v1-fake.md'),
+      '# Implementation Evidence Ledger\n\n'
+      + '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n'
+      + '| --- | --- | --- | --- | --- |\n'
+      + '| Step 1 | src/example.ts | pnpm test | pass | none |\n\n'
+      + '## Requirement Coverage\n\n'
+      + '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n'
+      + '| --- | --- | --- | --- |\n'
+      + '| Requirement | src/example.ts | pnpm test | pass |\n\n'
+      + 'State overall confidence: 1.00\n',
+      parentMeta,
+    );
+
+    let evaluationCount = 0;
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      const outputMatch = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      if (outputMatch?.[1]) {
+        const outputPath = resolve(input.cwd, outputMatch[1].trim());
+        mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+        if (input.kind === 'repair') {
+          writeFileSync(outputPath, '# Repair\n\n## Outcome\n\nCOMPLETED\n');
+        } else {
+          const token = evaluationCount++ === 0 ? 'REJECTED' : 'APPROVED';
+          writeFileSync(outputPath, `# Review\n\n## Verdict\n\n${token}\n`);
+        }
+      }
+      return { stdout: 'done', exitCode: 0, sessionId: 'review-cycle-session' };
+    });
+
+    const result = await runLoop(
+      workspace,
+      'review',
+      config.manifest.loops.review!,
+      config,
+      {
+        review: { agent: 'fake', model: 'fake-model' },
+        'review-follow-up': { agent: 'fake', model: 'fake-model' },
+      },
+      {
+        maxIterations: 3,
+        registry: createTestAdapterRegistry(),
+        output,
+        interactive: false,
+        runContext: mintRunContext({
+          mode: 'stage-continuation',
+          pipelineId: 'default',
+          pipelineRunId: 'review-cycle-run',
+          stageId: 'review',
+          parentArtifactIdentity: parentMeta.artifactIdentity,
+        }),
+      },
+    );
+
+    expect(result.success).toBe(true);
+    const snapshot = scanGlobalSnapshot(workspace, config.manifest);
+    const artifactPaths = snapshot.steps.map(step => step.artifactPath);
+    expect(artifactPaths).toContain(join(workspace, 'docs/dev/review-v1-fake.md'));
+    const parentStep = snapshot.steps.find(step => step.artifactPath.endsWith('/impl-v1-fake.md'));
+    expect(parentStep).toMatchObject({ artifactIdentity: parentMeta.artifactIdentity });
+    expect(parentStep?.unclassified).toBeFalsy();
+    const allReviewSteps = snapshot.byBinding.get('review') ?? [];
+    expect(allReviewSteps.map(step => step.unclassifiedReason ?? 'classified')).toEqual([
+      'classified',
+      'classified',
+      'classified',
+    ]);
+    const reviewSteps = allReviewSteps.filter(step => !step.unclassified);
+    expect(reviewSteps).toHaveLength(3);
+    expect(reviewSteps.map(step => step.kind)).toEqual(['evaluate', 'repair', 'evaluate']);
+    expect(reviewSteps.at(-1)?.decision).toBe('accepted');
   });
 
   it('resumes only when the predecessor runner tuple and adapter capability match', async () => {
