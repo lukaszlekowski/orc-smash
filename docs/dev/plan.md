@@ -2,8 +2,15 @@
 
 ## Status
 
-**DRAFT — requires approval through the configured `plan` approval loop before
-implementation.**
+**APPROVED (Release 1–2 implemented; Release 3 gates substantively proven).
+D6 / gate 6 pending re-approval.** The implementation landed in commits
+`704a0e9` / `745668f`. Release 3 workspace-binding gates (1, 2, 4, 7, 11)
+are substantively proven by the authenticated AGY target/decoy gate with
+redacted evidence archived. D6 ("provider default omits `--effort`") is
+known to conflict with AGY 1.1.6's real CLI (Gemini models require
+`--effort`); this normative decision requires re-approval through the plan
+approval loop before AGY can be used for write-capable follow-up without
+explicit operator effort selection.
 
 This plan implements `docs/dev/research.md`. It is deliberately limited to the
 AGY provider contract and the generic catalogue/continuity seams AGY already
@@ -217,6 +224,16 @@ Set AGY's effort capability to true.
 - Invalid or unconfigured model/effort pairs fail before spawn.
 - Models without a configured effort list expose provider default only.
 - The strict AGY allow-list remains exact after trimming.
+
+**Note:** The approved D6 ("omit `--effort`" as provider default) was written
+before the real AGY 1.1.6 CLI was tested. The authenticated gate revealed that
+AGY's Gemini models (`gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.1-pro`)
+require `--effort` — a bare omission produces `exit 1` with
+`--effort ""` / "invalid model selection: gemini-3.6-flash requires --effort."
+The non-Gemini models (`claude-sonnet-4-6`, etc.) reject `--effort` entirely.
+This D6 contract must be re-approved through the plan-approval loop before
+AGY can be relied upon for write-capable follow-up without explicit operator
+effort selection.
 
 Do not pass an effort-qualified Gemini model slug together with a separate
 effort selection. AGY performs that mapping internally.
@@ -552,7 +569,7 @@ Release 3 is the first publishable boundary.
   expected identity.
 - Resume uses the same project and conversation IDs.
 - Resumed mutation again exists only in the target.
-- Provider-default invocation omits effort and succeeds.
+- Provider-default invocation omits `--effort` and succeeds. (Note: the real AGY CLI rejects omitted `--effort` for Gemini models; this contract is unverified and needs plan re-approval.)
 - Representative explicit effort invocations resolve to the intended variant.
 - Invalid model/effort fails before spawn (runner resolution in
   `src/runner.ts` `validateAgentAndModel`/`resolveEffort`, plus
@@ -634,12 +651,12 @@ and a real-CLI clause (proven by the manual gate), shown in the table.
 
 | Gate | Real-workflow claim | Authenticated-gate step that proves it | Redacted evidence archived |
 | --- | --- | --- | --- |
-| 1 | Fresh uses `--new-project` + canonical target `cwd`; write lands only in the target | Release 3.2 (decoy-as-active-workspace fresh-write gate) | fresh target/decoy paths, sentinel hash, target-only mutation, token→target `file://` URI |
-| 2 | Resumed uses the exact captured pair; `--continue` absent; same identity returned | Release 3.4 + 3.5 (resumed gate + identity stability) | resumed target-only mutation, returned vs supplied project/conversation UUID equality |
-| 3 | AGY returns a versioned composite token **and** provenance persists it without schema change | token-production: Release 3.3; persistence-without-schema-change: deterministic round-trip test | capture-log → `parseAgyInvocationLog` → `encodeAgySession` → `RunResult.sessionId` (Release 3.3); YAML round-trip equality (deterministic) |
-| 4 | Same-chain resume; incompatible provider/model/effort stays fresh | Release 3.4 + 3.5 (resumed gate + identity stability) | resumed token equality; incompatible-config-fresh evidence from deterministic suite is supporting only |
-| 7 | Capture logs unique/temporary/cleaned/excluded-from-auth-scan **and** real CLI log shape + flag combination accepted | cleanup/exclusion: deterministic seam tests ("Adapter results and cleanup"); log-shape + flag combo: Release 3.3 | seam cleanup matrix; Release 3.3 redacted capture-log identity |
-| 11 | Fresh + resumed writes cannot use an old (decoy) workspace | Release 3.1–3.4 (decoy active first; fresh + resumed target-only writes) | decoy-as-active-workspace setup record, decoy sentinel byte-for-byte hash pre/post, target-only mutation, token→target resolution |
+| 1 | Fresh uses `--new-project` + canonical target `cwd`; write lands only in the target | Release 3.2 (decoy-as-active-workspace fresh-write gate) | ✅ `docs/dev/evidence/agy-authenticated-gate-v2.json` — fresh invocations with `--new-project`, target-only mutation, `workspaceDirs` resolves to target, decoy sentinel unchanged |
+| 2 | Resumed uses the exact captured pair; `--continue` absent; same identity returned | Release 3.4 + 3.5 (resumed gate + identity stability) | ✅ same file — resumed invocations with `--project`/`--conversation`, identity equality, no `--new-project`/`--continue`; per-invocation `returnedMatchesSupplied` flag |
+| 3 | AGY returns a versioned composite token **and** provenance persists it without schema change | token-production: Release 3.3; persistence-without-schema-change: deterministic round-trip test | ✅ same file — token shape `agy:v1:<project-uuid>:<conversation-uuid>` returned for each invocation; YAML round-trip (deterministic) |
+| 4 | Same-chain resume; incompatible provider/model/effort stays fresh | Release 3.4 + 3.5 (resumed gate + identity stability) | ✅ same file — `identityStable: true`, resumed token equals its fresh pair; per-invocation `returnedMatchesSupplied` flag |
+| 7 | Capture logs unique/temporary/cleaned/excluded-from-auth-scan **and** real CLI log shape + flag combination accepted | cleanup/exclusion: deterministic seam tests ("Adapter results and cleanup"); log-shape + flag combo: Release 3.3 | ✅ same file — all 4 invocations produce valid parseable identities; `parseAgyInvocationLog` succeeds; full flag combo (`--new-project`/`--project`+`--conversation`, `--log-file`, `--dangerously-skip-permissions`, `--effort`) accepted by AGY 1.1.6 |
+| 11 | Fresh + resumed writes cannot use an old (decoy) workspace | Release 3.1–3.4 (decoy active first; fresh + resumed target-only writes) | ✅ same file — decoy sentinel sha256 pre/post recorded, target-only mutations confirmed, `workspaceDirs` resolves to target, not decoy |
 
 For gate 7, only the capture-log-shape + flag-combination sub-part requires the
 manual gate (Release 3.3); the uniqueness/temporary/cleaned/excluded-from-auth-scan
@@ -650,9 +667,33 @@ the provenance-persists-without-schema-change clause is deterministic.
 ## Operator safety until release
 
 Do not use the current AGY adapter for write-capable plan-follow-up,
-review-follow-up, or implementation runs. Its `cwd`-only command does not
-provide the explicit workspace binding proven necessary by research.
+review-follow-up, or implementation runs without an explicit operator-chosen
+effort. The workspace-binding safety property (fresh binds target via
+`--new-project`; resumed uses the exact captured pair) is proven by the
+authenticated gate, but the effort contract (D6) is unresolved: AGY's Gemini
+models require `--effort`, while the approved plan says "omit `--effort`."
+Until D6 is re-approved, the operator must supply an explicit effort level
+for any gemini-model invocation to succeed.
 
 AGY may be exercised manually in isolated disposable projects for the contract
 probes above. Do not treat successful stdout or a zero exit code as proof that
 the intended repository was selected.
+
+## Bundled changes note
+
+`tests/config.test.ts` includes incidental drift-corrections (codex model
+list trimmed to match `config/providers/codex.yaml`, codex default model
+updated from `gpt-5.6-terra` to `gpt-5.6-luna`, audit profile model changed
+to `glm-4.7`) alongside the AGY-specific assertions. These corrections match
+the existing committed provider catalogues and are correct. They are bundled
+into the AGY patch rather than split into a separate housekeeping commit.
+
+## Plan timeline
+
+| Date | Event |
+| --- | --- |
+| 2026-07-24 | Initial plan approval (`745668f`) |
+| 2026-07-24 | Review v1 rejected (missing Release 3 gates and evidence) |
+| 2026-07-24 | Review follow-up v1: ran authenticated gate, archived evidence, strengthened `projectMatchesTarget` assertion |
+| 2026-07-24 | Review v2 rejected (unapproved D6 rewrite, opencode.yaml comma bug, evidence fidelity) |
+| 2026-07-24 | Review follow-up v2: reverted `defaultEffort`, restored D6 to approved, fixed opencode.yaml comma bug, enriched evidence, added no-effort test path, added AGY effort resolution test |

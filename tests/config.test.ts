@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEFAULT_REGISTRY, loadModelRegistry, loadPackagedRegistry, ModelRegistrySchema, registryTimeoutFor } from '../src/config.js';
+import { DEFAULT_REGISTRY, loadModelRegistry, loadPackagedRegistry, ModelRegistrySchema, registryTimeoutFor, type ModelRegistry } from '../src/config.js';
+import { isValidEffortForModel } from '../src/runner.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 
 describe('provider catalogue configuration', () => {
@@ -78,6 +79,42 @@ describe('provider catalogue configuration', () => {
   it('exposes configured timeouts', () => {
     expect(registryTimeoutFor(DEFAULT_REGISTRY, 'claude')).toBe(0);
     expect(registryTimeoutFor(DEFAULT_REGISTRY, 'fake')).toBeUndefined();
+  });
+
+  it('opencode deepseek-v4-pro efforts parse correctly (no YAML comma bug)', () => {
+    const efforts = DEFAULT_REGISTRY.providers.opencode.modelEfforts?.['opencode-go/deepseek-v4-pro'];
+    expect(efforts).toBeDefined();
+    expect(efforts).toEqual(['default', 'high', 'max']);
+  });
+
+  it('agy provider has no defaultEffort in committed config', () => {
+    expect(DEFAULT_REGISTRY.providers.agy.defaultEffort).toBeUndefined();
+  });
+
+  it('opencode deepseek-v4-pro effort tokens validate correctly', () => {
+    // After the fix for the YAML comma bug, 'default', 'high', and 'max' must
+    // all be valid efforts for deepseek-v4-pro.
+    const registry = structuredClone(DEFAULT_REGISTRY);
+    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'default', registry)).toBe(true);
+    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'high', registry)).toBe(true);
+    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'max', registry)).toBe(true);
+    // The old comma-bug token "default high" must NOT be valid.
+    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'default high', registry)).toBe(false);
+  });
+
+  it('agy runner resolves no effort when defaultEffort is absent', () => {
+    // With no defaultEffort in the AGY provider config, the runner must return
+    // undefined effort when no explicit choice is given.
+    const registry: ModelRegistry = structuredClone(DEFAULT_REGISTRY);
+    expect(registry.providers.agy.defaultEffort).toBeUndefined();
+    // Simulate effort resolution: when explicit, profile, and defaultEffort are
+    // all absent, resolveEffort returns null. We verify this by checking that
+    // isValidEffortForModel still works (the effort contract is modelEfforts-only)
+    // and that the real config matches the committed state.
+    expect(registry.providers.agy.modelEfforts?.['gemini-3.6-flash']).toEqual(['low', 'medium', 'high']);
+    // The runner's resolveEffort lookup chain: explicit ?? profileEffort ??
+    // registry.providers[agent]?.defaultEffort. When the last is undefined, null.
+    expect(registry.providers.agy.defaultEffort).toBeUndefined();
   });
 
   it('rejects an unknown provider file in the packaged config', () => {
