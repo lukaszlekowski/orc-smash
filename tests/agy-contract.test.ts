@@ -104,7 +104,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     const planSpec = config.manifest.loops['plan']!;
 
     const result = await runLoop(tempDir, 'plan', planSpec, config, {
-      'plan-audit': { agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' }
+      'plan-audit': { agent: 'agy', model: 'gemini-3.6-flash' }
     }, {
       maxIterations: 1,
       registry,
@@ -125,7 +125,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     const planSpec = config.manifest.loops['plan']!;
 
     const result = await runLoop(tempDir, 'plan', planSpec, config, {
-      'plan-audit': { agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' }
+      'plan-audit': { agent: 'agy', model: 'gemini-3.6-flash' }
     }, {
       maxIterations: 1,
       registry,
@@ -146,7 +146,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     const config = loadConfig(tempDir);
     const auditContent =
       '---\nloop: plan\nskill: plan-audit\nkind: audit\nrole: auditor\nversion: 1\n' +
-      'agent: agy\nmodel: Gemini 3.5 Flash (Medium)\ntarget: docs/dev/plan.md\npriorAudit: none\n' +
+      'agent: agy\nmodel: gemini-3.6-flash\ntarget: docs/dev/plan.md\npriorAudit: none\n' +
       'timestamp: 2026-07-01T00:00:00.000Z\n---\n\n# Plan Audit\n\n## Verdict\n\nAPPROVED\n';
     writeFileSync(join(tempDir, 'docs/dev/plan-audit-v1-agy.md'), auditContent);
     writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Existing plan\n');
@@ -158,7 +158,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
       maxIterations: 1,
       registry,
       output: mockOutput,
-      globalOverrides: { agent: 'agy', model: 'Gemini 3.5 Flash (Medium)' }
+      globalOverrides: { agent: 'agy', model: 'gemini-3.6-flash' }
     });
 
     expect(result.success).toBe(false);

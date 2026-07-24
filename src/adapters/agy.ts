@@ -1,6 +1,26 @@
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  readFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
 import { spawnAgentProcess, resolveAgyTimeoutMs, type ProcessRunner } from './utils.js';
 import type { SpawnRuntime } from './process-group.js';
+import {
+  assertAgyResumedIdentity,
+  decodeAgySession,
+  encodeAgySession,
+  parseAgyInvocationLog,
+  type AgySessionIdentity,
+} from './agy-session.js';
+
+export const AGY_CAPTURE_LOG_PREFIX = 'agy-capture-';
+const AGY_CAPTURE_LOG_PATTERN = /^agy-capture-[^/]+\.log$/;
 
 /**
  * Bounded auth-failure detection for the Antigravity `agy` CLI.
@@ -81,49 +101,149 @@ export interface CreateAgyAdapterOptions {
    */
   processRunner?: ProcessRunner;
   groupRuntime?: SpawnRuntime;
+  /** Test seam for keeping capture logs in an isolated temporary directory. */
+  captureDirectory?: string;
+}
+
+export interface SweepAgyCaptureLogsOptions {
+  directory?: string;
+  timeoutMs: number;
+  nowMs?: number;
+}
+
+/**
+ * Reclaim only stale AGY capture logs. The watchdog-conditional horizon means a
+ * live run bounded by W cannot reach the 2W cutoff, while disabled watchdogs
+ * leave OS-managed temporary cleanup as the benign fallback.
+ */
+export function sweepOrphanedAgyCaptureLogs(options: SweepAgyCaptureLogsOptions): void {
+  if (options.timeoutMs <= 0) return;
+
+  const directory = options.directory ?? tmpdir();
+  const cutoffMs = (options.nowMs ?? Date.now()) - (2 * options.timeoutMs);
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return;
+  }
+
+  for (const name of names) {
+    if (!AGY_CAPTURE_LOG_PATTERN.test(name)) continue;
+    const path = join(directory, name);
+    try {
+      const stats = statSync(path);
+      if (!stats.isFile() || stats.mtimeMs >= cutoffMs) continue;
+      unlinkSync(path);
+    } catch {
+      // A concurrent run may remove or rotate a file between the checks. The
+      // sweep is best-effort and must never turn cleanup into a run failure.
+    }
+  }
+}
+
+function allocateCaptureLogPath(directory: string): string {
+  return join(directory, `${AGY_CAPTURE_LOG_PREFIX}${randomUUID()}.log`);
+}
+
+function cleanupCaptureLog(path: string | undefined): void {
+  if (!path || !existsSync(path)) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    // Cleanup is best effort; the bounded orphan sweep handles interrupted runs.
+  }
+}
+
+function captureLogArg(args: string[]): string {
+  const index = args.indexOf('--log-file');
+  const path = index >= 0 ? args[index + 1] : undefined;
+  if (!path) throw new Error('AGY command did not allocate a capture log path.');
+  return path;
+}
+
+function sessionError(result: RunResult, message: string): RunResult {
+  const error: RunError = { kind: 'config', message };
+  return { ...result, error };
 }
 
 export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapter {
   const defaultTimeoutMs = opts.defaultTimeoutMs;
   const processRunner = opts.processRunner;
   const groupRuntime = opts.groupRuntime;
+  const captureDirectory = opts.captureDirectory ?? tmpdir();
+
+  const buildRun = (input: RunInput): { command: string; args: string[] } => {
+    const captureLogPath = allocateCaptureLogPath(captureDirectory);
+    const args = [
+      '-p',
+      input.prompt,
+      '--model',
+      input.model,
+    ];
+
+    if (input.effort) {
+      args.push('--effort', input.effort);
+    }
+
+    if (input.continuity?.mode === 'resumed') {
+      const identity = decodeAgySession(input.continuity.sessionId ?? '');
+      args.push('--project', identity.projectId, '--conversation', identity.conversationId);
+    } else {
+      args.push('--new-project');
+    }
+
+    args.push('--log-file', captureLogPath, '--dangerously-skip-permissions');
+    return { command: 'agy', args };
+  };
+
   return {
     name: 'agy',
-    capabilities: { resumeSession: false, effort: false },
+    capabilities: { resumeSession: true, effort: true },
 
-    buildRun(input: RunInput): { command: string; args: string[] } {
-      return {
-        command: 'agy',
-        args: [
-          '-p',
-          input.prompt,
-          '--model',
-          input.model,
-          '--dangerously-skip-permissions'
-        ]
-      };
-    },
+    buildRun,
 
     async run(input: RunInput): Promise<RunResult> {
-      const { command, args } = this.buildRun(input);
-      // agy is config-only: timeouts.agy > built-in 0; no env var. No CLI timeout
-      // flag — the deadline is enforced by spawnAgentProcess lifecycle options.
-      const result = await spawnAgentProcess(command, args, input.cwd, {
-        agent: this.name,
-        model: input.model,
-        skillId: input.skillId,
-        version: input.version,
-        onLifecycle: input.onLifecycle,
-        timeoutMs: resolveAgyTimeoutMs({ defaultTimeoutMs }),
-        spawnRuntime: groupRuntime ?? input.spawnRuntime,
-        ownership: input.ownership
-      }, processRunner);
+      const timeoutMs = resolveAgyTimeoutMs({ defaultTimeoutMs });
+      sweepOrphanedAgyCaptureLogs({ directory: captureDirectory, timeoutMs });
 
-      // Post-process auth-fallback detection. This runs only when no other error
-      // (spawn/timeout/nonzero-exit) already classified the run; it sets a
-      // structured `auth` error so the loop can quarantine any resolved artifact.
-      // Detection only — no path resolution or filesystem mutation here.
-      if (!result.error) {
+      let command: string;
+      let args: string[];
+      try {
+        ({ command, args } = buildRun(input));
+      } catch (error) {
+        return {
+          stdout: '',
+          stderr: '',
+          exitCode: 1,
+          error: {
+            kind: 'config',
+            message: `AGY session configuration is invalid; no provider was spawned: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        };
+      }
+
+      const captureLogPath = captureLogArg(args);
+      try {
+        // agy is config-only: timeouts.agy > built-in 0; no env var. No CLI timeout
+        // flag — the deadline is enforced by spawnAgentProcess lifecycle options.
+        const result = await spawnAgentProcess(command, args, input.cwd, {
+          agent: 'agy',
+          model: input.model,
+          skillId: input.skillId,
+          version: input.version,
+          onLifecycle: input.onLifecycle,
+          timeoutMs,
+          spawnRuntime: groupRuntime ?? input.spawnRuntime,
+          ownership: input.ownership
+        }, processRunner);
+
+        // Existing transport, watchdog, ownership, and nonzero-exit outcomes
+        // retain precedence over auth and session parsing.
+        if (result.error || result.exitCode !== 0) return result;
+
+        // Detection only — the invocation log is intentionally not included in
+        // this existing stdout/stderr-only auth contract.
         if (isAgyAuthFailure(result.stdout, result.stderr ?? '')) {
           const err: RunError = {
             kind: 'auth',
@@ -132,8 +252,25 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
           };
           return { ...result, error: err };
         }
+
+        let actual: AgySessionIdentity;
+        try {
+          actual = parseAgyInvocationLog(readFileSync(captureLogPath, 'utf8'));
+          if (input.continuity?.mode === 'resumed') {
+            const expected = decodeAgySession(input.continuity.sessionId ?? '');
+            assertAgyResumedIdentity(expected, actual);
+          }
+        } catch (error) {
+          return sessionError(
+            result,
+            `AGY did not return a valid session identity; the successful response is not resumable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
+        return { ...result, sessionId: encodeAgySession(actual) };
+      } finally {
+        cleanupCaptureLog(captureLogPath);
       }
-      return result;
     }
   };
 }

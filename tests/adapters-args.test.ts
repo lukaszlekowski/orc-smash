@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { opencodeAdapter } from '../src/adapters/opencode.js';
 import { codexAdapter } from '../src/adapters/codex.js';
 import { claudeAdapter } from '../src/adapters/claude.js';
-import { agyAdapter } from '../src/adapters/agy.js';
+import { createAgyAdapter } from '../src/adapters/agy.js';
+import { encodeAgySession } from '../src/adapters/agy-session.js';
+import { mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 describe('Adapter arguments builders', () => {
   const input = {
@@ -173,17 +177,44 @@ describe('Adapter arguments builders', () => {
     ]);
   });
 
-  it('builds correct arguments for agy and never includes a CLI timeout flag', () => {
-    const build = agyAdapter.buildRun(input);
+  it('builds correct fresh arguments for agy and never includes a CLI timeout flag', () => {
+    const captureDirectory = join(tmpdir(), `orc-agy-args-${Date.now()}`);
+    mkdirSync(captureDirectory, { recursive: true });
+    const build = createAgyAdapter({ captureDirectory }).buildRun({ ...input, model: 'gemini-3.6-flash', effort: 'low' });
     expect(build.command).toBe('agy');
-    expect(build.args).toEqual([
-      '-p',
-      'My test prompt',
-      '--model',
-      'my-model-123',
-      '--dangerously-skip-permissions'
+    expect(build.args.slice(0, 7)).toEqual([
+      '-p', 'My test prompt',
+      '--model', 'gemini-3.6-flash',
+      '--effort', 'low',
+      '--new-project',
     ]);
+    expect(build.args).toContain('--log-file');
+    expect(build.args).toContain('--dangerously-skip-permissions');
     // Timeout is harness-owned via spawnAgentProcess lifecycle options; no CLI flag.
     expect(build.args.some((a) => /timeout/i.test(a))).toBe(false);
+    rmSync(captureDirectory, { recursive: true, force: true });
+  });
+
+  it('builds correct resumed arguments for agy with explicit effort and no --continue', () => {
+    const captureDirectory = join(tmpdir(), `orc-agy-args-resumed-${Date.now()}`);
+    mkdirSync(captureDirectory, { recursive: true });
+    const sessionId = encodeAgySession({
+      projectId: '11111111-1111-4111-8111-111111111111',
+      conversationId: '22222222-2222-4222-8222-222222222222',
+    });
+    const build = createAgyAdapter({ captureDirectory }).buildRun({
+      ...input,
+      model: 'gemini-3.6-flash',
+      effort: 'high',
+      continuity: { mode: 'resumed', sessionId },
+    });
+    expect(build.args).toContain('--project');
+    expect(build.args).toContain('11111111-1111-4111-8111-111111111111');
+    expect(build.args).toContain('--conversation');
+    expect(build.args).toContain('22222222-2222-4222-8222-222222222222');
+    expect(build.args).not.toContain('--new-project');
+    expect(build.args).not.toContain('--continue');
+    expect(build.args.filter((arg) => arg === '--effort')).toHaveLength(1);
+    rmSync(captureDirectory, { recursive: true, force: true });
   });
 });

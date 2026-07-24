@@ -94,6 +94,13 @@ use each provider's autonomy flag. Watchdogs are config-driven: opencode uses
 `OPENCODE_RUN_TIMEOUT_MS` > `timeouts.opencode` > its 10-minute default;
 claude, codex, and agy default to no watchdog unless configured.
 
+AGY fresh invocations bind the canonical target with `cwd` plus `--new-project`.
+Resumption uses the exact `--project`/`--conversation` pair from its opaque
+`agy:v1:<project-uuid>:<conversation-uuid>` session token; it never uses
+`--continue`. The pair is parsed from a unique temporary `--log-file`, which is
+cleaned after terminal results. AGY exposes logical model slugs and separate
+Gemini effort choices; provider default omits `--effort`.
+
 `SIGINT`/`SIGTERM` writes a marker under the active project root, terminates
 active children through the authorized process-group kill gate, and exits with
 the conventional signal code. A rerun quarantines partial and late artifacts
@@ -117,8 +124,17 @@ pnpm test
 ```
 
 Deterministic tests use the test-only `fake` adapter. `opencode`, `codex`, and
-`claude` have env-gated real-provider contract suites. `agy` has deterministic
-adapter/seam coverage and is manually verified from an authenticated shell.
+`claude` have env-gated real-provider contract suites. AGY has deterministic
+adapter/seam coverage and an explicitly gated authenticated target/decoy contract:
+
+```bash
+ORC_AGY_AUTHENTICATED_CONTRACT=1 \
+ORC_AGY_CONTRACT_EVIDENCE=/tmp/orc-smash-agy-evidence.json \
+pnpm vitest run tests/agy-authenticated.contract.test.ts
+```
+
+The AGY command must run from an already-authenticated operator shell; it writes
+only a redacted evidence record, never raw invocation logs or credentials.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the
 architecture, the active audited [docs/dev/plan.md](./docs/dev/plan.md) for

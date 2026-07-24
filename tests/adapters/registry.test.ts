@@ -14,6 +14,7 @@ describe('Adapter Registries', () => {
     expect(() => getAdapter(registry, 'fake')).toThrow(/unknown agent 'fake'/);
     // agy is selectable as a fourth real provider.
     expect(getAdapter(registry, 'agy').name).toBe('agy');
+    expect(getAdapter(registry, 'agy').capabilities).toEqual({ resumeSession: true, effort: true });
   });
 
   it('test registry includes fake', () => {

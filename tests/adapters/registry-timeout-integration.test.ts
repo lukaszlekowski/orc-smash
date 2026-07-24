@@ -190,7 +190,7 @@ describe('config-driven codex/claude timeouts reach the adapter through the prod
     expect(registry.adapters.has('agy')).toBe(true);
     const adapter = registry.adapters.get('agy')!;
 
-    await adapter.run({ prompt: 'hi', model: 'Gemini 3.5 Flash (Medium)', cwd: tempDir });
+    await adapter.run({ prompt: 'hi', model: 'gemini-3.6-flash', cwd: tempDir });
 
     expect(captures).toHaveLength(1);
     expect(captures[0]!.timeoutMs).toBe(7777);

@@ -63,6 +63,10 @@ itself.
 - Avoid files such as `helpers.ts`, `common.ts`, or `misc.ts` unless the responsibility name is
   genuinely precise and durable.
 - Keep orchestration thin and keep provider-specific behavior behind adapters.
+- `src/adapters/agy-session.ts` is the purposeful AGY boundary for strict
+  project/conversation token encoding, bounded 1.1.6 capture-log parsing, and
+  resumed-identity equality; generic runner and provenance code treats its
+  `agy:v1:<project-uuid>:<conversation-uuid>` result as opaque.
 
 ## 2. Runners are per-skill; four real adapters behind one seam
 
@@ -97,15 +101,25 @@ itself.
 - **Model ID namespaces are strictly validated**: `runner.ts` resolves model names, and opencode
   specifically enforces namespace patterns (e.g. `opencode-go/` or `opencode/`) via the
   `isOpencodeModelId` regex-based predicate to prevent cross-agent model leakage. `agy` accepts
-  **only** the exact human-readable names configured in `providers.agy` (a strict allow-list with
-  input trimming — no namespace fallback; `gpt-5.5`, `opencode/...`, `claude-...` are rejected).
+  **only** the exact logical slugs configured in `providers.agy` (a strict allow-list with input
+  trimming — no namespace fallback; `gpt-5.5`, `opencode/...`, `claude-...`, and the old
+  effort-folded display names are rejected). Gemini effort is a separate configured choice;
+  provider default omits `--effort`.
+- **`agy` workspace and continuity binding**: every fresh invocation keeps the canonical target
+  as subprocess `cwd` and also supplies `--new-project`; every resumed invocation supplies only
+  the exact persisted `--project` and `--conversation` pair, never `--continue`. The adapter
+  captures the pair from a unique temporary `--log-file`, returns the opaque composite session
+  token, and cleans the log on terminal results. A finite AGY watchdog enables a prefix-scoped
+  orphan sweep at the `2 × timeout` horizon; disabled watchdogs leave OS-managed temp cleanup as
+  the bounded fallback.
 - **`agy` auth caveat**: when unauthenticated, `agy` can ignore `--model`, fall back to a default
   provider, and exit 0 — which would otherwise look like success. `src/adapters/agy.ts` detects
   this with a bounded phrase list (`AGY_AUTH_FAILURE_PATTERNS` over combined stdout+stderr; benign
   substrings like `author`/`authority`/`authentication succeeded` do not match) and returns a
   structured `error.kind === 'auth'`. The adapter owns detection only; `src/loop.ts` owns the
   artifact cleanup (it is the only module that knows the resolved output path) and quarantines the
-  partial artifact so no resumable `docs/dev/*-vN-agy.md` file remains.
+  partial artifact so no resumable `docs/dev/*-vN-agy.md` file remains. Capture-log text is never
+  fed to this matcher.
 - **Watchdog timeout policy**: Runs are protected by config-driven execution timeouts. For `opencode`,
   the watchdog timeout is determined by the following precedence: `OPENCODE_RUN_TIMEOUT_MS` environment
   variable > registry configuration `timeouts.opencode` > built-in default of `600000` ms (10 minutes).
@@ -159,7 +173,7 @@ itself.
 - **Per-skill continuity:** continuity is selected per skill after provider/model/
   effort selection and is enabled only when the selected adapter declares
   `resumeSession`. Unsupported choices remain visible with a reason. Session IDs
-  are captured from provider streams and persisted in artifact provenance;
+  are captured through provider-owned output/capture channels and persisted in artifact provenance;
   resumption never uses `--last`, shell history, or a provider-name allowlist.
   The legacy `--audit-continuity` and `--codex-audit-continuity` flags are
   removed; do not reintroduce audit-only continuity policy. Second opinions
@@ -216,9 +230,10 @@ itself.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The
   contract-gated real provider paths are `opencode`, `codex`, and `claude`; `agy` remains a real
-  adapter but is verified through deterministic seam coverage plus manual operator verification from
-  an already-authenticated shell because its browser login flow is not suitable for an automated
-  contract gate. `codex`/`claude`/`agy` watchdog timeouts and `agy` auth-failure cleanup are also
-  proven by deterministic seam tests plus a loop-level contract.
+  adapter but is verified through deterministic seam coverage plus the explicitly gated
+  `tests/agy-authenticated.contract.test.ts` target/decoy workspace and write-capable capture-log
+  checks from an already-authenticated shell because its browser login flow is not suitable for an
+  automated contract gate. `codex`/`claude`/`agy` watchdog timeouts and `agy` auth-failure cleanup
+  are also proven by deterministic seam tests plus a loop-level contract.
 - A GitHub Actions CI workflow runs typecheck and deterministic tests on push and pull requests,
   while real-provider verification remains an env-gated/manual release sign-off requirement.
