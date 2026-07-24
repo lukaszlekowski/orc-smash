@@ -130,9 +130,15 @@ Manifest validation requires:
 - `evaluate.output.contract: decision-artifact` with configured accepted and
   retry tokens;
 - `repair.output.contract` to be a non-decision contract supported by repair;
-  and
 - task output contracts to remain `completion-artifact` or
-  `required-artifact`.
+  `required-artifact`;
+- a `required-artifact` `validator` to name a supported validator — an unknown
+  name fails manifest load instead of being silently ignored
+  (`implement-ledger` is the only supported name) — and no `validator` on
+  `decision-artifact` or `completion-artifact` contracts, where it would be
+  silently unused; and
+- binding IDs unique across loops and tasks, so ID-keyed state maps stay
+  unambiguous by kind.
 
 The runtime must no longer treat `valid` or `completed` evaluation output as
 approval.
@@ -257,7 +263,9 @@ Rendering modules consume typed reasons; they do not reimplement decisions.
 2. Add binding-aware stage completion and historical-parent rules.
 3. Extend or replace `ArtifactRecord` so phase and binding semantics survive.
 4. Constrain approval-loop evaluate/repair contract combinations at manifest
-   load.
+   load, reject unknown or misplaced `validator` names, and reject loop/task
+   binding-ID collisions — each fails closed at load instead of being silently
+   ignored.
 5. Narrow binding-engine evaluation acceptance to normalized `accepted`.
 6. Add unit matrices before wiring operator actions.
 
@@ -399,6 +407,10 @@ No release may temporarily make repair artifacts eligible.
 - Approval evaluate with completion-artifact is rejected.
 - Approval evaluate with required-artifact is rejected.
 - Approval repair with decision-artifact is rejected.
+- An unknown `validator` name on a required-artifact is rejected at load.
+- A `validator` on a decision-artifact or completion-artifact contract is
+  rejected at load.
+- A loop and a task sharing the same textual ID are rejected at load.
 - Packaged plan and review loops remain valid.
 - Tasks retain completion-artifact and required-artifact support.
 
@@ -425,6 +437,9 @@ No release may temporarily make repair artifacts eligible.
   focused spy/seam assertion that `pipelineStageCandidates` obtains loop
   completion only from `completionEvidenceForStage` and excludes every repair
   artifact regardless of `completionOutcome`.
+- Add `tests/manifest.test.ts` cases proving unknown `validator` names,
+  validators on decision/completion contracts, and loop/task binding-ID
+  collisions each fail at load while the packaged manifest stays valid.
 
 ## Verification commands
 
@@ -457,7 +472,9 @@ manual authenticated verification policy.
 2. Approval-loop successor eligibility comes only from
    `evaluate/accepted`.
 3. Repair completion remains resumable but never successor-eligible.
-4. Both completion-artifact and required-artifact task progression pass.
+4. Both completion-artifact and required-artifact task progression pass;
+   unknown or misplaced validator names and loop/task binding-ID collisions
+   fail at manifest load.
 5. Display, execution recheck, recovery, and lineage use the intended domain
    rule with explicit parity tests.
 6. Exact-edge replay is suppressed without collapsing distinct accepted
@@ -469,6 +486,39 @@ manual authenticated verification policy.
 9. Second-opinion automatic repair is unchanged.
 10. Typecheck, build, deterministic tests, focused regressions, and release
     contract gates pass.
+
+## Deferred hardening (closed second-opinion findings)
+
+The second-opinion audit chain on this plan (v3–v5; artifacts removed from the
+audit trail) raised the following items. They are recorded here as
+accepted-risk deferrals matched to current single-operator usage — not as
+requirements of this plan — and each may become its own planned issue if usage
+grows into it:
+
+- **Provider-spawn authorization seam.** A one-shot
+  `authorizeStageContinuation` callback threaded through `LoopOptions`,
+  `runBinding`, and `executeLoopStep`, plus a first-class `eligibility-lost`
+  outcome route. Deferred: D7's rescan-and-recompute recheck in `smashAction`
+  immediately before `adapter.run(...)` covers the interactive single-operator
+  risk; the callback threading and new outcome route are disproportionate to
+  current usage.
+- **Exact-`chainId` multi-chain recovery.** Per-chain resumable candidates
+  replacing the boolean `bindingHasInProgressChain`, with an explicit operator
+  choice when one binding has several resumable chains. Deferred: the reducer
+  classifies each chain correctly on its own artifacts; multiple concurrently
+  resumable chains on one binding are rare in single-operator use.
+- **Permutation-invariant chain reduction.** Deriving causal order from
+  parent-identity links independent of scanner order. Deferred: the scanner
+  already validates immediate-parent linkage within each chain and fails closed
+  on inconsistency; adversarial mtime or copied-artifact ordering is outside
+  the current threat model.
+- **Discriminated candidate-result union.** Per-reason required/forbidden
+  field cardinality, reason-precedence tables, and canonical-sort contracts.
+  Deferred: the typed `reason`/`unavailableReason` code (Target architecture B)
+  carries the diagnostic without the cardinality machinery.
+
+These items are closed for the approval of this plan; reopening any of them
+requires its own research and plan cycle.
 
 ## Operator safety until release
 
