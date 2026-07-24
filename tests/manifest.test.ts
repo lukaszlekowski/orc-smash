@@ -174,4 +174,59 @@ describe('v1 manifest contract', () => {
       },
     })).toThrow(/not referenced as a source in inputs/);
   });
+
+  it('enforces approval phases, supported validators, and a unique loop/task binding namespace', () => {
+    const schema = buildManifestSchema(DEFAULT_REGISTRY);
+    const base = {
+      schemaVersion: 1 as const,
+      roles: { auditor: 'roles/auditor.md' },
+      skills: { audit: { file: 'skills/a.md', role: 'auditor', runnerProfile: 'audit' } },
+      loops: {
+        check: {
+          type: 'approval-loop' as const,
+          target: { path: '.', kind: 'worktree' as const },
+          inputs: [],
+          evaluate: {
+            skill: 'audit',
+            output: {
+              pattern: 'docs/eval-v{version}-{provider}.md',
+              contract: 'decision-artifact' as const,
+              decision: { heading: 'Decision', accepted: 'PASS', retry: 'FAIL' },
+            },
+          },
+          repair: {
+            skill: 'audit',
+            output: { pattern: 'docs/repair-v{version}-{provider}.md', contract: 'completion-artifact' as const },
+          },
+        },
+      },
+      tasks: {},
+      pipelines: {},
+    };
+
+    expect(() => schema.parse({
+      ...base,
+      loops: { check: { ...base.loops.check, evaluate: { ...base.loops.check.evaluate, output: { pattern: 'docs/eval-v{version}-{provider}.md', contract: 'completion-artifact' as const } } } },
+    })).toThrow(/evaluate.*decision-artifact/i);
+
+    expect(() => schema.parse({
+      ...base,
+      loops: { check: { ...base.loops.check, repair: { ...base.loops.check.repair, output: { pattern: 'docs/repair-v{version}-{provider}.md', contract: 'decision-artifact' as const, decision: { heading: 'Decision', accepted: 'PASS', retry: 'FAIL' } } } } },
+    })).toThrow(/repair.*non-decision/i);
+
+    expect(() => schema.parse({
+      ...base,
+      tasks: { other: { skill: 'audit', target: { path: '.', kind: 'worktree' as const }, inputs: [], output: { pattern: 'docs/task-v{version}-{provider}.md', contract: 'required-artifact' as const, validator: 'missing-validator' } } },
+    })).toThrow(/Unknown output validator/);
+
+    expect(() => schema.parse({
+      ...base,
+      loops: { check: { ...base.loops.check, evaluate: { ...base.loops.check.evaluate, output: { ...base.loops.check.evaluate.output, validator: 'implement-ledger' } } } },
+    })).toThrow(/only supported for required-artifact/);
+
+    expect(() => schema.parse({
+      ...base,
+      tasks: { check: { skill: 'audit', target: { path: '.', kind: 'worktree' as const }, inputs: [], output: { pattern: 'docs/task-v{version}-{provider}.md', contract: 'required-artifact' as const } } },
+    })).toThrow(/both a loop and a task/);
+  });
 });

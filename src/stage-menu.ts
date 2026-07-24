@@ -9,6 +9,14 @@ export interface SuggestedStageAction {
   successorStageId: string;
   predecessorStageId: string;
   predecessorArtifactIdentity: string;
+  predecessorBindingKind?: 'loop' | 'task';
+  predecessorBindingId?: string;
+  predecessorPhase?: 'evaluate' | 'repair' | 'task';
+  predecessorChainId?: string;
+  normalizedResult?: string;
+  resultFingerprint?: string;
+  targetFingerprintNow?: string | null;
+  reason?: string;
   label: string;
 }
 

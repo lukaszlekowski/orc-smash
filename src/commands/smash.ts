@@ -15,6 +15,7 @@ import {
   promptTaskMenu,
   promptTaskDetailConfirmation,
   promptStatusAcknowledgement,
+  promptRunners,
   type TaskDetailView,
 } from '../interactive.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
@@ -25,10 +26,13 @@ import type { CommandResult } from './types.js';
 import type { LoopBinding, TaskBinding, V1Manifest } from '../manifest.js';
 import { configureSpawnDebug, debugHarnessEvent } from '../debug-spawn.js';
 import { makeRunEvent } from '../run-event.js';
-import { continueRunContext, mintRunContext, type RunContext, recoverInProgressRun } from '../pipeline-state.js';
+import { continueRunContext, mintRunContext, type RunContext } from '../pipeline-state.js';
 import { bindingHasInProgressChain, bindingHasCompletedAcceptance, resolveDefaultLoop } from '../loop-selector.js';
 import { renderStatusPanel } from './status.js';
 import { pipelineSuggestions } from '../next-step.js';
+import { artifactRecordFromStep } from '../pipeline-stage-state.js';
+import { approvalNextPhase, resumableApprovalChain } from '../approval-loop-state.js';
+import type { Step } from '../state.js';
 import { buildTopLevelMenu, buildLoopSubmenu, buildTaskMenu, pipelineLaunchContexts } from '../stage-menu.js';
 import type { SuggestedStageAction } from '../stage-menu.js';
 import { buildProjectSnapshotView } from '../project-snapshot-view.js';
@@ -73,6 +77,7 @@ interface SmashRunSetup {
   registry: AgentRegistry;
   runnerOverrides: RunnerOverrideMap;
   runContext?: RunContext;
+  selectedCandidate?: SuggestedStageAction;
 }
 
 type ResolveResult =
@@ -151,6 +156,20 @@ function bindingSkills(selected: SelectedBinding): string[] {
     : [selected.binding.evaluate.skill, selected.binding.repair.skill];
 }
 
+function recoverResumableLoopChain(steps: Step[]): ReturnType<typeof resumableApprovalChain> {
+  const chains = new Map<string, ReturnType<typeof artifactRecordFromStep>[]>();
+  for (const step of steps) {
+    const record = artifactRecordFromStep(step);
+    if (record.bindingKind !== 'loop') continue;
+    const chain = chains.get(record.chainId) ?? [];
+    chain.push(record);
+    chains.set(record.chainId, chain);
+  }
+  return [...chains.values()]
+    .map(chain => resumableApprovalChain(chain))
+    .find(value => value !== null) ?? null;
+}
+
 async function resolveSmashRunSetup(
   projectRoot: string,
   options: SmashOptions,
@@ -192,6 +211,7 @@ async function resolveSmashRunSetup(
   let selected: SelectedBinding;
   let pipelineStageId: string | undefined;
   let runContext: RunContext | undefined;
+  let selectedCandidate: SuggestedStageAction | undefined;
   const explicit = selectedFromOptions(config.manifest, options);
   if (explicit && 'error' in explicit) {
     const msg = `Error: ${explicit.error}`;
@@ -222,6 +242,7 @@ async function resolveSmashRunSetup(
     selected = selection.selected;
     runContext = selection.runContext;
     pipelineStageId = selection.pipelineStageId;
+    selectedCandidate = selection.candidate;
   }
 
   debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'binding-selected', detail: `${selected.kind}/${selected.id}`, result: 'pass' });
@@ -274,7 +295,39 @@ async function resolveSmashRunSetup(
   }
 
   const deferInteractiveRunnerSelection = isInteractive && !globalOverrides.agent && !globalOverrides.model;
-  if (!deferInteractiveRunnerSelection) {
+  if (deferInteractiveRunnerSelection && selectedCandidate) {
+    const interactiveRunners = await promptRunners(skills, config, registry, globalOverrides);
+    for (const skillId of [...new Set(skills)]) {
+      const picked = interactiveRunners[skillId];
+      if (!picked) {
+        const msg = `Error: no interactive runner selected for skill '${skillId}'.`;
+        options.output.error(msg);
+        return { errorResult: { exitCode: 1, message: msg } };
+      }
+      try {
+        const resolved = resolveRunner(skillId, config, globalOverrides, picked, runnerOverrides[skillId], options.effort);
+        validateRunnerCapabilities(resolved, registry);
+        runners[skillId] = resolved;
+        options.output.emit(makeRunEvent({
+          type: 'runner.resolved',
+          atMs: Date.now(),
+          skillId,
+          agent: resolved.agent,
+          model: resolved.model,
+          effort: resolved.effort,
+          effortSource: resolved.effortSource,
+          agentSource: resolved.agentSource,
+          modelSource: resolved.modelSource,
+          inheritedSession: resolved.inheritedSession,
+        }));
+      } catch (err: any) {
+        const msg = `Error: ${err.message}`;
+        options.output.emit(makeRunEvent({ type: 'runner.rejected', atMs: Date.now(), skillId, message: msg }));
+        options.output.error(msg);
+        return { errorResult: { exitCode: 1, message: msg } };
+      }
+    }
+  } else if (!deferInteractiveRunnerSelection) {
     for (const skillId of [...new Set(skills)]) {
       try {
         const resolved = resolveRunner(skillId, config, globalOverrides, undefined, runnerOverrides[skillId], options.effort);
@@ -328,6 +381,7 @@ async function resolveSmashRunSetup(
       registry,
       runnerOverrides,
       runContext: resolvedRunContext,
+      selectedCandidate,
     },
   };
 }
@@ -337,15 +391,23 @@ function buildSuggestedStageActions(projectRoot: string, manifest: V1Manifest): 
   const candidates = pipelineSuggestions(projectRoot, manifest);
   return candidates.map(c => {
     const relArtifact = relative(projectRoot, c.predecessorArtifactPath);
-    const decisionText = c.evidence.decision ?? c.evidence.completionOutcome ?? 'completed';
-    const matchText = c.stale ? 'stale' : 'valid';
-    const label = `Pipeline: ${c.pipelineId} | Run: ${c.pipelineRunId} | Successor: ${c.successorStageId} | Predecessor: ${c.predecessorStageId} | Artifact: ${relArtifact} | Identity: ${c.artifactIdentity.slice(0, 8)}... | Decision/Outcome: ${decisionText} | Fingerprint Match: ${matchText}`;
+    const decisionText = c.evidence.decision ?? c.evidence.completionOutcome ?? c.evidence.normalizedResult;
+    const matchText = c.reason === 'eligible' ? 'matched' : c.reason;
+    const label = `Pipeline: ${c.pipelineId} | Run: ${c.pipelineRunId} | Successor: ${c.successorStageId} | Predecessor: ${c.predecessorStageId} | Artifact: ${relArtifact} | Identity: ${c.artifactIdentity.slice(0, 8)}... | Binding/Phase: ${c.evidence.bindingKind}/${c.evidence.bindingId}/${c.evidence.phase} | Chain: ${c.evidence.chainId} | Decision/Outcome: ${decisionText} | Fingerprint: ${matchText}`;
     return {
       pipelineId: c.pipelineId,
       pipelineRunId: c.pipelineRunId,
       successorStageId: c.successorStageId,
       predecessorStageId: c.predecessorStageId,
       predecessorArtifactIdentity: c.artifactIdentity,
+      predecessorBindingKind: c.evidence.bindingKind,
+      predecessorBindingId: c.evidence.bindingId,
+      predecessorPhase: c.evidence.phase,
+      predecessorChainId: c.evidence.chainId,
+      normalizedResult: c.evidence.normalizedResult,
+      resultFingerprint: c.resultFingerprint,
+      targetFingerprintNow: c.targetFingerprintNow,
+      reason: c.reason,
       label,
     };
   });
@@ -378,7 +440,7 @@ export function resolveBindingForSuggested(
 }
 
 type InteractiveSelectionResult =
-  | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string }
+  | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string; candidate?: SuggestedStageAction }
   | { kind: 'exit'; reason: string }
   | { kind: 'retry' }
   | { kind: 'display' };
@@ -455,6 +517,7 @@ async function runInteractiveBindingSelection(
       return {
         kind: 'selected',
         selected: binding,
+        candidate: selected,
         runContext: mintRunContext({
           mode: 'stage-continuation',
           pipelineId: selected.pipelineId,
@@ -547,50 +610,38 @@ async function runInteractiveBindingSelection(
       const hasAccepted = bindingHasCompletedAcceptance(projectRoot, manifest, loopId);
       const loopMissing = snapshot.missingInputs.get(loopId);
 
-      // Compute continueDetail from the recovered chain when in-progress.
-      // Uses the manifest's next skill to resolve the correct runner for that
-      // skill (repair's runner when repair is next, evaluate's when evaluate
-      // is next), rather than copying the previous evaluator's runner.
+      // Compute continueDetail from the reducer's resumable state. The
+      // manifest's next skill resolves the correct runner for the next phase.
       let continueDetail: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string } | undefined;
       if (hasInProgressChain) {
-        const recovered = recoverInProgressRun(bindingSteps as any);
+        const recovered = recoverResumableLoopChain(bindingSteps);
         if (recovered) {
-          const lastEval = [...bindingSteps].reverse()
-            .find(s => s.kind === 'evaluate' && !s.unclassified);
-          if (lastEval && lastEval.decision === 'retry') {
+          const next = approvalNextPhase(recovered.state);
+          if (next?.phase === 'repair') {
             const repairSkillId = loopBinding.repair.skill;
             const repairSkill = config.manifest.skills[repairSkillId];
             const repairRunner = repairSkill ? resolveRunner(repairSkillId, config) : null;
             continueDetail = {
               phase: 'repair',
-              version: lastEval.version,
+              version: next.version,
               skillId: repairSkillId,
-              agent: repairRunner?.agent ?? lastEval.agent,
-              model: repairRunner?.model ?? lastEval.model,
-              effort: repairRunner?.effort ?? lastEval.effort,
-              sessionStrategy: repairRunner?.sessionStrategy ?? lastEval.sessionStrategy,
+              agent: repairRunner?.agent ?? '',
+              model: repairRunner?.model ?? '',
+              effort: repairRunner?.effort,
+              sessionStrategy: repairRunner?.sessionStrategy,
             };
-          } else if (lastEval) {
+          } else if (next?.phase === 'evaluate') {
             const evalSkillId = loopBinding.evaluate.skill;
             const evalSkill = config.manifest.skills[evalSkillId];
             const evalRunner = evalSkill ? resolveRunner(evalSkillId, config) : null;
             continueDetail = {
               phase: 'evaluate',
-              version: lastEval.version + 1,
+              version: next.version,
               skillId: evalSkillId,
-              agent: evalRunner?.agent ?? lastEval.agent,
-              model: evalRunner?.model ?? lastEval.model,
-              effort: evalRunner?.effort ?? lastEval.effort,
-              sessionStrategy: evalRunner?.sessionStrategy ?? lastEval.sessionStrategy,
-            };
-          } else if (recovered) {
-            const evalSkillId = loopBinding.evaluate.skill;
-            continueDetail = {
-              phase: 'evaluate',
-              version: 1,
-              skillId: evalSkillId,
-              agent: '',
-              model: '',
+              agent: evalRunner?.agent ?? '',
+              model: evalRunner?.model ?? '',
+              effort: evalRunner?.effort,
+              sessionStrategy: evalRunner?.sessionStrategy,
             };
           }
         }
@@ -607,10 +658,8 @@ async function runInteractiveBindingSelection(
       // Continue current loop – reuse the recovered chain identity
       if (subItemId === 'continue-current-loop') {
         if (!hasInProgressChain) continue;
-        const recovered = recoverInProgressRun(bindingSteps as any);
+        const recovered = recoverResumableLoopChain(bindingSteps);
         if (recovered) {
-          const lastValid = [...bindingSteps].reverse()
-            .find(s => !s.unclassified && s.artifactIdentity);
           return {
             kind: 'selected',
             selected: { kind: 'loop', id: loopId, binding: loopBinding },
@@ -620,7 +669,7 @@ async function runInteractiveBindingSelection(
               pipelineId: recovered.pipelineId,
               pipelineRunId: recovered.pipelineRunId,
               stageId: recovered.stageId,
-              parentArtifactIdentity: lastValid?.artifactIdentity ?? null,
+              parentArtifactIdentity: recovered.parentArtifactIdentity,
             }),
           };
         }
@@ -781,6 +830,24 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         const msg = `Ownership setup failed: ${err.message}`;
         options.output.error(msg);
         return finish({ exitCode: 2, message: msg }, { success: false, verdict: 'ownership-lost', errorKind: 'ownership' });
+      }
+
+      // Final eligibility decision for a suggested stage. This is deliberately
+      // after ownership setup and immediately before entering the shared run
+      // engine; no later eligibility-sensitive work follows it.
+      if (setup.selectedCandidate) {
+        const finalCandidates = pipelineSuggestions(projectRoot, setup.config.manifest);
+        const finalEligible = finalCandidates.some(candidate =>
+          candidate.pipelineId === setup.selectedCandidate!.pipelineId
+          && candidate.pipelineRunId === setup.selectedCandidate!.pipelineRunId
+          && candidate.successorStageId === setup.selectedCandidate!.successorStageId
+          && candidate.artifactIdentity === setup.selectedCandidate!.predecessorArtifactIdentity,
+        );
+        if (!finalEligible) {
+          const message = 'Selected pipeline stage lost eligibility before provider execution.';
+          options.output.error(`Error: ${message}`);
+          return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'eligibility-lost' });
+        }
       }
 
       let runResult: LoopReturn;

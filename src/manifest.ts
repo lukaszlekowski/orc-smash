@@ -53,6 +53,8 @@ export const TaskOutputSchema = z.object({
 
 export type TaskOutputSpec = z.infer<typeof TaskOutputSchema>;
 
+export const SUPPORTED_OUTPUT_VALIDATORS = ['implement-ledger'] as const;
+
 export const FileMapValueSchema = z.string();
 export const FilesSchema = z.record(z.string(), FileMapValueSchema);
 
@@ -176,6 +178,20 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
         });
       }
       validatePatternForContext(ctx, ['loops', loopId, stepKind, 'output', 'pattern'], step.output.pattern);
+      if (stepKind === 'evaluate' && step.output.contract !== 'decision-artifact') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['loops', loopId, stepKind, 'output', 'contract'],
+          message: `Approval-loop evaluate step '${loopId}.evaluate' must use decision-artifact contract.`,
+        });
+      }
+      if (stepKind === 'repair' && step.output.contract === 'decision-artifact') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['loops', loopId, stepKind, 'output', 'contract'],
+          message: `Approval-loop repair step '${loopId}.repair' must use a non-decision artifact contract.`,
+        });
+      }
       if (step.output.contract === 'decision-artifact') {
         if (!step.output.decision) {
           ctx.addIssue({
@@ -215,6 +231,7 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
           message: `Contract '${step.output.contract}' must not specify a decision config in loop '${loopId}.${stepKind}'.`,
         });
       }
+      validateOutputValidator(ctx, ['loops', loopId, stepKind, 'output'], step.output.contract, step.output.validator);
     }
 
     // 3. Validate inputs: source must be built-in or files: key
@@ -239,12 +256,26 @@ const V1ManifestSchema = BASE_V1_SCHEMA.superRefine((data, ctx) => {
       });
     }
     validatePatternForContext(ctx, ['tasks', taskId, 'output', 'pattern'], task.output.pattern);
+    validateOutputValidator(ctx, ['tasks', taskId, 'output'], task.output.contract, task.output.validator);
     for (let i = 0; i < task.inputs.length; i++) {
       const input = task.inputs[i]!;
       validateInputSource(ctx, ['tasks', taskId, 'inputs', i], input.source, task.files ?? {});
     }
     if (task.files) {
       validateFilesMap(ctx, ['tasks', taskId, 'files'], task.files, task.inputs);
+    }
+  }
+
+  // Loop/task IDs share the same binding namespace in artifact and pipeline
+  // identity.  Reject collisions at load time so ID-keyed state cannot become
+  // ambiguous by kind.
+  for (const taskId of Object.keys(data.tasks)) {
+    if (Object.prototype.hasOwnProperty.call(data.loops, taskId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tasks', taskId],
+        message: `Binding ID '${taskId}' is declared by both a loop and a task.`,
+      });
     }
   }
 
@@ -348,6 +379,30 @@ function validateFilesMap(
         message: `Files key '${key}' is defined in files: but not referenced as a source in inputs.`,
       });
     }
+  }
+}
+
+function validateOutputValidator(
+  ctx: z.RefinementCtx,
+  path: (string | number)[],
+  contract: OutputContract | TaskOutputContract,
+  validator: string | undefined,
+): void {
+  if (!validator) return;
+  if (contract !== 'required-artifact') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...path, 'validator'],
+      message: `Validator '${validator}' is only supported for required-artifact contracts.`,
+    });
+    return;
+  }
+  if (!(SUPPORTED_OUTPUT_VALIDATORS as readonly string[]).includes(validator)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...path, 'validator'],
+      message: `Unknown output validator '${validator}'. Supported validators: ${SUPPORTED_OUTPUT_VALIDATORS.join(', ')}.`,
+    });
   }
 }
 

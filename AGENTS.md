@@ -37,6 +37,19 @@ itself.
   the durable source of run, chain, stage, runner, effort, session, and lineage
   state. Old artifacts without the v1 identity contract are unclassified rather
   than specially migrated.
+- Approval-loop progression is phase-specific: only a classified `evaluate`
+  artifact normalized to `accepted` unlocks a pipeline successor. Completed or
+  valid repair artifacts are resumable evidence for evaluation, never approval
+  or successor evidence; task progression remains contract-specific.
+- `approval-loop-state.ts` is the sole reducer and next-phase owner for
+  approval chains. `pipeline-stage-state.ts` owns binding-aware completion
+  evidence, current candidate eligibility, historical continuation validation,
+  exact-edge replay suppression, and typed reasons consumed by status, menus,
+  and the final pre-spawn gate.
+- Exact predecessor edges are single-use, distinct accepted chains remain
+  independent, and historical successors are validated from their recorded
+  binding/phase/parent identity. Later unrelated activity or target drift may
+  suppress a new candidate but never rewrites valid historical lineage.
 - Keep this file, `README.md`, and `docs/architecture/overview.md` synchronized
   with `docs/dev/plan.md` as releases land.
 

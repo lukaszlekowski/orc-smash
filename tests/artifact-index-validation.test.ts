@@ -404,4 +404,59 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
     expect(snapshot.unclassified.length).toBe(1);
     expect(snapshot.unclassified[0]!.unclassifiedReason).toContain('not found or has mismatched chainId');
   });
+
+  it('12. stage continuation accepts only an accepted loop predecessor, not completed repair', () => {
+    const evalMeta = createValidMeta({ chainId: 'retry-chain', pipelineRunId: 'run-repair-parent', resultFingerprint: 'target' });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(evalMeta) + '# Evaluation\n\n## Decision\n\nREJECTED\n');
+    const repairMeta = createValidMeta({
+      kind: 'repair',
+      step: 'repair',
+      chainId: 'retry-chain',
+      pipelineRunId: 'run-repair-parent',
+      parentArtifactIdentity: evalMeta.artifactIdentity,
+      resultFingerprint: 'target',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-rep-v1-fake.md'), buildFrontMatter(repairMeta) + '# Repair\n\n## Outcome\n\nCOMPLETED\n');
+    const successorMeta = createValidMeta({
+      bindingId: 'loopB',
+      stageId: 'stage2',
+      chainId: 'successor-chain',
+      chainMode: 'stage-continuation',
+      pipelineRunId: 'run-repair-parent',
+      parentArtifactIdentity: repairMeta.artifactIdentity,
+      resultFingerprint: 'target',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v1-fake.md'), buildFrontMatter(successorMeta) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const successor = snapshot.unclassified.find(step => step.artifactPath.includes('loopB-eval-v1-fake.md'));
+    expect(successor).toBeDefined();
+    expect(successor!.unclassifiedReason).toContain('not completion-capable');
+  });
+
+  it('13. a valid historical successor survives later independent chain activity', () => {
+    const acceptedMeta = createValidMeta({ chainId: 'accepted-chain', pipelineRunId: 'run-history', resultFingerprint: 'target' });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(acceptedMeta) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+    const successorMeta = createValidMeta({
+      bindingId: 'loopB',
+      stageId: 'stage2',
+      chainId: 'successor-history-chain',
+      chainMode: 'stage-continuation',
+      pipelineRunId: 'run-history',
+      parentArtifactIdentity: acceptedMeta.artifactIdentity,
+      resultFingerprint: 'target',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v1-fake.md'), buildFrontMatter(successorMeta) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+    const laterOpinion = createValidMeta({
+      version: 2,
+      chainId: 'independent-opinion-chain',
+      pipelineRunId: 'run-history',
+      resultFingerprint: 'target',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v2-fake.md'), buildFrontMatter(laterOpinion) + '# Evaluation\n\n## Decision\n\nREJECTED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    expect(snapshot.unclassified.some(step => step.artifactPath.includes('loopB-eval-v1-fake.md'))).toBe(false);
+    expect(snapshot.steps.find(step => step.artifactPath.includes('loopB-eval-v1-fake.md'))?.unclassified).toBeFalsy();
+  });
 });

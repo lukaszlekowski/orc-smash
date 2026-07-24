@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { type StepKind } from './provenance.js';
 import { renderPattern } from './patterns.js';
-import type { V1Manifest } from './manifest.js';
+import type { V1Manifest, OutputContract } from './manifest.js';
 import { readInterruptedMarker, type InterruptedMarker } from './interrupted-artifact.js';
 import { scanGlobalSnapshot } from './artifact-index.js';
 
@@ -39,6 +39,7 @@ export interface Step {
   /** @deprecated legacy alias for completionOutcome */
   outcome?: string;
   contractValid?: boolean;
+  contract?: OutputContract;
   unclassified?: boolean;
   unclassifiedReason?: string;
 

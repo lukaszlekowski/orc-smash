@@ -1,7 +1,8 @@
 import type { LoopSpec, Manifest } from './manifest.js';
 import { readInterruptedMarker } from './interrupted-artifact.js';
 import { scanGlobalSnapshot } from './state.js';
-import { recoverInProgressRun } from './pipeline-state.js';
+import { artifactRecordFromStep } from './pipeline-stage-state.js';
+import { resumableApprovalChain } from './approval-loop-state.js';
 
 /** Select the most recently active configured loop from generic artifact activity. */
 export function selectDefaultLoop(
@@ -60,12 +61,14 @@ export function bindingHasInProgressChain(
   const snapshot = scanGlobalSnapshot(projectRoot, manifest);
   const steps = snapshot.byBinding.get(bindingId) ?? [];
   if (steps.length === 0) return false;
-  const recovered = recoverInProgressRun(steps as any);
-  if (!recovered) return false;
-  const latest = steps[steps.length - 1]!;
-  if (latest.decision === 'accepted' || latest.completionOutcome === 'completed') return false;
-  if (latest.unclassified) return false;
-  return true;
+  const chains = new Map<string, ReturnType<typeof artifactRecordFromStep>[]>();
+  for (const step of steps) {
+    const record = artifactRecordFromStep(step);
+    const chain = chains.get(record.chainId) ?? [];
+    chain.push(record);
+    chains.set(record.chainId, chain);
+  }
+  return [...chains.values()].some(chain => resumableApprovalChain(chain) !== null);
 }
 
 /**

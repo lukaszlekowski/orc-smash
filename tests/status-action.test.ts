@@ -9,6 +9,7 @@ import { createMockOutput } from './helpers/mock-output.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 import { captureTargetFingerprint } from '../src/target-snapshot.js';
 import { loadConfig } from '../src/config.js';
+import { allPipelineCandidates, pipelineSuggestions } from '../src/next-step.js';
 
 describe('generic status snapshot', () => {
   const project = resolve(process.cwd(), 'temp-status-action');
@@ -118,6 +119,14 @@ describe('generic status snapshot', () => {
     expect(output.lastStaticText).toContain('Artifact identity:');
     expect(output.lastStaticText).toContain('Decision/Outcome: accepted');
     expect(output.lastStaticText).toContain('Fingerprint: valid (' + fingerprint + ')');
+
+    const displayedCandidates = allPipelineCandidates(project, config.manifest);
+    const executableCandidates = pipelineSuggestions(project, config.manifest);
+    expect(displayedCandidates).toHaveLength(1);
+    expect(displayedCandidates[0]!.reason).toBe('eligible');
+    expect(executableCandidates.map(candidate => candidate.artifactIdentity)).toEqual([
+      displayedCandidates[0]!.artifactIdentity,
+    ]);
   });
 
   it('renders stale pipeline suggestions with drift explanation when target is modified', async () => {
@@ -149,6 +158,10 @@ describe('generic status snapshot', () => {
     expect(output.lastStaticText).toContain('Pipeline Suggestions (Eligible: 0, Total: 1)');
     expect(output.lastStaticText).toContain('stale');
     expect(output.lastStaticText).toContain('Fingerprint: drift (recorded some-stale-hash-123 vs current');
+
+    const displayedCandidates = allPipelineCandidates(project, loadConfig(project).manifest);
+    expect(displayedCandidates[0]!.reason).toBe('target-fingerprint-drift');
+    expect(pipelineSuggestions(project, loadConfig(project).manifest)).toHaveLength(0);
   });
 
   it('renders concurrently eligible runs in stable order', async () => {

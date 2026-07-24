@@ -30,6 +30,7 @@ import { validateImplementLedger } from '../implement-ledger.js';
 import { promptRunners, promptIterationExtension } from '../interactive.js';
 import { makeRunEvent } from '../run-event.js';
 import { scanGlobalSnapshot } from '../artifact-index.js';
+import { reduceApprovalChain, approvalNextPhase, type ApprovalChainStep } from '../approval-loop-state.js';
 
 export type Binding = LoopBinding | TaskBinding;
 export type BindingKind = 'loop' | 'task';
@@ -158,7 +159,7 @@ export async function runBinding(
   }
   const context = options.runContext ?? mintRunContext({ mode: 'ad-hoc' });
   const version = allocateVersion(projectRoot, binding, history, runners, bindingKind);
-  const initial = initialRequest(binding, bindingKind, history, version, config, context);
+  const initial = initialRequest(bindingId, binding, bindingKind, history, version, config, context);
   let request: StepRequest | null = initial;
   let evaluationCount = 0;
   const providerCallCount = { value: 0 };
@@ -399,7 +400,7 @@ export async function runBinding(
     }
 
     if (request.phase === 'evaluate') {
-      if (contract.kind === 'accepted' || contract.kind === 'valid' || contract.kind === 'completed') {
+      if (contract.kind === 'accepted') {
         const message = `${bindingId} accepted at version ${request.version}.`;
         return finish({ kind: 'completed', message, artifactPath: lastPath }, 'accepted', message);
       }
@@ -638,13 +639,14 @@ function validateOutput(output: OutputSpec, body: string, path: string): Contrac
 }
 
 function initialRequest(
+  bindingId: string,
   binding: Binding,
   bindingKind: BindingKind,
   history: PersistedArtifact[],
   version: number,
   config: Config,
   context: RunContext,
-): StepRequest {
+): StepRequest | null {
   if (bindingKind === 'task') {
     const task = binding as TaskBinding;
     let priorArtifact = priorArtifactNone();
@@ -710,35 +712,54 @@ function initialRequest(
     }
   }
 
-  const chainHistory = history.filter((item) => item.meta.chainId === context.chainId);
-  const latestEvaluate = chainHistory.filter((item) => item.phase === 'evaluate' && item.classified && item.valid).at(-1);
-  const latestRepair = chainHistory.filter((item) => item.phase === 'repair' && item.classified && item.valid).at(-1);
-  const pendingRepair = latestEvaluate?.decision === 'retry' && (!latestRepair || latestRepair.version !== latestEvaluate.version || !latestRepair.valid);
+  const chainHistory = history.filter((item) => item.meta.chainId === context.chainId && item.classified && item.valid);
+  const chainSteps: ApprovalChainStep[] = chainHistory.map(item => ({
+    artifactIdentity: item.meta.artifactIdentity ?? '',
+    bindingKind: 'loop',
+    bindingId,
+    phase: item.phase,
+    chainId: item.meta.chainId ?? context.chainId,
+    chainMode: item.meta.chainMode ?? context.chainMode,
+    pipelineId: item.meta.pipelineId ?? context.pipelineId,
+    pipelineRunId: item.meta.pipelineRunId ?? context.pipelineRunId,
+    stageId: item.meta.stageId ?? context.stageId,
+    version: item.version,
+    parentArtifactIdentity: item.meta.parentArtifactIdentity ?? null,
+    normalizedResult: item.decision ?? item.completion ?? 'unknown',
+    contractValid: item.valid,
+    unclassified: !item.classified,
+    artifactPath: item.path,
+    resultFingerprint: item.meta.resultFingerprint ?? '',
+  }));
+  const reduced = reduceApprovalChain(chainSteps);
+  const next = approvalNextPhase(reduced);
+  if (!next) return null;
 
-  if (pendingRepair && latestEvaluate) {
+  const predecessor = chainHistory.find(item => item.meta.artifactIdentity === next.parentArtifactIdentity);
+  if (next.phase === 'repair') {
+    const evaluate = predecessor ?? chainHistory.at(-1);
+    if (!evaluate) return null;
     return {
       phase: 'repair',
-      version: latestEvaluate.version,
+      version: next.version,
       skillId: loop.repair.skill,
       skill: config.manifest.skills[loop.repair.skill]!,
       output: loop.repair.output,
-      priorArtifact: priorForPersisted(latestEvaluate),
-      parentArtifactIdentity: latestEvaluate.meta.artifactIdentity ?? null,
+      priorArtifact: priorForPersisted(evaluate),
+      parentArtifactIdentity: next.parentArtifactIdentity,
     };
   }
-  const prior = latestRepair?.valid && latestEvaluate?.decision === 'retry'
-    ? priorForPersisted(latestRepair)
-    : priorArtifactNone();
+
+  const repair = predecessor ?? chainHistory.at(-1);
+  if (!repair) return null;
   return {
     phase: 'evaluate',
-    version: latestRepair?.valid && latestEvaluate?.decision === 'retry' ? latestEvaluate.version + 1 : version,
+    version: next.version,
     skillId: loop.evaluate.skill,
     skill: config.manifest.skills[loop.evaluate.skill]!,
     output: loop.evaluate.output,
-    priorArtifact: prior,
-    parentArtifactIdentity: latestRepair?.valid && latestEvaluate?.decision === 'retry'
-      ? latestRepair.meta.artifactIdentity ?? null
-      : null,
+    priorArtifact: priorForPersisted(repair),
+    parentArtifactIdentity: next.parentArtifactIdentity,
   };
 }
 

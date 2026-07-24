@@ -2,8 +2,9 @@
 
 ## Status
 
-**DRAFT — requires approval through the configured `plan` approval loop before
-implementation.**
+**DONE — implemented and verified.** The approved implementation audit is
+[`docs/dev/plan-audit-v2-claude.md`](./plan-audit-v2-claude.md) with confidence
+`0.95`.
 
 This plan implements the findings in `docs/dev/research.md`. It is the
 controlling target contract for this issue.
@@ -327,6 +328,22 @@ No release may temporarily make repair artifacts eligible.
    by shared binding execution.
 4. Audit the completed plan and archive implementation evidence according to
    the configured workflow.
+
+## Implementation closeout
+
+- Release 1: completed — reducer, stage-state contracts, manifest constraints,
+  rich artifact records, and focused matrices landed.
+- Release 2: completed — artifact lineage, recovery, suggested-loop state, and
+  historical continuation use the approval reducer and binding-aware rules.
+- Release 3: completed — candidates, exact-edge suppression, typed reasons,
+  labels, and the final pre-spawn eligibility recheck are aligned.
+- Release 4: completed — repository documentation is synchronized and the
+  deterministic verification gates pass.
+
+Verification evidence is recorded in the implementation handoff: typecheck,
+build, full deterministic tests, focused pipeline/artifact/recovery/menu/status
+tests, and the final TOCTOU seam test. Real-provider contract suites remain
+env-gated/manual release sign-offs as required by the repository invariants.
 
 ## Required test matrix
 
