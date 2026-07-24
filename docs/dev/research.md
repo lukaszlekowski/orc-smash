@@ -1,416 +1,340 @@
-# Research — Binding-aware pipeline stage state
+# Research — AGY 1.1.6 workspace, model, effort, and continuity patch
 
 ## Status
 
-Research complete enough to plan implementation. This document records the
-current behavior, related defects, compatibility constraints, and the boundary
-between present-state eligibility and durable historical lineage.
+Research is complete enough to plan the patch. One authenticated write-fixture
+gate remains deliberately part of the implementation plan because it must
+exercise the finished adapter command and capture path.
 
-The corresponding implementation contract is `docs/dev/plan.md`.
+This document supersedes the exploratory notes in
+`docs/dev/archived/agy-model-effort-migration.md`. That file remains useful
+historical evidence for the 1.1.5 interface change.
 
 ## Research question
 
-How should orc-smash decide that a configured pipeline stage is complete,
-offer its successor, recover an unfinished approval loop, and validate a
-persisted stage continuation without confusing:
+How can orc-smash safely use AGY for write-capable follow-up skills while:
 
-- approval-loop evaluation acceptance;
-- approval-loop repair completion;
-- task completion;
-- required-artifact validity;
-- current action eligibility; and
-- historically valid lineage?
+- binding every invocation to the requested project rather than AGY's
+  previously active workspace;
+- representing the current AGY model and effort interface accurately;
+- capturing and resuming an AGY conversation without shell-history inference;
+- preserving the existing timeout, ownership, auth-failure, and artifact
+  quarantine boundaries; and
+- avoiding a provider-specific execution engine outside the AGY adapter?
 
 ## Executive conclusion
 
-The observed **Start suggested stage** bypass is not an isolated menu defect.
-Several modules flatten distinct artifact meanings into the generic predicate:
+The installed AGY CLI is version `1.1.6`. It has the provider primitives needed
+for a safe adapter:
 
-```ts
-decision === 'accepted'
-  || completionOutcome === 'completed'
-  || contractValid
-```
+- `--new-project` creates a project bound to the invocation workspace;
+- `--project <project-id>` selects an explicit existing project;
+- `--conversation <conversation-id>` resumes an explicit conversation;
+- `--model` accepts stable model slugs;
+- `--effort` selects `low`, `medium`, or `high`; and
+- `--log-file <path>` sends invocation diagnostics to a caller-owned path.
 
-That predicate is valid only for a subset of task contracts. It is not a
-definition of approval-loop completion.
+A live isolated probe established that AGY stores a durable project ID and
+conversation ID and can resume their exact pair. Normal headless stdout contains
+only the assistant response, however, so the current adapter cannot capture the
+IDs from its existing process result.
 
-The safe correction requires two domain reducers and one historical validator:
+The patch should use a unique temporary `--log-file` for each invocation,
+extract the project and conversation IDs with a bounded parser, encode them into
+the existing opaque `RunResult.sessionId`, and delete the temporary log after
+parsing. Fresh invocations use `--new-project`; resumed invocations use both
+`--project` and `--conversation`. The adapter must never use `--continue`.
 
-1. reduce an approval-loop chain to its current semantic state;
-2. resolve binding-aware successor candidates from those chain states; and
-3. validate a continuation parent by the semantics that applied when the
-   continuation was created, without consulting later unrelated state.
+## Current implementation
 
-Using one undifferentiated "latest completion" predicate for all three would
-either preserve the bypass or retroactively invalidate legitimate history.
+`src/adapters/agy.ts` currently:
 
-## Observed production defect
+- declares `resumeSession: false` and `effort: false`;
+- invokes `agy -p <prompt> --model <model>
+  --dangerously-skip-permissions`;
+- relies only on subprocess `cwd` for workspace selection;
+- returns no session ID; and
+- performs bounded auth-failure detection over stdout and stderr.
 
-The `plan` stage contained:
+`config/providers/agy.yaml` still uses pre-1.1.5 human-readable names such as
+`Gemini 3.5 Flash (Medium)`. It has no `modelEfforts` catalogue.
 
-```text
-plan evaluation v4 -> retry
-plan repair v4 -> completed
-plan evaluation v5 -> retry
-```
+The generic runtime already provides the required upper-level continuity
+contract:
 
-The application offered:
+- `RunInput.continuity` distinguishes fresh from resumed invocations;
+- `RunResult.sessionId` is an opaque provider session string;
+- provenance persists the session string;
+- `resolveContinuity` requires the same chain, skill, provider, model, effort,
+  session strategy, and adapter capability before resuming; and
+- changing provider/model/effort starts a fresh provider session without
+  changing artifact-chain identity.
 
-```text
-plan repair v4/completed -> start implement
-```
+No generic continuity schema change is required.
 
-The repair artifact proved only that the repair invocation completed. It did
-not prove that the repaired plan was evaluated and accepted. Starting
-`implement` from it would bypass the unresolved v5 rejection.
+## Live evidence — 24 July 2026
 
-## Current system map
+### Installed CLI and catalogue
 
-### Artifact discovery and classification
-
-`src/artifact-index.ts`:
-
-- discovers files from manifest output patterns;
-- validates provenance identity and binding/stage routing;
-- classifies decision, completion, and required-artifact contracts;
-- validates pipeline and same-chain parent structure; and
-- constructs the stateless global snapshot.
-
-The snapshot retains the phase as `Step.kind` (`evaluate`, `repair`, or
-`task`), but downstream pipeline eligibility drops that field.
-
-### Pipeline candidate resolution
-
-`src/next-step.ts` maps snapshot steps into `ArtifactRecord` and calls
-`pipelineStageCandidates` / `eligibleNextStages` in
-`src/pipeline-state.ts`.
-
-`ArtifactRecord` currently lacks the binding kind, binding ID, and artifact
-phase required to distinguish:
-
-- `loop/evaluate/accepted`;
-- `loop/repair/completed`;
-- `task/completion-artifact/completed`; and
-- `task/required-artifact/valid`.
-
-`pipelineStageCandidates` selects every artifact in a pipeline run/stage that
-matches the generic predicate. It does not first reduce the artifact's
-approval chain to a current state.
-
-### Interactive execution gate
-
-`src/commands/smash.ts` shows the candidates, lets the operator select one,
-then recomputes eligibility before execution. This is a valuable TOCTOU gate,
-but it invokes the same incorrect resolver, so a new rejected evaluation does
-not invalidate an older repair candidate.
-
-### Durable lineage validation
-
-`src/artifact-index.ts` validates a `stage-continuation` root by checking that
-its parent:
-
-- is classified;
-- belongs to the same pipeline run;
-- belongs to the immediate predecessor stage; and
-- matches the same generic completion predicate.
-
-This admits a repair artifact as a continuation parent. It also means fixing
-candidate display alone would leave an already-created invalid continuation
-classified on the next scan.
-
-### Approval-loop recovery and presentation
-
-`src/loop-selector.ts` and `src/project-snapshot-view.ts` treat the latest
-`completionOutcome === 'completed'` as terminal. After a durable repair
-artifact, however, an approval loop is awaiting its next evaluation.
-
-The binding engine already contains more accurate continuation logic:
-
-- latest rejected evaluation without matching repair -> repair next;
-- matching completed repair -> evaluation next;
-- accepted evaluation -> complete.
-
-That logic is local to `src/loops/binding-engine.ts` and is not the shared
-state contract used by menus, status, and pipeline eligibility.
-
-## Findings
-
-### F1 — Approval-loop repair can unlock a successor
-
-**Confirmed, high severity.**
-
-`pipelineStageCandidates` treats `repair/completed` as stage completion. This
-can execute a downstream task or loop before the approval loop is accepted.
-
-### F2 — The same error exists in persisted-lineage validation
-
-**Confirmed, high severity.**
-
-The scanner accepts a stage-continuation root whose parent is a completed
-repair. A candidate-only patch would therefore be incomplete.
-
-### F3 — Historical artifacts remain reusable candidates
-
-**Confirmed behavior requiring a narrower rule.**
-
-Candidate resolution collects every completion-bearing predecessor artifact.
-It does not check whether the exact predecessor artifact has already been used
-as the parent of a classified successor-stage root. If its target fingerprint
-still matches, the same pipeline edge can be started repeatedly.
-
-Independent accepted chains in the same stage are currently presented as
-separate operator choices. This behavior is covered by an existing test and
-must not be removed implicitly while fixing exact-edge replay.
-
-### F4 — Completed repair can hide an in-progress chain
-
-**Confirmed latent recovery defect.**
-
-`bindingHasInProgressChain` returns false when the latest artifact is a
-completed repair. The loop is not terminal; its next semantic phase is
-evaluation. This can make **Continue current loop** unavailable after a
-restart or interruption boundary that leaves the repair durable.
-
-The project snapshot repeats the same false-terminal interpretation in its
-suggested-loop reason.
-
-### F5 — Approval-loop contract combinations are under-constrained
-
-**Confirmed for custom manifests.**
-
-The manifest gives both evaluate and repair steps the generic `OutputSchema`.
-The binding engine consequently treats an evaluate step returning `valid` or
-`completed` as accepted.
-
-For an `approval-loop`:
-
-- evaluate must use `decision-artifact`;
-- repair may use a non-decision completion contract;
-- only the configured accepted decision can complete the loop.
-
-The packaged manifest already follows this shape, so validation can fail bad
-custom manifests at load time instead of supporting ambiguous runtime
-semantics.
-
-### F6 — Same-chain validation checks identity shape, not legal transitions
-
-**Confirmed structural gap.**
-
-After the stage-continuation root, the scanner requires the immediate parent
-to exist in the same chain, but does not validate semantic transitions such
-as:
+The installed command reports:
 
 ```text
-evaluate/retry -> repair/completed -> evaluate
+agy --version
+1.1.6
 ```
 
-The normal executor writes legal transitions, so this is primarily a durable
-state-reconstruction gap. The state store should not classify impossible
-phase/outcome sequences as valid workflow evidence.
+`agy models` reports:
 
-### F7 — The current tests do not protect the required semantics
+```text
+gemini-3.6-flash-high
+gemini-3.6-flash-medium
+gemini-3.6-flash-low
+gemini-3.5-flash-high
+gemini-3.5-flash-medium
+gemini-3.5-flash-low
+gemini-3.1-pro-high
+gemini-3.1-pro-low
+claude-sonnet-4-6
+claude-opus-4-6-thinking
+gpt-oss-120b-medium
+```
 
-**Confirmed coverage gap.**
+The help surface includes:
 
-- `tests/pipeline-state.test.ts` has no rejected-evaluate/repair/re-evaluate
-  matrix.
-- Its test named "required-artifact predecessor" supplies
-  `completionOutcome: completed` rather than a required artifact with only
-  `contractValid: true`.
-- `tests/next-step.test.ts` has a case that asserts only that the result is an
-  array.
-- `tests/smash-action.test.ts` intentionally preserves multiple candidates in
-  one run, but does not distinguish independent accepted chains from replay
-  of the same predecessor edge.
-- There is no regression proving that display and execution-time rechecks
-  resolve the same current chain state.
+```text
+--continue
+--conversation
+--effort
+--model
+--new-project
+--project
+--log-file
+```
 
-The focused pipeline, lineage, selector, and smash-action suite currently
-passes, demonstrating that the defect is not caught by existing assertions.
+The 1.1.6 changelog does not replace the model/effort interface introduced in
+1.1.5.
 
-## Semantics that currently work and must remain
+### Model and effort representation
 
-- A configured accepted evaluation completes an approval-loop chain.
-- A configured retry evaluation enables repair, not a downstream stage.
-- A completed repair enables the next evaluation in the same chain.
-- A blocked or unknown repair does not advance the loop.
-- A completed task using `completion-artifact` can unlock its successor.
-- A valid task using `required-artifact` can unlock its successor.
-- Blocked, unknown, unclassified, foreign-run, wrong-stage, and stale-target
-  evidence cannot unlock a successor.
-- The interactive selection is rechecked against a fresh snapshot before
-  provider execution.
-- A second opinion is a fresh, independent chain root and a rejected second
-  opinion continues automatically into repair.
-- Historical artifacts remain immutable evidence; later activity must not
-  retroactively rewrite or unclassify a continuation that was valid when
-  created.
+An authenticated no-tools probe used:
 
-## Required semantic boundaries
+```text
+--model gemini-3.6-flash --effort low
+```
 
-### 1. Current approval-chain state
+The invocation succeeded. AGY's log resolved this pair to
+`gemini-3.6-flash-low` and selected `Gemini 3.6 Flash (Low)`.
 
-Reduce artifacts within one chain, preserving causal order:
+Therefore the harness should expose Gemini base slugs as logical models and
+their verified levels as `modelEfforts`. It should not make operators select an
+effort-qualified Gemini slug and then separately select effort.
 
-| Latest legal chain state | Chain state | Next action |
-| --- | --- | --- |
-| no artifact | not-started | evaluate |
-| evaluate/retry, no valid repair | repair-required | repair |
-| evaluate/retry -> repair/completed or valid | evaluation-required | evaluate |
-| evaluate/accepted | accepted | successor may be offered |
-| evaluate/unknown or unclassified routed output | unknown | stop |
-| repair/blocked | blocked | stop |
+The safe initial catalogue is:
 
-A repair is never an accepted state.
-
-### 2. Binding-aware completion evidence
-
-| Stage binding | Completion-capable evidence |
+| Logical configured model | Explicit effort choices |
 | --- | --- |
-| approval loop | the chain's current valid `evaluate/accepted` artifact |
-| completion-artifact task | valid `task/completed` |
-| required-artifact task | valid classified task artifact satisfying its validator |
+| `gemini-3.6-flash` | `low`, `medium`, `high` |
+| `gemini-3.5-flash` | `low`, `medium`, `high` |
+| `gemini-3.1-pro` | `low`, `high` |
+| `claude-sonnet-4-6` | none proven |
+| `claude-opus-4-6-thinking` | none proven |
+| `gpt-oss-120b-medium` | none proven |
 
-The decision tokens remain manifest-configured; TypeScript consumes normalized
-`accepted` / `retry` values and does not branch on literal verdict words.
+Provider default remains selectable for every model and means that orc-smash
+omits `--effort`. No unverified effort choices should be advertised for the
+last three entries.
 
-### 3. Current candidate eligibility
+Representative authenticated probes for each distinct mapping shape remain a
+release gate. They are catalogue verification, not runtime discovery.
 
-A successor candidate requires:
+### Explicit workspace binding
 
-- a completion-capable predecessor artifact;
-- the expected immediate predecessor stage;
-- matching pipeline and pipeline-run identity;
-- a current target fingerprint matching the predecessor result fingerprint;
-- no unknown/unclassified barrier attributable to that same chain state; and
-- no already-classified successor-stage root whose
-  `parentArtifactIdentity` is that exact predecessor artifact.
-
-Independent accepted chains may yield independent candidates. The fix does not
-choose a winner between primary approval and second-opinion chains.
-
-### 4. Historical continuation validity
-
-A persisted successor root is valid when its recorded parent:
-
-- is classified and contract-valid;
-- is completion-capable for the parent stage's binding;
-- belongs to the expected pipeline, run, and predecessor stage; and
-- predates and directly anchors that successor root.
-
-Historical validation must not ask whether the parent is still the currently
-recommended candidate. A later independent second opinion or later target
-change may suppress new transitions but must not corrupt valid recorded
-history.
-
-### 5. Same-chain transition validity
-
-For approval loops, classified descendants must follow:
+From an isolated directory, `--new-project` created an AGY project whose
+persisted project resource was exactly:
 
 ```text
-evaluate/retry -> repair/(completed|valid) -> evaluate
+file:///private/tmp/orc-agy-session-probe-20260724
 ```
 
-`evaluate/accepted`, unknown, and blocked are terminal for that chain.
-Second opinions start a new chain and are not descendants of the accepted
-primary chain.
+The invocation log also reported the same directory in `workspaceDirs`.
 
-## Ordering and ambiguity
+This proves the CLI can create an explicit project for the supplied `cwd`. It
+does not by itself prove that a write-capable agent cannot touch a previously
+active workspace. The finished adapter must pass the isolated target/decoy
+write gate in `docs/dev/plan.md`.
 
-Normal executor output provides causal order through:
+### Durable conversation identity
 
-- immediate parent identity;
-- version;
-- phase;
-- chain identity; and
-- artifact identity.
+The same isolated invocation created:
 
-Filesystem mtime must not be the sole workflow authority. When two artifacts
-claim an impossible competing position in the same chain, the reducer should
-return an explicit `conflict`/`unknown` state and fail closed rather than pick
-one by filename, provider, or mtime.
+- one project UUID;
+- one conversation UUID;
+- a conversation SQLite database; and
+- a workspace-keyed entry in AGY's `last_conversations.json`.
 
-## Second-opinion boundary
+Normal print-mode output was only:
 
-This work does not change second-opinion execution policy.
-
-- A second opinion remains an independent chain root.
-- Rejection still enters normal repair automatically.
-- An accepted primary chain and an accepted second-opinion chain may remain
-  separately visible evidence.
-- This work does not introduce a one-shot second-opinion mode.
-
-Only the state reducer is shared: a rejected second-opinion chain cannot
-present its own repair as accepted completion.
-
-## Recommended architecture
-
-Introduce purposeful pure domain modules:
-
-- `src/approval-loop-state.ts` — validates/reduces one approval chain and
-  resolves its next phase;
-- `src/pipeline-stage-state.ts` — classifies binding-aware completion evidence,
-  resolves candidates, detects exact-edge replay, and validates historical
-  continuation parents.
-
-Do not introduce generic `helpers.ts` or a global boolean such as
-`isCompleted`. The return types should carry semantic reasons suitable for
-status, menu disablement, diagnostics, and tests.
-
-Suggested result shapes:
-
-```ts
-type ApprovalChainState =
-  | { kind: 'not-started' }
-  | { kind: 'repair-required'; evaluate: Step }
-  | { kind: 'evaluation-required'; repair: Step }
-  | { kind: 'accepted'; evaluate: Step }
-  | { kind: 'blocked'; artifact: Step; reason: string }
-  | { kind: 'unknown'; artifact?: Step; reason: string }
-  | { kind: 'conflict'; artifacts: Step[]; reason: string };
-
-type StageCompletionEvidence =
-  | { kind: 'eligible'; artifact: Step; bindingKind: 'loop' | 'task' }
-  | { kind: 'incomplete'; reason: string }
-  | { kind: 'unknown'; reason: string };
+```text
+SESSION_PROBE_OK
 ```
 
-The exact types may be refined during implementation, but phase, binding kind,
-chain identity, and reason must not be erased before the decision is made.
+The explicit log contained bounded lines identifying:
 
-## Risks
+```text
+Backend project ID updated dynamically to: <project-uuid>
+Print mode: conversation=<conversation-uuid>, sending message
+```
 
-### Over-sharing the current-state rule
+Resuming with:
 
-If historical lineage uses today's latest state, a later second opinion could
-retroactively unclassify a previously valid implementation. Avoid this by
-keeping historical parent capability separate from current candidate
-eligibility.
+```text
+--project <project-uuid>
+--conversation <conversation-uuid>
+```
 
-### Over-deduplicating candidates
+succeeded and the resumed log reported the same two IDs. This proves that the
+pair is a working continuity token.
 
-Collapsing all accepted artifacts to one "latest stage result" would silently
-remove the existing independent-chain choice. Deduplicate only an exact
-already-consumed predecessor edge unless a later product decision explicitly
-changes second-opinion selection.
+## Target continuity contract
 
-### Breaking task progression
+Keep AGY's provider-specific composite inside the existing opaque session
+string:
 
-Removing the generic fallback without adding explicit task semantics would
-prevent required-artifact tasks from unlocking successors. Task contract type
-must be an input to the new rule.
+```text
+agy:v1:<project-uuid>:<conversation-uuid>
+```
 
-### Partial wiring
+The exact encoding and parser belong in a purpose-specific AGY session module.
+Generic provenance, runner resolution, and status surfaces continue to treat it
+as an opaque `sessionId`.
 
-Fixing only menu display, only candidate collection, or only scanner lineage
-would leave inconsistent state decisions. All consumers must move to the
-domain rules in one release sequence with parity tests.
+Fresh invocation:
 
-## Operator workaround until implementation
+```text
+agy -p <prompt>
+  --model <logical-model>
+  [--effort <level>]
+  --new-project
+  --log-file <unique-temporary-path>
+  --dangerously-skip-permissions
+```
 
-For approval-loop predecessors, use **Start suggested stage** only when the
-displayed predecessor artifact is a valid `evaluate/accepted` artifact.
-Never advance from a repair artifact. When a loop has a retry evaluation,
-choose **Continue current loop** and complete repair plus re-evaluation first.
+Resumed invocation:
 
+```text
+agy -p <prompt>
+  --model <same-logical-model>
+  [--effort <same-level>]
+  --project <project-uuid>
+  --conversation <conversation-uuid>
+  --log-file <unique-temporary-path>
+  --dangerously-skip-permissions
+```
+
+The generic continuity resolver already prevents resumption after a
+provider/model/effort mismatch.
+
+## Why not use other AGY state
+
+### Do not use `--continue`
+
+`--continue` means the provider's globally most recent conversation. It is
+shell/provider-history inference, can cross projects, and violates explicit
+per-skill continuity.
+
+### Do not read `last_conversations.json` at runtime
+
+The file proved that AGY persists conversations, but it is global mutable
+provider state. Reading it after a run creates races across targets and couples
+orc-smash to an internal cache layout.
+
+### Do not read AGY SQLite databases
+
+The databases are an internal storage format. orc-smash needs only the IDs
+printed into its invocation-specific log.
+
+### Do not accept `--add-dir` as binding
+
+`--add-dir` expands access; it does not replace the active workspace. It cannot
+prove that AGY writes to the intended project.
+
+## Log parsing and security boundary
+
+The parser should accept exactly one valid project UUID and one valid
+conversation UUID attributable to the completed invocation. Missing,
+malformed, ambiguous, or mismatched IDs fail closed.
+
+The temporary log is a session-capture channel only:
+
+- create it under a unique OS temporary directory;
+- never place it in the target repository;
+- never include it in auth-failure phrase scanning;
+- never copy its full content into a `RunError`;
+- remove it after success, provider failure, timeout, or interruption where
+  process ownership permits cleanup; and
+- keep debug reporting to bounded parsed facts.
+
+This separation is important. A successful AGY startup log can contain
+transient text saying the process is not logged in before silent keyring
+authentication succeeds. Feeding the log into `isAgyAuthFailure` would turn a
+successful authenticated run into a false auth failure.
+
+The existing stdout/stderr auth matcher and loop-owned partial-artifact
+quarantine remain authoritative.
+
+## Failure semantics
+
+- Invalid configured model/effort: reject before spawn.
+- Fresh run without a unique project/conversation pair: structured fail-closed
+  adapter error; do not persist a successful workflow artifact.
+- Resumed run whose returned IDs do not equal the supplied token: structured
+  fail-closed adapter error.
+- Malformed stored AGY token: do not invoke `agy`.
+- Provider auth failure: retain existing `error.kind === 'auth'` behavior and
+  loop-owned artifact quarantine.
+- Timeout/interruption/ownership loss: retain existing shared process and
+  supervisor behavior; no fallback session inference.
+- Missing required output: retain the binding engine's existing
+  `missing_output` failure.
+
+## Architectural boundary
+
+Add at most one purpose-specific module, for example
+`src/adapters/agy-session.ts`, owning:
+
+- composite token encoding/decoding;
+- bounded invocation-log parsing; and
+- equality checks for resumed identity.
+
+`src/adapters/agy.ts` owns AGY argument construction, temporary capture-file
+lifecycle, and result post-processing. Generic runner, provenance, loop,
+ownership, and pipeline modules should not branch on AGY.
+
+## Verification implications
+
+Deterministic tests can prove command construction, token parsing, continuity,
+effort, log cleanup, mismatch behavior, auth separation, and registry
+validation.
+
+AGY's browser/keyring authentication remains unsuitable for a normal automated
+CI gate. Release sign-off therefore requires a manually enabled,
+already-authenticated isolated contract test that proves:
+
+1. a fresh write lands only in the target workspace;
+2. a decoy/previous workspace is unchanged;
+3. the returned composite session token is persisted;
+4. a resumed invocation uses the same project and conversation;
+5. the resumed write again lands only in the target; and
+6. provider-default and explicit effort invocations select the intended model.
+
+## Out of scope
+
+- Runtime catalogue discovery or mutation from `agy models`.
+- AGY-only runner menus.
+- Cross-skill or cross-chain session reuse.
+- Automatic migration of old AGY artifacts whose session is `none`.
+- Importing AGY conversation contents.
+- Changing generic pipeline, approval-loop, timeout, ownership, signal, or
+  artifact-quarantine semantics.
+- Pipeline repair/adoption, qualified-verdict correction, or runner
+  recommendation UX.

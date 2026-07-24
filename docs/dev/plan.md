@@ -1,473 +1,371 @@
-# Plan — Binding-aware pipeline stage state and lineage
+# Plan — AGY 1.1.6 safe follow-up execution and continuity
 
 ## Status
 
-**FOLLOW-UP COMPLETE — implementation review v3 finding patched; rerun the
-implementation review before final approval.**
-The rejected review is [`docs/dev/review-v3-claude.md`](./review-v3-claude.md).
-The approved implementation audit remains
-[`docs/dev/plan-audit-v2-claude.md`](./plan-audit-v2-claude.md) with confidence
-`0.95`; final implementation approval requires a subsequent review.
+**DRAFT — requires approval through the configured `plan` approval loop before
+implementation.**
 
-This plan implements the findings in `docs/dev/research.md`. It is the
-controlling target contract for this issue.
+This plan implements `docs/dev/research.md`. It is deliberately limited to the
+AGY provider contract and the generic catalogue/continuity seams AGY already
+uses.
 
 ## Objective
 
-Make pipeline progression, approval-loop recovery, status presentation, and
-durable lineage use explicit binding- and phase-aware semantics so that:
+Make AGY safe and useful for write-capable follow-up skills by:
 
-- only an accepted approval evaluation unlocks the next pipeline stage;
-- repair completion returns the loop to evaluation and never means approval;
-- completed and required-artifact tasks retain their current progression;
-- the same predecessor edge is not offered repeatedly;
-- execution-time rechecks match displayed eligibility; and
-- later activity never retroactively invalidates historically valid
-  continuations.
+- explicitly binding every fresh AGY invocation to the requested project;
+- representing AGY 1.1.6 models and effort without folded display names;
+- capturing a durable project/conversation token;
+- resuming only the exact compatible AGY session selected by generic
+  per-skill continuity; and
+- preserving all existing auth, timeout, ownership, interruption, artifact,
+  and supervisor safety behavior.
 
 ## Scope
 
-This plan covers:
-
-- approval-loop chain-state reduction;
-- manifest contract validation for approval-loop phases;
-- pipeline stage-completion evidence;
-- successor candidate generation and exact-edge replay suppression;
-- stage-continuation parent validation;
-- same-chain phase/outcome validation;
-- loop recovery and suggested-loop status;
-- candidate diagnostics and labels; and
-- deterministic regression coverage.
+- `config/providers/agy.yaml` model and effort catalogue;
+- AGY adapter capabilities and command construction;
+- AGY project/conversation token encoding;
+- invocation-specific log capture and bounded parsing;
+- fresh and resumed workspace binding;
+- deterministic adapter, runner, continuity, and loop-level tests;
+- an authenticated manual target/decoy write gate; and
+- synchronized canonical documentation.
 
 ## Non-goals
 
-- Do not change automatic repair after a rejected second opinion.
-- Do not add a one-shot second-opinion mode.
-- Do not choose one accepted independent chain as globally authoritative over
-  another accepted independent chain.
-- Do not implement qualified-decision operator correction.
-- Do not redesign runner recommendations or runner selection.
-- Do not change provider adapters, model catalogues, effort, session
-  capability, timeout, signal, ownership, or supervisor contracts.
-- Do not add automatic downstream transitions.
-- Do not migrate or specially classify legacy artifacts lacking the v1
-  identity contract.
+- Do not add AGY-specific runner-selection UI.
+- Do not discover or rewrite configuration from `agy models` at runtime.
+- Do not use `--continue`, `last_conversations.json`, or AGY SQLite databases.
+- Do not enable cross-skill, cross-chain, or second-opinion session inheritance.
+- Do not migrate old artifacts whose AGY session ID is absent.
+- Do not change provider timeout precedence, process ownership, signal handling,
+  artifact quarantine, pipeline semantics, or supervisor compatibility.
+- Do not add pipeline repair/adoption or decision-token correction.
+- Do not generalize this work into a second provider execution engine.
 
 ## Normative decisions
 
-### D1. Approval is phase-specific
+### D1. Every fresh AGY invocation creates an explicitly bound project
 
-An approval-loop stage is complete only when one of its independently valid
-chains currently ends in a classified `evaluate` artifact whose normalized
-decision is `accepted`.
+Subprocess `cwd` remains the canonical target root supplied to the shared
+process runner. In addition, every fresh AGY invocation includes
+`--new-project`.
 
-`repair/completed` and `repair/valid` are intermediate chain states. They
-permit evaluation and never unlock a pipeline successor.
+`--add-dir` is not workspace authority and must not be used as a substitute.
 
-### D2. Task completion is contract-specific
+The invocation succeeds only after its capture log yields a unique project ID
+and conversation ID. The authenticated release gate must prove that the
+created AGY project resource is the canonical target root and that a decoy
+workspace remains untouched.
 
-A task stage completes when:
+### D2. Resumption uses an explicit project and conversation pair
 
-- its `completion-artifact` classifies as `completed`; or
-- its `required-artifact` is classified, contract-valid, and passes its named
-  validator.
+Represent AGY continuity in the existing opaque `sessionId`:
 
-`blocked`, `unknown`, unclassified, or validator-failing tasks do not complete.
+```text
+agy:v1:<project-uuid>:<conversation-uuid>
+```
 
-### D3. Chain state is causal, not filename-based
+On a resumed invocation the adapter decodes the token and supplies both:
 
-Reduce one chain using parent identity, phase, version, and normalized
-contract result. Do not infer workflow order from filename categories,
-provider names, literal verdict words, or mtime alone.
+```text
+--project <project-uuid>
+--conversation <conversation-uuid>
+```
 
-Impossible branches, duplicate positions, or illegal transitions fail closed
-as `conflict` or `unknown`.
+It never supplies `--new-project` or `--continue` on that invocation.
 
-### D4. Independent chains remain independent
+After completion, the returned IDs must equal the requested pair. A malformed
+input token, missing returned identity, ambiguous log, or mismatch fails
+closed without fabricating a replacement session.
 
-Primary approval and second-opinion runs have distinct chain IDs. An accepted
-artifact from each may remain a separate successor candidate.
+### D3. Generic continuity policy remains authoritative
 
-A retry or repair in one chain cannot itself become an accepted candidate.
-This plan does not redefine whether activity in one independent chain
-supersedes another chain.
+Set AGY's adapter capability to `resumeSession: true` only when D1/D2 and their
+tests land together.
 
-### D5. Exact pipeline edges are single-use
+Do not change `resolveContinuity`. It already requires:
 
-Do not offer a predecessor artifact as a candidate when a classified root in
-the immediate successor stage already names that artifact as
-`parentArtifactIdentity`.
+- `resume-per-skill`;
+- the same chain and skill;
+- the same provider, model, and effort;
+- a persisted non-empty session ID; and
+- an adapter that declares resumption support.
 
-This suppresses accidental replay of the exact edge while preserving a
-separate candidate from a different accepted chain. A future explicit rerun
-feature would require its own contract and is not inferred here.
+Changing the AGY provider/model/effort starts a fresh AGY session while
+preserving the artifact chain. Second opinions remain fresh.
 
-### D6. Present eligibility and historical validity are separate
+### D4. Invocation logs are private capture channels
 
-Current candidate eligibility considers current target fingerprints,
-unresolved chain state, and exact-edge consumption.
+Each run receives a unique temporary path through AGY's supported
+`--log-file` flag.
 
-Historical lineage validation asks whether the recorded parent was
-completion-capable for its binding and correctly anchored the successor when
-created. It must not re-evaluate the parent against later unrelated chain
-activity or current target contents.
+Add a purpose-specific `src/adapters/agy-session.ts` module that owns:
 
-### D7. TOCTOU remains fail-closed
+- strict versioned token encode/decode;
+- bounded UUID parsing from fresh and resumed log shapes; and
+- exact resumed-identity comparison.
 
-After operator selection, rescan and recompute the selected candidate through
-the same current eligibility function used to display it. The final such
-recheck lives in `smashAction` immediately before the selected adapter's
-`run(...)` invocation (the provider-spawn boundary); no eligibility-sensitive
-work may follow it. Runner resolution and ownership setup may precede that
-final recheck. This defines the guarantee boundary: mutations after the final
-recheck and before the operating system actually creates the provider process
-remain an unavoidable process-spawn race and are not represented as an
-accepted eligibility decision.
+`src/adapters/agy.ts` owns temporary-path lifecycle and invokes that parser.
+Generic runtime modules continue to treat the result as an opaque session ID.
 
-Any changed decision, new exact-edge consumer, target drift, invalid evidence,
-or conflict aborts the selection without provider execution.
+Temporary logs:
 
-### D8. Approval-loop manifests express approval semantics
+- live outside the target project;
+- are not workflow artifacts;
+- are never scanned by `isAgyAuthFailure`;
+- are not returned wholesale in structured errors;
+- are cleaned after all ordinary terminal results; and
+- expose only bounded parsed diagnostics in debug output.
 
-Manifest validation requires:
+Test seams must allow deterministic capture-log fixtures without reading or
+writing the real AGY home directory.
 
-- `evaluate.output.contract: decision-artifact` with configured accepted and
-  retry tokens;
-- `repair.output.contract` to be a non-decision contract supported by repair;
-- task output contracts to remain `completion-artifact` or
-  `required-artifact`;
-- a `required-artifact` `validator` to name a supported validator — an unknown
-  name fails manifest load instead of being silently ignored
-  (`implement-ledger` is the only supported name) — and no `validator` on
-  `decision-artifact` or `completion-artifact` contracts, where it would be
-  silently unused; and
-- binding IDs unique across loops and tasks, so ID-keyed state maps stay
-  unambiguous by kind.
+### D5. Authentication detection remains stdout/stderr-only
 
-The runtime must no longer treat `valid` or `completed` evaluation output as
-approval.
+Preserve the bounded existing `isAgyAuthFailure(stdout, stderr)` contract and
+the loop-owned quarantine of partial output artifacts.
 
-### D9. Unknown evidence never advances
+Do not add invocation-log text to the auth matcher. AGY can log transient
+pre-auth failures before silent keyring authentication succeeds.
 
-An invalid or unclassified output cannot become completion evidence. When an
-invalid routed artifact can be attributed to the active chain position, that
-chain resolves to `unknown` and stops. Less-specific unclassified artifacts
-remain visible warnings but are never guessed into a pipeline identity.
+Existing spawn, timeout, nonzero-exit, ownership, or interruption errors retain
+precedence over session parsing and auth fallback classification.
+
+### D6. The configured model is logical; effort is independent
+
+Replace the old display-name catalogue with:
+
+```yaml
+defaultModel: gemini-3.6-flash
+models:
+  - gemini-3.6-flash
+  - gemini-3.5-flash
+  - gemini-3.1-pro
+  - claude-sonnet-4-6
+  - claude-opus-4-6-thinking
+  - gpt-oss-120b-medium
+modelEfforts:
+  gemini-3.6-flash: [low, medium, high]
+  gemini-3.5-flash: [low, medium, high]
+  gemini-3.1-pro: [low, high]
+```
+
+Set AGY's effort capability to true.
+
+- Provider default means omit `--effort`.
+- An explicit configured effort emits exactly one `--effort <level>`.
+- Invalid or unconfigured model/effort pairs fail before spawn.
+- Models without a configured effort list expose provider default only.
+- The strict AGY allow-list remains exact after trimming.
+
+Do not pass an effort-qualified Gemini model slug together with a separate
+effort selection. AGY performs that mapping internally.
+
+### D7. Safe failure is more important than continuity availability
+
+A successful AGY response without a unique project/conversation capture is not
+a valid harness completion. Return a structured provider/configuration error
+and allow the binding engine's normal fail-closed artifact handling to stop the
+step.
+
+Do not fall back to `--continue`, the latest cache entry, another project ID,
+or a session token from a different run.
 
 ## Target architecture
 
-### A. Approval-loop state reducer
+### A. AGY session contract module
 
-Add `src/approval-loop-state.ts` with a pure reducer that accepts classified
-and relevant unclassified steps for one chain.
-
-Its input phase domain is exactly `evaluate | repair | task`. Legacy
-`StepKind` values (`audit`, `follow-up`, and `implement`) are not chain-state
-inputs: a supplied value fails closed as `unknown` rather than being coerced
-into an approval phase. v1 manifest artifacts reach the reducer only through
-their declared output-pattern phase.
-
-It owns:
-
-- legal phase/outcome transitions;
-- terminal versus resumable state;
-- next required phase;
-- conflict detection; and
-- stable reason codes.
-
-Required states:
+Add `src/adapters/agy-session.ts` with pure contracts equivalent to:
 
 ```ts
-type ApprovalChainState =
-  | { kind: 'not-started' }
-  | { kind: 'repair-required'; evaluate: Step }
-  | { kind: 'evaluation-required'; repair: Step }
-  | { kind: 'accepted'; evaluate: Step }
-  | { kind: 'blocked'; artifact: Step; reason: string }
-  | { kind: 'unknown'; artifact?: Step; reason: string }
-  | { kind: 'conflict'; artifacts: Step[]; reason: string };
+type AgySessionIdentity = {
+  projectId: string;
+  conversationId: string;
+};
+
+encodeAgySession(identity): string
+decodeAgySession(token): AgySessionIdentity
+parseAgyInvocationLog(log): AgySessionIdentity
+assertAgyResumedIdentity(expected, actual): void
 ```
 
-The reducer must be generic over binding identity and normalized results. It
-must not know workflow names such as `plan` or `review`.
+Use a strict UUID grammar and a versioned prefix. Reject duplicate conflicting
+IDs, partial pairs, unsupported token versions, extra fields, and arbitrary
+provider text.
 
-### B. Pipeline stage-state rules
+The parser supports only the bounded 1.1.6 lines verified in research. A future
+AGY log-format change must fail closed and be handled as an adapter contract
+update.
 
-Add `src/pipeline-stage-state.ts` with pure functions for:
+### B. AGY adapter
 
-1. `completionEvidenceForStage(...)`
-   - resolves the stage binding through the manifest;
-   - uses the approval reducer for loops;
-   - applies the declared output contract for tasks.
+Update `src/adapters/agy.ts` to:
 
-2. `pipelineStageCandidates(...)`
-   - evaluates completion-capable evidence;
-   - applies expected-predecessor, pipeline/run/stage, target-fingerprint, and
-     exact-edge-consumption checks;
-   - returns eligible and unavailable candidates with reason codes.
+1. declare effort and continuity capability;
+2. construct fresh versus resumed project arguments;
+3. emit explicit effort only when selected;
+4. allocate and pass a unique temporary log path;
+5. retain shared process execution and watchdog behavior;
+6. preserve stdout/stderr auth detection;
+7. parse the capture log only after the process has a successful terminal
+   result;
+8. return the encoded identity as `RunResult.sessionId`;
+9. require exact identity equality on resume; and
+10. clean temporary capture state on success and failure.
 
-3. `validateContinuationParent(...)`
-   - validates the recorded parent by binding/phase semantics and immediate
-     pipeline lineage;
-   - intentionally excludes current fingerprint and later-chain state.
+Keep project/session discovery, log parsing, and cleanup inside the AGY adapter
+boundary. Do not add AGY branches to the binding engine.
 
-`src/pipeline-state.ts` may retain identity, hashing, and run-context
-responsibilities, but it must stop owning a second generic completion
-predicate. Move or delegate candidate semantics cleanly; do not create a
-generic helper bucket.
+### C. Catalogue and runner surfaces
 
-`Candidate` (or a distinct unavailable-candidate variant) must gain a typed
-`reason` / `unavailableReason` code. `evidence` remains diagnostic context;
-rendering and execution consume the typed code rather than deriving a reason
-from booleans.
+Update the packaged AGY provider catalogue and all fixtures expecting the old
+names. Reuse the existing generic:
 
-### C. Rich artifact input
+- strict model validation;
+- model-specific effort validation;
+- provider-default effort option;
+- agent-change model reset;
+- runner summaries; and
+- continuity compatibility check.
 
-The candidate and validator inputs must retain:
+No AGY-only interactive prompt is added.
 
-- `bindingKind`;
-- `bindingId`;
-- phase (`evaluate`, `repair`, or `task`);
-- declared task/step contract where needed;
-- chain ID and chain mode;
-- pipeline, run, and stage IDs;
-- version and artifact identity;
-- parent artifact identity;
-- normalized decision/completion result;
-- contract validity and unclassified state;
-- result fingerprint; and
-- artifact path for diagnostics.
+### D. Contract verification
 
-Do not reduce a `Step` to decision/completion booleans before invoking the
-domain rule.
+Extend deterministic coverage and add an explicitly enabled authenticated AGY
+contract script/test. It must run from a unique target directory and use a
+separate decoy project containing a sentinel.
 
-### D. Consumer alignment
-
-Use the new reducers in:
-
-- `src/next-step.ts` for candidate and unavailable-state construction. Delete
-  its unused `resolveNextStep`, `NextStepState`, `NextStepDecision`, and
-  `NextStepInput` exports, and remove their cases from
-  `tests/next-step.test.ts`; this historical decision-only restart rule has no
-  production callers and must not become a second owner of loop progression;
-- `src/commands/smash.ts` for the execution-time recheck;
-- `src/artifact-index.ts` for continuation and same-chain validation;
-- `src/loop-selector.ts` for **Continue current loop** availability;
-- `src/project-snapshot-view.ts` for suggested-loop explanations; and
-- `src/loops/binding-engine.ts` for initial continuation phase, removing its
-  parallel reconstruction logic unconditionally.
-
-Rendering modules consume typed reasons; they do not reimplement decisions.
+The test records only non-sensitive evidence: AGY version, configured model and
+effort, target/decoy paths, returned token shape, expected artifacts, and
+pass/fail results. It must not archive account identifiers, auth tokens, or raw
+invocation logs.
 
 ## Implementation releases
 
-### Release 1 — Domain contracts and manifest constraints
+The releases form one atomic AGY patch. Do not publish a state where the new
+catalogue is active while workspace binding or session capture is partial.
 
-1. Add the pure approval-chain reducer.
-2. Add binding-aware stage completion and historical-parent rules.
-3. Extend or replace `ArtifactRecord` so phase and binding semantics survive.
-4. Constrain approval-loop evaluate/repair contract combinations at manifest
-   load, reject unknown or misplaced `validator` names, and reject loop/task
-   binding-ID collisions — each fails closed at load instead of being silently
-   ignored.
-5. Narrow binding-engine evaluation acceptance to normalized `accepted`.
-6. Add unit matrices before wiring operator actions.
+### Release 1 — Pure session and catalogue contracts
 
-Release 1 must preserve current production behavior for the packaged manifest
-except that impossible custom approval-loop contracts fail at load time.
+1. Add `agy-session.ts` with token and log parsers.
+2. Replace the AGY model catalogue with logical 1.1.6 slugs.
+3. Add the verified per-model effort lists.
+4. Update runner/config/interactive fixtures for strict AGY validation.
+5. Add parser matrices for fresh, resumed, malformed, missing, duplicate, and
+   mismatched identities.
 
-### Release 2 — Stateless scan, recovery, and lineage
+Release 1 is not deployable by itself.
 
-1. Replace the generic continuation-parent predicate in
-   `src/artifact-index.ts`.
-2. Validate legal same-chain approval transitions.
-3. Route loop recovery and next-phase selection through the approval reducer.
-4. Align `bindingHasInProgressChain` and project-snapshot suggested-loop
-   reasons.
-5. Preserve classified historical successor artifacts when later independent
-   chain activity occurs.
+### Release 2 — Adapter workspace binding, effort, and continuity
 
-Release 2 must prove restart behavior at each durable boundary:
+1. Add `--new-project` to fresh AGY commands.
+2. Add explicit `--project` plus `--conversation` to resumed commands.
+3. Add `--effort` only for explicit choices.
+4. Add unique temporary `--log-file` capture and cleanup.
+5. Return the versioned composite `sessionId`.
+6. Enable AGY effort and resume capabilities.
+7. Preserve error precedence, auth detection, quarantine ownership, timeout,
+   interruption, and process-group behavior.
+8. Add adapter and loop-continuity tests through injected process/log seams.
 
-- after retry evaluation;
-- after completed repair;
-- after accepted evaluation;
-- after blocked repair; and
-- after invalid/unclassified output.
+Release 2 is not deployable until Release 3 gates pass.
 
-This release deletes the unused parallel `resolveNextStep` restart rule in
-`src/next-step.ts` and its focused tests; `approval-loop-state.ts` is the sole
-owner of approval-loop next-phase semantics.
+### Release 3 — Safety gates and documentation
 
-### Release 3 — Candidate eligibility, replay, and operator evidence
+1. Run the authenticated target/decoy fresh-write gate.
+2. Resume the captured session and run the second target-only write.
+3. Verify project and conversation identity stability.
+4. Verify provider-default and representative explicit effort mappings.
+5. Run deterministic and focused regression suites.
+6. Synchronize `AGENTS.md`, `README.md`, and
+   `docs/architecture/overview.md`.
+7. Archive a redacted manual verification record.
 
-1. Replace candidate generation with binding-aware completion evidence.
-2. Exclude every repair artifact from loop-stage completion.
-3. Suppress an exact predecessor edge already consumed by the successor.
-4. Preserve separate eligible candidates from distinct accepted chains.
-5. Return unavailable candidates with explicit reasons for status.
-6. Apply the identical resolver during the pre-spawn TOCTOU recheck in
-   `smashAction`, immediately before `adapter.run(...)`; retain or move any
-   earlier interactive confirmation check only as an early usability check,
-   never as the final authorization.
-7. Include predecessor binding kind, phase, normalized result, chain identity,
-   and consumption/fingerprint state in labels and detailed status.
-
-No release may temporarily make repair artifacts eligible.
-
-### Release 4 — Documentation and release verification
-
-1. Synchronize `AGENTS.md`, `README.md`, and
-   `docs/architecture/overview.md` with: the configured linear
-   `plan -> implement -> review` pipeline; approval-loop progression being
-   exclusively `evaluate/accepted`; repair's resumable-but-not-successor role;
-   the reducer/stage-state ownership boundaries; the displayed
-   **Start suggested stage** eligibility and reason diagnostics; exact-edge
-   single-use and historical-lineage behavior; and the operator-workaround
-   removal condition below. Remove or correct any description of generic
-   `accepted || completed || contractValid` completion.
-2. Retain the operator workaround until all acceptance gates pass.
-3. Run deterministic gates and the existing provider contract gates affected
-   by shared binding execution.
-4. Audit the completed plan and archive implementation evidence according to
-   the configured workflow.
-
-## Implementation closeout
-
-- Release 1: completed — reducer, stage-state contracts, manifest constraints,
-  rich artifact records, and focused matrices landed.
-- Release 2: completed — artifact lineage, recovery, suggested-loop state, and
-  historical continuation use the approval reducer and binding-aware rules.
-- Release 3: completed — candidates, exact-edge suppression, typed reasons,
-  labels, and the final pre-spawn eligibility recheck are aligned.
-- Release 4: completed — repository documentation is synchronized and the
-  deterministic verification gates pass.
-
-Verification evidence is recorded in the implementation handoff: typecheck,
-build, full deterministic tests, focused pipeline/artifact/recovery/menu/status
-tests, and the final TOCTOU seam test. Real-provider contract suites remain
-env-gated/manual release sign-offs as required by the repository invariants.
-
-Review follow-up evidence: the final pre-spawn eligibility recheck now has a
-source-level ordering seam proving no eligibility resolver follows it before
-runner dispatch; malformed same-stage continuation roots are rejected unless
-their parent is in the same chain; and the prior packaged
-`plan -> implement -> review` rejection, repair, and re-evaluation coverage is
-preserved. Review findings are not approval: rerun `40-simple-review` for the
-next decision.
+Release 3 is the first publishable boundary.
 
 ## Required test matrix
 
-### Approval-loop reducer
+### Token and log parsing
 
-- Empty chain -> `not-started`.
-- Retry evaluation -> `repair-required`.
-- Retry evaluation plus completed repair -> `evaluation-required`.
-- Retry evaluation plus valid required-artifact repair ->
-  `evaluation-required`.
-- Accepted evaluation -> `accepted`.
-- Blocked repair -> `blocked`.
-- Invalid evaluation or repair -> `unknown`.
-- Repair after accepted evaluation -> conflict/unclassified.
-- Evaluation after retry without repair -> conflict/unclassified.
-- Duplicate or competing same-chain positions -> conflict.
-- Legacy `audit`, `follow-up`, or `implement` phase supplied to the reducer ->
-  fail-closed `unknown` with a stable reason code.
-- Custom accepted/retry tokens normalize without literal-token branching.
+- Fresh 1.1.6 log -> exact project/conversation pair.
+- Resumed 1.1.6 log -> exact same pair.
+- Token encode/decode round trip.
+- Wrong prefix/version -> reject.
+- Invalid UUID -> reject.
+- Missing project or conversation -> reject.
+- Conflicting duplicate IDs -> reject.
+- Repeated identical diagnostic lines -> deterministic single identity.
+- Expected/actual resume mismatch -> reject.
+- Transient auth-looking log lines do not affect session parsing.
 
-### Pipeline candidates
+### Command construction
 
-- Accepted loop evaluation unlocks the immediate successor.
-- Rejected loop evaluation does not unlock it.
-- Completed repair does not unlock it.
-- Completed repair followed by another rejected evaluation does not unlock it.
-- An older completion-looking artifact in the same unresolved chain is not
-  eligible.
-- Completed completion-artifact task unlocks its successor.
-- Blocked completion-artifact task does not unlock it.
-- Valid required-artifact task unlocks its successor.
-- Validator-failing required artifact does not unlock it.
-- Unclassified and identity-invalid artifacts never unlock a successor.
-- Foreign pipeline/run/stage evidence is excluded.
-- Stale target fingerprints produce an unavailable candidate with a reason.
-- Distinct accepted chains remain distinct candidates.
-- An exact predecessor already consumed by a successor root is not offered
-  again.
-- Consumption in another pipeline run does not suppress the candidate.
+- Fresh -> `--new-project`, no `--project`, no `--conversation`.
+- Resumed -> `--project` and `--conversation`, no `--new-project`, no
+  `--continue`.
+- Every invocation -> one unique `--log-file`.
+- Provider-default effort -> no `--effort`.
+- Explicit effort -> exactly one correct flag.
+- No AGY CLI timeout flag; the harness watchdog remains authoritative.
+- Autonomy flag remains present for write-capable headless use.
 
-### Historical lineage
+### Adapter results and cleanup
 
-- A successor rooted at `loop/evaluate/accepted` remains classified.
-- A successor rooted at `loop/repair/completed` is unclassified.
-- A successor rooted at a completed task remains classified.
-- A successor rooted at a valid required-artifact task remains classified.
-- Wrong pipeline, run, stage, binding, or parent identity is unclassified.
-- A later independent rejected second opinion does not retroactively
-  unclassify an existing valid successor.
-- Later target drift suppresses new candidates but does not rewrite historical
-  lineage.
+- Successful fresh result returns encoded session identity.
+- Successful resumed result returns the same encoded identity.
+- Missing/ambiguous capture -> structured failure, no session ID.
+- Malformed supplied token -> no spawn.
+- Resume mismatch -> structured failure.
+- Process error retains precedence.
+- Auth error retains existing classification and loop-owned artifact
+  quarantine.
+- Success logs containing benign or transient auth prose are not classified
+  from the capture log.
+- Temporary capture paths are cleaned on success, auth failure, nonzero exit,
+  timeout, and parser failure.
 
-### Recovery and menus
+### Catalogue and runner behavior
 
-- Retry evaluation enables **Continue** with repair next.
-- Completed repair enables **Continue** with evaluation next.
-- Accepted evaluation disables **Continue** and permits second opinion.
-- Unknown/conflict never recommends a fresh transition as though complete.
-- Status and menu use the same reason/state returned by the reducer.
-- The second-opinion rejected -> repair behavior remains unchanged.
+- Default AGY model is `gemini-3.6-flash`.
+- Exact configured base slugs are accepted.
+- Old display names and cross-provider IDs are rejected.
+- Gemini effort choices match the configured matrix.
+- Non-Gemini models expose provider default only.
+- Changing model clears an incompatible effort.
+- Changing provider/model/effort prevents session resume.
+- Compatible same-skill/same-chain metadata resumes AGY.
+- Second opinion and fresh-per-invocation policy remain fresh.
 
-### TOCTOU and execution
+### Isolated authenticated contract
 
-- A candidate accepted at display but followed by a retry before confirmation
-  is rejected before spawn.
-- A candidate consumed by another successor before confirmation is rejected
-  before spawn.
-- Target modification before confirmation is rejected before spawn.
-- No failed recheck invokes an adapter or writes a successor artifact.
-- A successful recheck binds exactly the selected predecessor identity.
-- Mutation after interactive confirmation but before the `smashAction`
-  adapter-run boundary is rejected by the final recheck; a test seam asserts
-  that the eligibility recheck is the last eligibility gate before
-  `adapter.run(...)`.
+- Fresh `--new-project` binds the canonical target directory.
+- The requested artifact/source mutation exists only in the target.
+- A decoy sentinel and decoy worktree remain byte-for-byte unchanged.
+- Returned token contains the project bound to the target.
+- Resume uses the same project and conversation IDs.
+- Resumed mutation again exists only in the target.
+- Provider-default invocation omits effort and succeeds.
+- Representative explicit effort invocations resolve to the intended variant.
+- Invalid model/effort fails nonzero or before spawn and produces no artifact.
 
-### Manifest validation
+## Existing tests requiring updates
 
-- Approval evaluate with completion-artifact is rejected.
-- Approval evaluate with required-artifact is rejected.
-- Approval repair with decision-artifact is rejected.
-- An unknown `validator` name on a required-artifact is rejected at load.
-- A `validator` on a decision-artifact or completion-artifact contract is
-  rejected at load.
-- A loop and a task sharing the same textual ID are rejected at load.
-- Packaged plan and review loops remain valid.
-- Tasks retain completion-artifact and required-artifact support.
+- `tests/adapters/agy.test.ts`
+- `tests/adapters-args.test.ts`
+- `tests/adapters/registry.test.ts`
+- `tests/adapters/registry-timeout-integration.test.ts`
+- `tests/agy-contract.test.ts`
+- `tests/config.test.ts`
+- `tests/runner.test.ts`
+- `tests/interactive.test.ts`
+- `tests/loop-continuity.test.ts`
+- fixtures/status expectations containing old AGY display names
 
-## Existing tests requiring correction
-
-- Replace the mislabeled required-artifact case in
-  `tests/pipeline-state.test.ts` with separate completion-task and
-  required-artifact-task cases.
-- Strengthen `tests/next-step.test.ts` to assert exact candidates and reasons,
-  not merely `Array.isArray`, including the typed unavailable reason field.
-- Refine the multiple-candidates smash-action test to state that candidates
-  come from distinct accepted chains and add a separate exact-edge replay
-  suppression test.
-- Extend artifact-index validation with phase/outcome legality and a
-  repair-parent rejection.
-- Add parity tests proving status display and execution recheck consume the
-  same domain result.
-- Add a structural regression test (in `tests/pipeline-state.test.ts` or a
-  dedicated focused test) that scans `src/` and fails if either forbidden
-  generic-completion predicate shape — `completionOutcome === 'completed'` as
-  a loop-success shortcut, or `contractValid === true && decision ===
-  undefined && completionOutcome === undefined` — appears outside the
-  contract-specific task branch in `pipeline-stage-state.ts`. Pair it with a
-  focused spy/seam assertion that `pipelineStageCandidates` obtains loop
-  completion only from `completionEvidenceForStage` and excludes every repair
-  artifact regardless of `completionOutcome`.
-- Add `tests/manifest.test.ts` cases proving unknown `validator` names,
-  validators on decision/completion contracts, and loop/task binding-ID
-  collisions each fail at load while the packaged manifest stays valid.
+Add focused tests for `agy-session.ts` and the authenticated manual contract
+without folding provider-specific cases into generic helper files.
 
 ## Verification commands
 
@@ -477,80 +375,49 @@ At minimum:
 pnpm typecheck
 pnpm build
 pnpm test
-pnpm test tests/pipeline-state.test.ts
-pnpm test tests/artifact-index-validation.test.ts
-pnpm test tests/loop-selector.test.ts
-pnpm test tests/next-step.test.ts
-pnpm test tests/smash-action.test.ts
+pnpm test tests/adapters/agy.test.ts
+pnpm test tests/adapters-args.test.ts
+pnpm test tests/agy-contract.test.ts
+pnpm test tests/loop-continuity.test.ts
+pnpm test tests/runner.test.ts
+pnpm test tests/config.test.ts
+pnpm test tests/interactive.test.ts
 ```
 
-Run the deterministic fake-adapter end-to-end gates, including dual-target
-isolation and mixed-runner loops. Because the binding engine and artifact scan
-are shared by real providers, run the existing env-gated opencode, codex, and
-claude contract checks during release sign-off; no new provider-specific
-behavior is introduced. AGY requires only its existing deterministic seam and
-manual authenticated verification policy.
+Run the authenticated AGY gate only from an already-authenticated operator
+shell using its explicit environment switch. The implementation must define
+the exact command and archive a redacted result before release.
 
 ## Acceptance gates
 
-1. No code path defines generic stage completion as
-   `accepted || completed || contractValid`; the structural regression guard
-   and completion-evidence seam test enforce this, not behavioral coverage
-   alone.
-2. Approval-loop successor eligibility comes only from
-   `evaluate/accepted`.
-3. Repair completion remains resumable but never successor-eligible.
-4. Both completion-artifact and required-artifact task progression pass;
-   unknown or misplaced validator names and loop/task binding-ID collisions
-   fail at manifest load.
-5. Display, execution recheck, recovery, and lineage use the intended domain
-   rule with explicit parity tests.
-6. Exact-edge replay is suppressed without collapsing distinct accepted
-   chains.
-7. Historical valid continuations survive later independent activity and
-   target drift.
-8. Unknown, conflict, and unclassified evidence fail closed with a visible
-   reason.
-9. Second-opinion automatic repair is unchanged.
-10. Typecheck, build, deterministic tests, focused regressions, and release
-    contract gates pass.
-
-## Deferred hardening (closed second-opinion findings)
-
-The second-opinion audit chain on this plan (v3–v5; artifacts removed from the
-audit trail) raised the following items. They are recorded here as
-accepted-risk deferrals matched to current single-operator usage — not as
-requirements of this plan — and each may become its own planned issue if usage
-grows into it:
-
-- **Provider-spawn authorization seam.** A one-shot
-  `authorizeStageContinuation` callback threaded through `LoopOptions`,
-  `runBinding`, and `executeLoopStep`, plus a first-class `eligibility-lost`
-  outcome route. Deferred: D7's rescan-and-recompute recheck in `smashAction`
-  immediately before `adapter.run(...)` covers the interactive single-operator
-  risk; the callback threading and new outcome route are disproportionate to
-  current usage.
-- **Exact-`chainId` multi-chain recovery.** Per-chain resumable candidates
-  replacing the boolean `bindingHasInProgressChain`, with an explicit operator
-  choice when one binding has several resumable chains. Deferred: the reducer
-  classifies each chain correctly on its own artifacts; multiple concurrently
-  resumable chains on one binding are rare in single-operator use.
-- **Permutation-invariant chain reduction.** Deriving causal order from
-  parent-identity links independent of scanner order. Deferred: the scanner
-  already validates immediate-parent linkage within each chain and fails closed
-  on inconsistency; adversarial mtime or copied-artifact ordering is outside
-  the current threat model.
-- **Discriminated candidate-result union.** Per-reason required/forbidden
-  field cardinality, reason-precedence tables, and canonical-sort contracts.
-  Deferred: the typed `reason`/`unavailableReason` code (Target architecture B)
-  carries the diagnostic without the cardinality machinery.
-
-These items are closed for the approval of this plan; reopening any of them
-requires its own research and plan cycle.
+1. Every fresh AGY invocation uses `--new-project` with canonical target `cwd`.
+2. Every resumed invocation uses the exact captured project and conversation;
+   `--continue` is absent everywhere.
+3. AGY returns a versioned composite session token and generic provenance
+   persists it without schema changes.
+4. Same-chain, same-skill, same-provider/model/effort continuation resumes;
+   incompatible choices remain fresh.
+5. The 1.1.6 logical model and effort catalogue is exact and strictly
+   validated before spawn.
+6. Provider default omits `--effort`; explicit effort emits one verified flag.
+7. Capture logs are unique, temporary, cleaned, excluded from auth scanning,
+   and never surfaced wholesale.
+8. Missing, malformed, ambiguous, or mismatched session evidence fails closed.
+9. Existing AGY auth-failure detection and loop-owned partial-artifact
+   quarantine remain intact.
+10. Timeout, interruption, ownership, signal, and supervisor contracts are
+    unchanged.
+11. The authenticated target/decoy gate proves fresh and resumed writes cannot
+    use an old workspace.
+12. Typecheck, build, deterministic tests, focused regressions, and canonical
+    documentation synchronization pass before release.
 
 ## Operator safety until release
 
-Do not use **Start suggested stage** for an approval-loop predecessor unless
-the displayed artifact is a classified `evaluate/accepted` artifact. Never
-advance from `repair/completed`. For a retry evaluation, use **Continue current
-loop** until a new accepted evaluation exists.
+Do not use the current AGY adapter for write-capable plan-follow-up,
+review-follow-up, or implementation runs. Its `cwd`-only command does not
+provide the explicit workspace binding proven necessary by research.
+
+AGY may be exercised manually in isolated disposable projects for the contract
+probes above. Do not treat successful stdout or a zero exit code as proof that
+the intended repository was selected.
