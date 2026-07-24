@@ -881,6 +881,21 @@ describe('generic smash dispatch', () => {
       expect(existsSync(join(project, 'docs/dev/impl-v1-opencode.md'))).toBe(false);
     });
 
+    it('keeps the final eligibility recheck as the last gate before runner dispatch', () => {
+      const source = readFileSync(join(process.cwd(), 'src/commands/smash.ts'), 'utf8');
+      const recheckStart = source.indexOf('const finalCandidates = pipelineSuggestions(projectRoot, setup.config.manifest);');
+      const dispatchStart = source.indexOf("runResult = setup.bindingKind === 'task'");
+      const recheckBoundary = source.indexOf('let runResult: LoopReturn;', recheckStart);
+
+      expect(recheckStart).toBeGreaterThanOrEqual(0);
+      expect(recheckBoundary).toBeGreaterThan(recheckStart);
+      expect(dispatchStart).toBeGreaterThan(recheckBoundary);
+
+      const postRecheckSource = source.slice(recheckBoundary, dispatchStart);
+      expect(postRecheckSource).not.toMatch(/\b(?:pipelineSuggestions|eligibleNextStages|pipelineStageCandidates)\s*\(/);
+      expect(source.slice(recheckStart, recheckBoundary)).toContain('if (!finalEligible)');
+    });
+
     it('resolves successor bindings scoped to pipelineId and executes only the correct one', async () => {
       writeFileSync(join(continueProject, '.orc-smash.yaml'), JSON.stringify({
         schemaVersion: 1,

@@ -197,6 +197,18 @@ export function validateContinuationParent(
   if (!parent || parent.unclassified) {
     return { valid: false, reason: `stage-continuation parent artifact '${child.parentArtifactIdentity}' not found or is unclassified.` };
   }
+  if (
+    parent.pipelineId === child.pipelineId
+    && parent.pipelineRunId === child.pipelineRunId
+    && parent.stageId === child.stageId
+    && parent.chainId === child.chainId
+  ) {
+    // Same-stage parents are valid only for descendants within the same
+    // approval chain. A continuation root must still anchor to the
+    // immediately preceding pipeline stage, even if a forged parent happens
+    // to share its stage and run.
+    return { valid: true };
+  }
   if (parent.pipelineId !== child.pipelineId || parent.pipelineRunId !== child.pipelineRunId || parent.stageId !== predecessorStageId) {
     return { valid: false, reason: `stage-continuation parent artifact '${child.parentArtifactIdentity}' is in a different pipeline/run/stage.` };
   }
@@ -353,5 +365,3 @@ export function artifactRecordFromStep(step: {
     completionOutcome: step.completionOutcome,
   };
 }
-
-

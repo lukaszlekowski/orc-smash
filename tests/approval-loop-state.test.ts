@@ -64,6 +64,7 @@ describe('approval-loop-state reducer', () => {
     expect(reduceApprovalChain([step({ normalizedResult: 'retry' }), step({ artifactIdentity: 'a2', version: 2, normalizedResult: 'accepted', parentArtifactIdentity: 'a1' })])).toMatchObject({ kind: 'conflict', reason: 'evaluation-without-repair' });
     expect(reduceApprovalChain([step(), step({ artifactIdentity: 'a2', parentArtifactIdentity: 'a1' })])).toMatchObject({ kind: 'conflict', reason: 'duplicate-position' });
     expect(reduceApprovalChain([step({ phase: 'audit' })])).toMatchObject({ kind: 'unknown', reason: 'legacy-phase' });
+    expect(reduceApprovalChain([step({ phase: 'repair', normalizedResult: 'completed' })])).toMatchObject({ kind: 'unknown', reason: 'non-evaluate-root' });
     expect(reduceApprovalChain([step(), step({ artifactIdentity: 'r1', phase: 'repair', normalizedResult: 'completed', parentArtifactIdentity: 'a1' })])).toMatchObject({ kind: 'conflict', reason: 'repair-after-accepted' });
 
     const retry = step({ normalizedResult: 'retry' });

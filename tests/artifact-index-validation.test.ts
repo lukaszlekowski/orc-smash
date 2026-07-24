@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { scanGlobalSnapshot } from '../src/artifact-index.js';
 import { buildProjectSnapshotView } from '../src/project-snapshot-view.js';
 import { computeArtifactIdentity } from '../src/pipeline-state.js';
+import { artifactRecordFromStep, pipelineStageCandidates } from '../src/pipeline-stage-state.js';
 import { buildFrontMatter, type ArtifactMeta } from '../src/provenance.js';
 import type { V1Manifest } from '../src/manifest.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -69,12 +70,62 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
         },
       },
     },
-    tasks: {},
+    tasks: {
+      completedTask: {
+        skill: 'evaluate',
+        target: { path: '.', kind: 'worktree' },
+        inputs: [],
+        output: {
+          pattern: 'docs/dev/completed-task-v{version}-{provider}.md',
+          contract: 'completion-artifact',
+        },
+      },
+      completedSink: {
+        skill: 'evaluate',
+        target: { path: '.', kind: 'worktree' },
+        inputs: [],
+        output: {
+          pattern: 'docs/dev/completed-sink-v{version}-{provider}.md',
+          contract: 'completion-artifact',
+        },
+      },
+      requiredTask: {
+        skill: 'evaluate',
+        target: { path: '.', kind: 'worktree' },
+        inputs: [],
+        output: {
+          pattern: 'docs/dev/required-task-v{version}-{provider}.md',
+          contract: 'required-artifact',
+        },
+      },
+      requiredSink: {
+        skill: 'evaluate',
+        target: { path: '.', kind: 'worktree' },
+        inputs: [],
+        output: {
+          pattern: 'docs/dev/required-sink-v{version}-{provider}.md',
+          contract: 'required-artifact',
+        },
+      },
+    },
     pipelines: {
       pipeA: {
         stages: [
           { stageId: 'stage1', loop: 'loopA' },
           { stageId: 'stage2', loop: 'loopB' },
+          { stageId: 'stage3', loop: 'loopA' },
+        ],
+      },
+      completedTaskPipe: {
+        stages: [
+          { stageId: 'completed-task-stage', task: 'completedTask' },
+          { stageId: 'completed-sink-stage', task: 'completedSink' },
+        ],
+      },
+      requiredTaskPipe: {
+        stages: [
+          { stageId: 'required-task-stage', task: 'requiredTask' },
+          { stageId: 'required-sink-stage', task: 'requiredSink' },
         ],
       },
     },
@@ -458,5 +509,194 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
     const snapshot = scanGlobalSnapshot(testDir, manifest);
     expect(snapshot.unclassified.some(step => step.artifactPath.includes('loopB-eval-v1-fake.md'))).toBe(false);
     expect(snapshot.steps.find(step => step.artifactPath.includes('loopB-eval-v1-fake.md'))?.unclassified).toBeFalsy();
+  });
+
+  it('14. stage-continuation loop repair cycles remain classified and unlock their next stage', () => {
+    const firstMeta = createValidMeta({
+      bindingId: 'loopA',
+      pipelineRunId: 'run-loop-successor',
+      stageId: 'stage1',
+      chainId: 'source-chain',
+      resultFingerprint: 'loopA-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(firstMeta) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const successorEval1 = createValidMeta({
+      bindingId: 'loopB',
+      kind: 'evaluate',
+      step: 'evaluate',
+      pipelineRunId: 'run-loop-successor',
+      stageId: 'stage2',
+      chainId: 'successor-loop-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: firstMeta.artifactIdentity,
+      resultFingerprint: 'loopB-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v1-fake.md'), buildFrontMatter(successorEval1) + '# Evaluation\n\n## Decision\n\nREJECTED\n');
+
+    const successorRepair = createValidMeta({
+      bindingId: 'loopB',
+      kind: 'repair',
+      step: 'repair',
+      pipelineRunId: 'run-loop-successor',
+      stageId: 'stage2',
+      chainId: 'successor-loop-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: successorEval1.artifactIdentity,
+      resultFingerprint: 'loopB-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-rep-v1-fake.md'), buildFrontMatter(successorRepair) + '# Repair\n\n## Outcome\n\nCOMPLETED\n');
+
+    const successorEval2 = createValidMeta({
+      bindingId: 'loopB',
+      kind: 'evaluate',
+      step: 'evaluate',
+      version: 2,
+      pipelineRunId: 'run-loop-successor',
+      stageId: 'stage2',
+      chainId: 'successor-loop-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: successorRepair.artifactIdentity,
+      resultFingerprint: 'loopB-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v2-fake.md'), buildFrontMatter(successorEval2) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const successorSteps = snapshot.byBinding.get('loopB') ?? [];
+    expect(snapshot.unclassified).toHaveLength(0);
+    expect(successorSteps).toHaveLength(3);
+    expect(successorSteps.every(step => !step.unclassified)).toBe(true);
+
+    const candidates = pipelineStageCandidates(
+      snapshot.steps.map(artifactRecordFromStep),
+      manifest,
+      new Map([['pipeA:stage2', 'loopB-state']]),
+    );
+    expect(candidates.find(candidate => candidate.artifactIdentity === successorEval2.artifactIdentity)).toEqual(expect.objectContaining({
+      artifactIdentity: successorEval2.artifactIdentity,
+      successorStageId: 'stage3',
+      reason: 'eligible',
+    }));
+  });
+
+  it('15. completed-task and valid-required-task successors remain historically classified', () => {
+    const completedRoot = createValidMeta({
+      bindingKind: 'task',
+      bindingId: 'completedTask',
+      kind: 'task',
+      step: 'task',
+      pipelineId: 'completedTaskPipe',
+      pipelineRunId: 'run-completed-task',
+      stageId: 'completed-task-stage',
+      chainMode: 'pipeline-start',
+      parentArtifactIdentity: null,
+    });
+    writeFileSync(join(testDir, 'docs/dev/completed-task-v1-fake.md'), buildFrontMatter(completedRoot) + '# Task\n\n## Outcome\n\nCOMPLETED\n');
+    const completedSuccessor = createValidMeta({
+      bindingKind: 'task',
+      bindingId: 'completedSink',
+      kind: 'task',
+      step: 'task',
+      pipelineId: 'completedTaskPipe',
+      pipelineRunId: 'run-completed-task',
+      stageId: 'completed-sink-stage',
+      chainId: 'completed-successor-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: completedRoot.artifactIdentity,
+    });
+    writeFileSync(join(testDir, 'docs/dev/completed-sink-v1-fake.md'), buildFrontMatter(completedSuccessor) + '# Task\n\n## Outcome\n\nCOMPLETED\n');
+
+    const requiredRoot = createValidMeta({
+      bindingKind: 'task',
+      bindingId: 'requiredTask',
+      kind: 'task',
+      step: 'task',
+      pipelineId: 'requiredTaskPipe',
+      pipelineRunId: 'run-required-task',
+      stageId: 'required-task-stage',
+      chainMode: 'pipeline-start',
+      parentArtifactIdentity: null,
+    });
+    writeFileSync(join(testDir, 'docs/dev/required-task-v1-fake.md'), buildFrontMatter(requiredRoot) + '# Required task ledger\n');
+    const requiredSuccessor = createValidMeta({
+      bindingKind: 'task',
+      bindingId: 'requiredSink',
+      kind: 'task',
+      step: 'task',
+      pipelineId: 'requiredTaskPipe',
+      pipelineRunId: 'run-required-task',
+      stageId: 'required-sink-stage',
+      chainId: 'required-successor-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: requiredRoot.artifactIdentity,
+    });
+    writeFileSync(join(testDir, 'docs/dev/required-sink-v1-fake.md'), buildFrontMatter(requiredSuccessor) + '# Required sink ledger\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    expect(snapshot.steps.filter(step => step.pipelineId === 'completedTaskPipe' || step.pipelineId === 'requiredTaskPipe')
+      .every(step => !step.unclassified)).toBe(true);
+  });
+
+  it('16. target drift suppresses new candidates without rewriting historical lineage', () => {
+    const accepted = createValidMeta({
+      bindingId: 'loopA',
+      pipelineRunId: 'run-target-drift',
+      stageId: 'stage1',
+      chainId: 'target-drift-chain',
+      resultFingerprint: 'recorded-before-edit',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(accepted) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const candidates = pipelineStageCandidates(
+      snapshot.steps.map(artifactRecordFromStep),
+      manifest,
+      new Map([['pipeA:stage1', 'current-after-edit']]),
+    );
+
+    expect(snapshot.steps[0]!.unclassified).toBeFalsy();
+    expect(candidates.find(candidate => candidate.artifactIdentity === accepted.artifactIdentity)).toMatchObject({
+      reason: 'target-fingerprint-drift',
+      stale: true,
+    });
+    expect(snapshot.steps[0]!.unclassified).toBeFalsy();
+  });
+
+  it('17. rejects a stage-continuation root whose same-stage parent belongs to another chain', () => {
+    const predecessor = createValidMeta({
+      bindingId: 'loopA',
+      pipelineRunId: 'run-same-stage-root',
+      stageId: 'stage1',
+      chainId: 'predecessor-chain',
+      resultFingerprint: 'predecessor-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(predecessor) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const sameStageParent = createValidMeta({
+      bindingId: 'loopB',
+      pipelineRunId: 'run-same-stage-root',
+      stageId: 'stage2',
+      chainId: 'valid-successor-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: predecessor.artifactIdentity,
+      resultFingerprint: 'successor-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v1-fake.md'), buildFrontMatter(sameStageParent) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const malformedRoot = createValidMeta({
+      bindingId: 'loopB',
+      pipelineRunId: 'run-same-stage-root',
+      stageId: 'stage2',
+      version: 2,
+      chainId: 'malformed-root-chain',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: sameStageParent.artifactIdentity,
+      resultFingerprint: 'malformed-root-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopB-eval-v2-fake.md'), buildFrontMatter(malformedRoot) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const malformed = snapshot.steps.find(step => step.artifactIdentity === malformedRoot.artifactIdentity);
+    expect(malformed?.unclassified).toBe(true);
+    expect(malformed?.unclassifiedReason).toContain('is in a different pipeline/run/stage');
   });
 });

@@ -3,6 +3,9 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pipelineSuggestions } from '../src/next-step.js';
 import { loadConfig } from '../src/config.js';
+import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { writeArtifactWithMeta } from '../src/provenance.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 describe('F9 pipeline suggestions', () => {
   const fixtureRoot = resolve(process.cwd(), 'temp-f9-suggestions-test');
@@ -54,16 +57,44 @@ describe('F9 pipeline suggestions', () => {
 
   it('returns candidates when a pipeline stage has a completed artifact', async () => {
     const config = loadConfig(fixtureRoot);
-    // Create a completed pipeline artifact to trigger a candidate
-    const { mintRunContext } = await import('../src/pipeline-state.js');
-    const ctx = mintRunContext({ mode: 'pipeline-start', pipelineId: 'default', stageId: 'plan' });
-    // Write a plan-audit v1 approved artifact
-    const content = '# Evaluation\n\n## Verdict\n\nYES\n';
-    const frontMatter = `---\nschemaVersion: 1\npipelineId: ${ctx.pipelineId}\npipelineRunId: ${ctx.pipelineRunId}\nstageId: ${ctx.stageId}\nchainId: ${ctx.chainId}\nchainMode: pipeline-start\nbindingKind: loop\nbindingId: plan\nkind: evaluate\nstep: evaluate\nversion: 1\nagent: opencode\nprovider: opencode\nmodel: opencode-model\nsessionId: none\nsessionMode: fresh\nartifactIdentity: test-id\ninputFingerprint: test-input\nresultFingerprint: test-result\nparentArtifactIdentity: null\n---\n`;
-    writeFileSync(join(fixtureRoot, 'docs/dev/audit-v1-opencode.md'), frontMatter + content);
+    const fingerprint = captureTargetFingerprint(fixtureRoot, config.manifest.loops.plan!.target, config.manifest);
+    const meta = makeV1ArtifactMeta({
+      version: 1,
+      agent: 'fake',
+      provider: 'fake',
+      bindingId: 'plan',
+      bindingKind: 'loop',
+      kind: 'evaluate',
+      pipelineId: 'default',
+      pipelineRunId: 'test-run-123',
+      stageId: 'plan',
+      chainId: 'candidate-chain',
+      chainMode: 'pipeline-start',
+      resultFingerprint: fingerprint,
+    });
+    writeArtifactWithMeta(
+      join(fixtureRoot, 'docs/dev/audit-v1-fake.md'),
+      '# Evaluation\n\n## Verdict\n\nYES\n',
+      meta,
+    );
 
     const candidates = pipelineSuggestions(fixtureRoot, config.manifest);
-    // May have candidates depending on fingerprint matching
-    expect(Array.isArray(candidates)).toBe(true);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      artifactIdentity: meta.artifactIdentity,
+      pipelineId: 'default',
+      pipelineRunId: 'test-run-123',
+      predecessorStageId: 'plan',
+      successorStageId: 'review',
+      reason: 'eligible',
+      unavailableReason: undefined,
+      evidence: {
+        bindingKind: 'loop',
+        bindingId: 'plan',
+        phase: 'evaluate',
+        chainId: 'candidate-chain',
+        normalizedResult: 'accepted',
+      },
+    });
   });
 });

@@ -2,9 +2,12 @@
 
 ## Status
 
-**DONE — implemented and verified.** The approved implementation audit is
+**FOLLOW-UP COMPLETE — implementation review v3 finding patched; rerun the
+implementation review before final approval.**
+The rejected review is [`docs/dev/review-v3-claude.md`](./review-v3-claude.md).
+The approved implementation audit remains
 [`docs/dev/plan-audit-v2-claude.md`](./plan-audit-v2-claude.md) with confidence
-`0.95`.
+`0.95`; final implementation approval requires a subsequent review.
 
 This plan implements the findings in `docs/dev/research.md`. It is the
 controlling target contract for this issue.
@@ -344,6 +347,14 @@ Verification evidence is recorded in the implementation handoff: typecheck,
 build, full deterministic tests, focused pipeline/artifact/recovery/menu/status
 tests, and the final TOCTOU seam test. Real-provider contract suites remain
 env-gated/manual release sign-offs as required by the repository invariants.
+
+Review follow-up evidence: the final pre-spawn eligibility recheck now has a
+source-level ordering seam proving no eligibility resolver follows it before
+runner dispatch; malformed same-stage continuation roots are rejected unless
+their parent is in the same chain; and the prior packaged
+`plan -> implement -> review` rejection, repair, and re-evaluation coverage is
+preserved. Review findings are not approval: rerun `40-simple-review` for the
+next decision.
 
 ## Required test matrix
 
