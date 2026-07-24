@@ -1,23 +1,23 @@
 # AGENTS.md — orc-smash repo rules
 
-> **Active architecture migration:** `docs/dev/plan.md` is the controlling target
-> contract for the config-driven engine. Source and tests describe the current
-> pre-migration runtime until each release lands. During this implementation, the
-> plan overrides legacy-specific rules about `skills.yaml`, hardcoded
-> plan/implement/review stages, fixed verdict words, audit-only continuity flags,
-> filename heuristics, and automatic downstream transitions. It does **not**
-> override the provider, ownership, signal-gate, interruption, timeout, event,
-> logging, or supervisor-compatibility safety invariants in this file.
+> **Migration status:** the config-driven engine has landed. The v1 manifest and
+> generic binding engine are the current runtime; `skills.yaml`, hardcoded
+> plan/implement/review stages, fixed verdict words, audit-only continuity
+> flags, filename heuristics, and automatic downstream transitions are removed,
+> not deprecated. `docs/dev/plan.md` is the controlling contract for the active
+> planned issue (currently binding-aware pipeline stage state and lineage); it
+> never overrides the provider, ownership, signal-gate, interruption, timeout,
+> event, logging, or supervisor-compatibility safety invariants in this file.
 
 orc-smash is a **stateless subprocess harness**: it decides what coding-agent CLI to run, when,
 reads the verdict, and loops. The agents do the LLM work; orc-smash never calls a model API
 itself.
 
-## 1. The v1 manifest and active plan are the target source of truth
+## 1. The v1 manifest is the source of truth
 
-- Replace `skills.yaml` with the single v1 manifest described by
-  `docs/dev/plan.md`: packaged `config/orc-smash.yaml`, optional project
-  `<project>/.orc-smash.yaml`, and explicit `--config` precedence. Do not retain a
+- The single v1 manifest is the landed architecture: packaged
+  `config/orc-smash.yaml`, optional project `<project>/.orc-smash.yaml`, and
+  explicit `--config` precedence. `skills.yaml` is removed; do not reintroduce a
   compatibility loader or a second execution engine.
 - The manifest owns generic skills, roles, reusable approval-loop/task bindings,
   linear pipeline stage instances, per-skill runner profiles, prompt inputs,
@@ -65,8 +65,8 @@ itself.
   override > `--agent`/`--model` (run-wide) > skill runner profile > provider default model.
   **Changing an agent re-defaults its model** to that agent's catalogue default
   (`registry.providers.<agent>.defaultModel`; catalogues and profiles are never mutated).
-  During the migration, CLI override scope must follow the selected generic
-  loop/task/pipeline contract rather than assuming only `--loop`. `runner.ts` resolves this with the
+  CLI override scope follows the selected generic loop/task/pipeline contract
+  rather than assuming only `--loop`. `runner.ts` resolves this with the
   `ResolvedRunner` type carrying `agentSource`/`modelSource` attribution; `loop.ts` selects
   the adapter **per step**
   from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
@@ -105,8 +105,8 @@ itself.
   (`terminateActiveChildren` in `src/adapters/utils.ts`), and exits with the conventional signal
   code. A rerun quarantines the partial/late artifact before any state scan, so an interrupted run
   never resolves to terminal `unknown` and never advances state incorrectly. Marker-first
-  authority remains invariant: the current runtime's `marker.loop`/audit-history implementation
-  is migrated to generic binding/chain identity rather than retained as a hardcoded loop rule.
+  authority remains invariant: `marker.loop`/audit-history is implemented as generic
+  binding/chain identity, not a hardcoded loop rule.
   Normal decision-path scanning never treats a synthetic interrupted step as completed evidence.
 - **Adding a provider is not "one file."** It requires one adapter file **plus** registry
   wiring, a per-agent default model in config, agent/model-namespace validation, an env-gated
@@ -148,9 +148,9 @@ itself.
   `resumeSession`. Unsupported choices remain visible with a reason. Session IDs
   are captured from provider streams and persisted in artifact provenance;
   resumption never uses `--last`, shell history, or a provider-name allowlist.
-  The legacy `--audit-continuity` and `--codex-audit-continuity` flags and their
-  plan/review-only policy are migration inputs to remove, not constraints on the
-  target engine. Second opinions remain fresh.
+  The legacy `--audit-continuity` and `--codex-audit-continuity` flags are
+  removed; do not reintroduce audit-only continuity policy. Second opinions
+  remain fresh.
 
 ## 5a. Commit message hygiene
 
@@ -186,8 +186,7 @@ itself.
   (retains admission, records a terminal ownership-failure). Resolve the CLI's own group via `ps`,
   never via `process.kill(0, …)` (that targets the caller's own group).
 - Residual risk is accepted and documented: a descendant that outlives the leader is not
-  auto-stopped. Do not "fix" this by killing an unverifiable group. See the Architecture Decision
-  Note in `docs/dev/plan.md`.
+  auto-stopped. Do not "fix" this by killing an unverifiable group.
 - Retained admission is diagnosed with `orc ownership status --project <path>` and released only
   with `orc ownership release --project <path> [--yes]` after operator verification. Recovery
   never signals a process; it marks `failed: operator-released` before removing the matching lock.
