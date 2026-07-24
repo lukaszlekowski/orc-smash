@@ -1,5 +1,5 @@
 defaultProfile: audit
 profiles:
-  audit: { provider: opencode }
+  audit: { provider: claude }
   follow-up: { provider: opencode }
-  implement: { provider: opencode }
+  implement: { provider: codex }
