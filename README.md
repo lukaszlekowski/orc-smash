@@ -43,6 +43,13 @@ All interactive choices use a standardized `(unavailable: reason)` label with bo
 
 Both interactive **Display pipeline and project state** and `orc status --project <path>` include a manifest-derived **Prompt Contracts** section. The contract details how each prompt recipe is assembled (role ID & path, skill ID & path, ordered inputs with typed resolution annotations, output pattern, output contract, decision tokens, and validator) without performing content reads or printing source file contents.
 
+Pipeline eligibility is phase-specific: only a classified `evaluate` artifact
+whose normalized decision is `accepted` unlocks the next stage of an approval
+loop. A completed or valid repair is resumable evidence for another evaluation,
+never successor evidence; task progression remains contract-specific. Status and
+execution use typed reasons for target drift, consumed edges, missing
+fingerprints, and other unavailable evidence.
+
 Runner selection is independent per skill. Global overrides are
 `--agent`, `--model`, and `--effort`; repeatable per-skill overrides are
 `--runner skill=provider`, `--runner-model skill=model`, and
@@ -74,7 +81,11 @@ Artifacts persist pipeline/run/stage/chain identity, parent lineage, runner and
 session provenance, input fingerprints, and target result fingerprints. Legacy
 files without the v1 identity contract are unclassified and never advance a
 stage or provide resume evidence. The generic index scans every configured
-loop/task output and ignores `docs/dev/archived/`.
+loop/task output and ignores `docs/dev/archived/`. Exact predecessor edges are
+single-use, while distinct accepted chains remain independent candidates.
+Historical continuation is validated from its recorded binding, phase, and
+parent identity; later unrelated activity or target drift does not rewrite
+already-classified lineage.
 
 ## Providers and safety
 

@@ -190,12 +190,19 @@ export function renderDetailedSnapshot(view: ProjectSnapshotView): string {
     lines.push(`  ${emphasisAccent('placeholder')('(none)')}`);
   } else {
     for (const cand of view.allCandidates) {
-      const rawStatusStr = cand.stale ? `stale (${cand.staleReason ?? 'input modified'})` : 'eligible';
+      const rawStatusStr = cand.reason === 'eligible'
+        ? 'eligible'
+        : cand.stale
+          ? `unavailable (${cand.staleReason ?? cand.reason})`
+          : `unavailable (${cand.unavailableReason ?? cand.reason})`;
       const statusStr = staleAccent(cand.stale)(rawStatusStr);
       lines.push(`  - [${cand.pipelineId}:${cand.pipelineRunId}] ${cand.predecessorStageId} -> ${cand.successorStageId} (${statusStr})`);
       lines.push(`    Predecessor artifact: ${cand.completionArtifactPath}`);
       lines.push(`    Artifact identity: ${cand.completionArtifactIdentity}`);
       lines.push(`    Decision/Outcome: ${cand.decisionOrOutcome}`);
+      lines.push(`    Binding/Phase: ${cand.predecessorBindingKind}/${cand.predecessorBindingId}/${cand.predecessorPhase}`);
+      lines.push(`    Chain: ${cand.predecessorChainId} | Normalized result: ${cand.normalizedResult}`);
+      lines.push(`    Eligibility reason: ${cand.reason}`);
       const rawFpStr = cand.stale
         ? `drift (recorded ${cand.resultFingerprint ?? 'none'} vs current ${cand.targetFingerprintNow ?? 'none'})`
         : `valid (${cand.resultFingerprint ?? 'none'})`;

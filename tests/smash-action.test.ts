@@ -833,6 +833,54 @@ describe('generic smash dispatch', () => {
       expect(adapter.run).not.toHaveBeenCalled();
     });
 
+    it('rejects a candidate that drifts after confirmation at the final pre-run eligibility gate', async () => {
+      vi.resetAllMocks();
+      const { writeArtifactWithMeta } = await import('../src/provenance.js');
+      const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
+      const { loadConfig } = await import('../src/config.js');
+      const config = loadConfig(project);
+      const planPath = join(project, 'docs/dev/plan.md');
+      writeFileSync(planPath, '# Plan\n');
+      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const meta = makeV1ArtifactMeta({
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        bindingId: 'plan',
+        bindingKind: 'loop',
+        kind: 'evaluate',
+        pipelineId: 'default',
+        pipelineRunId: 'final-gate-run',
+        stageId: 'plan',
+        chainId: 'final-gate-chain',
+        chainMode: 'pipeline-start',
+        resultFingerprint: fingerprint,
+      });
+      writeArtifactWithMeta(join(project, 'docs/dev/plan-audit-v1-opencode.md'), '# Evaluation\n\n## Verdict\n\nAPPROVED\n', meta);
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-suggested-stage');
+      vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => Promise.resolve(candidates[0] || null));
+      vi.mocked(promptRunners).mockImplementationOnce(async () => {
+        writeFileSync(planPath, '# Plan changed after confirmation\n');
+        return { '30-simple-implement': { agent: 'opencode', model: MODEL } };
+      });
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('lost eligibility before provider execution');
+      expect(adapter.run).not.toHaveBeenCalled();
+      expect(existsSync(join(project, 'docs/dev/impl-v1-opencode.md'))).toBe(false);
+    });
+
     it('resolves successor bindings scoped to pipelineId and executes only the correct one', async () => {
       writeFileSync(join(continueProject, '.orc-smash.yaml'), JSON.stringify({
         schemaVersion: 1,

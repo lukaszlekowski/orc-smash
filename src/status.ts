@@ -1,5 +1,4 @@
 import type { Step, StepKind, StepStatus } from './state.js';
-import type { NextStepDecision } from './next-step.js';
 import type { LoopSpec, Manifest } from './manifest.js';
 
 /**
@@ -134,31 +133,11 @@ export function resolveLoopLabels(loopSpec: LoopSpec, manifest: Manifest): LoopL
   return labels;
 }
 
-export function assembleNextStepMessage(
-  decision: NextStepDecision,
-  latestVersion: number,
-  loopSpec: LoopSpec,
-  manifest: Manifest
-): string {
-  const labels = resolveLoopLabels(loopSpec, manifest);
-  const nextEvaluateVersion = decision.nextEvaluateVersion ?? latestVersion + 1;
-  switch (decision.state) {
-    case 'fresh':
-      return `Ready to run ${labels.evaluate?.skillId ?? 'evaluate'} version ${nextEvaluateVersion} (fresh)`;
-    case 'rejected':
-      return `Proposed next: ${labels.repair?.skillId ?? 'repair'} then ${labels.evaluate?.skillId ?? 'evaluate'} version ${nextEvaluateVersion}`;
-    case 'accepted':
-      return `Completed: accepted at version ${latestVersion}`;
-    case 'unknown-latest-evaluation':
-      return `Terminal error: latest evaluation is unparseable`;
-  }
-}
-
 /**
  * Interrupted-aware read-only next-step message (§3). This is the ONLY composer
  * for interrupted display facts — no other module may synthesize user-facing
- * interrupted copy. An interrupted state MUST NOT render the audit-only fallback
- * messages from `assembleNextStepMessage()` (no "Ready to smash" / "Completed").
+ * interrupted copy. An interrupted state MUST NOT render generic next-step
+ * fallback copy (no "Ready to smash" / "Completed").
  */
 export function assembleInterruptedMessage(loopName: string, version: number): string {
   return `Binding ${loopName} v${version} was interrupted: the partial artifact is quarantined before state resolution.`;

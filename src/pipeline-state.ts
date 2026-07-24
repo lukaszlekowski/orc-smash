@@ -113,22 +113,6 @@ export interface ArtifactIdentity {
   chainMode: ChainMode;
 }
 
-export interface Candidate {
-  artifactIdentity: string;
-  pipelineId: string;
-  pipelineRunId: string;
-  successorStageId: string;
-  predecessorStageId: string;
-  predecessorArtifactPath: string;
-  resultFingerprint: string;
-  targetFingerprintNow: string;
-  stale: boolean;
-  evidence: {
-    decision?: string;
-    completionOutcome?: string;
-  };
-}
-
 // ---- ID minting ----
 
 export function mintRunId(): string {
@@ -241,137 +225,6 @@ export function expectedPredecessor(pipelineId: string, stageId: string, manifes
   return null;
 }
 
-export function resolveStageBinding(
-  pipelineId: string,
-  stageId: string,
-  manifest: V1Manifest,
-): { bindingId: string; kind: 'loop' | 'task' } | null {
-  const pipeline = manifest.pipelines[pipelineId];
-  if (!pipeline) return null;
-  for (const stage of pipeline.stages) {
-    if (stage.stageId === stageId) {
-      if (stage.loop) return { bindingId: stage.loop, kind: 'loop' };
-      if (stage.task) return { bindingId: stage.task, kind: 'task' };
-    }
-  }
-  return null;
-}
-
-// ---- eligibility ----
-
-export interface ArtifactRecord {
-  artifactIdentity: string;
-  pipelineId: string | null;
-  pipelineRunId: string | null;
-  stageId: string | null;
-  chainId: string;
-  chainMode: ChainMode | null;
-  parentArtifactIdentity: string | null;
-  resultFingerprint: string;
-  artifactPath: string;
-  decision?: string;
-  completionOutcome?: string;
-  contractValid?: boolean;
-  version: number;
-}
-
-export function eligibleNextStages(
-  allArtifacts: ArtifactRecord[],
-  manifest: V1Manifest,
-  targetSnapshots: Map<string, string>,
-): Candidate[] {
-  return pipelineStageCandidates(allArtifacts, manifest, targetSnapshots).filter((candidate) => !candidate.stale);
-}
-
-/**
- * Collect completion-bearing predecessor evidence, including stale candidates
- * for status explanations. `eligibleNextStages` is the selectable subset.
- */
-export function pipelineStageCandidates(
-  allArtifacts: ArtifactRecord[],
-  manifest: V1Manifest,
-  targetSnapshots: Map<string, string>,
-): Candidate[] {
-  const candidates: Candidate[] = [];
-
-  for (const [pipelineId, pipeline] of Object.entries(manifest.pipelines)) {
-    for (let i = 0; i < pipeline.stages.length - 1; i++) {
-      const currentStage = pipeline.stages[i]!;
-      const nextStage = pipeline.stages[i + 1]!;
-
-      const completed = allArtifacts.filter(a =>
-        a.pipelineId === pipelineId &&
-        a.pipelineRunId != null &&
-        a.stageId === currentStage.stageId &&
-        (
-          a.decision === 'accepted' ||
-          a.completionOutcome === 'completed' ||
-          (a.contractValid === true && a.decision === undefined && a.completionOutcome === undefined)
-        ),
-      );
-
-      for (const pred of completed) {
-        if (expectedPredecessor(pipelineId, nextStage.stageId, manifest) !== currentStage.stageId) continue;
-        const predBinding = resolveStageBinding(pipelineId, currentStage.stageId, manifest);
-        if (!predBinding) continue;
-
-        if (!resolveBindingTarget(predBinding, manifest)) continue;
-
-        // Callers may key snapshots by pipeline stage (the unambiguous form),
-        // by reusable binding id, or by stage id when rendering one pipeline.
-        // The predecessor binding is resolved before lookup so a successor's
-        // target can never be compared to the predecessor artifact by mistake.
-        const now = targetSnapshots.get(`${pipelineId}:${currentStage.stageId}`)
-          ?? targetSnapshots.get(`${predBinding.kind}:${predBinding.bindingId}`)
-          ?? targetSnapshots.get(predBinding.bindingId)
-          ?? targetSnapshots.get(currentStage.stageId);
-        if (!now) continue;
-        const stale = now !== pred.resultFingerprint;
-
-        candidates.push({
-          artifactIdentity: pred.artifactIdentity,
-          pipelineId,
-          pipelineRunId: pred.pipelineRunId!,
-          successorStageId: nextStage.stageId,
-          predecessorStageId: currentStage.stageId,
-          predecessorArtifactPath: pred.artifactPath,
-          resultFingerprint: pred.resultFingerprint,
-          targetFingerprintNow: now,
-          stale,
-          evidence: {
-            decision: pred.decision,
-            completionOutcome: pred.completionOutcome,
-          },
-        });
-      }
-    }
-  }
-
-  candidates.sort((a, b) => {
-    if (a.pipelineRunId !== b.pipelineRunId) return a.pipelineRunId.localeCompare(b.pipelineRunId);
-    const aArtifact = allArtifacts.find((item) => item.artifactIdentity === a.artifactIdentity);
-    const bArtifact = allArtifacts.find((item) => item.artifactIdentity === b.artifactIdentity);
-    return (aArtifact?.version ?? 0) - (bArtifact?.version ?? 0)
-      || a.artifactIdentity.localeCompare(b.artifactIdentity);
-  });
-
-  return candidates;
-}
-
-function resolveBindingTarget(
-  binding: { bindingId: string; kind: 'loop' | 'task' },
-  manifest: V1Manifest,
-): { path: string; kind: TargetKind } | null {
-  if (binding.kind === 'loop') {
-    const loop = manifest.loops[binding.bindingId];
-    if (!loop) return null;
-    return loop.target;
-  }
-  const task = manifest.tasks[binding.bindingId];
-  if (!task) return null;
-  return task.target;
-}
-
 // ---- recovery ----
 
 export function isAdHoc(meta: { pipelineId: string | null }): boolean {
@@ -379,16 +232,16 @@ export function isAdHoc(meta: { pipelineId: string | null }): boolean {
 }
 
 export function recoverInProgressRun(
-  artifacts: ArtifactRecord[],
+  artifacts: Array<{ chainId?: string; chainMode?: string | null; pipelineId?: string | null; pipelineRunId?: string | null; stageId?: string | null }>,
 ): { chainId: string; chainMode: ChainMode; pipelineId: string | null; pipelineRunId: string | null; stageId: string | null } | null {
   if (artifacts.length === 0) return null;
   const latest = artifacts[artifacts.length - 1]!;
-  if (!latest.chainMode || !latest.chainId) return null;
+  if (!latest.chainMode || !latest.chainId || !['pipeline-start', 'stage-continuation', 'ad-hoc', 'second-opinion'].includes(latest.chainMode)) return null;
   return {
     chainId: latest.chainId,
-    chainMode: latest.chainMode,
-    pipelineId: latest.pipelineId,
-    pipelineRunId: latest.pipelineRunId,
-    stageId: latest.stageId,
+    chainMode: latest.chainMode as ChainMode,
+    pipelineId: latest.pipelineId ?? null,
+    pipelineRunId: latest.pipelineRunId ?? null,
+    stageId: latest.stageId ?? null,
   };
 }

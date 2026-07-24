@@ -6,7 +6,9 @@ import type { V1Manifest } from './manifest.js';
 import { classifyArtifact } from './artifact-contract.js';
 import { validateImplementLedger } from './implement-ledger.js';
 import { roleForKind, type Step, type GlobalSnapshot, type BindingInputAvailability } from './state.js';
-import { computeArtifactIdentity, expectedPredecessor } from './pipeline-state.js';
+import { computeArtifactIdentity } from './pipeline-state.js';
+import { artifactRecordFromStep, validateContinuationParent } from './pipeline-stage-state.js';
+import { reduceApprovalChain } from './approval-loop-state.js';
 import { readInterruptedMarker } from './interrupted-artifact.js';
 
 const EXCLUDED_DIRS = new Set([
@@ -297,6 +299,7 @@ export function scanGlobalSnapshot(
         effort: meta.effort,
         sessionStrategy: meta.sessionStrategy,
         provider,
+        contract: patternInfo.contract.type as any,
       };
 
       const classification = classifiedMeta;
@@ -372,6 +375,7 @@ export function scanGlobalSnapshot(
         unclassified: true,
         unclassifiedReason: err.message ?? 'Artifact identity verification failed.',
         contractValid: false,
+        contract: patternInfo.contract.type as any,
         provider,
       };
       const bindingId = patternInfo.bindingId;
@@ -383,62 +387,49 @@ export function scanGlobalSnapshot(
     }
   }
 
-  // 5 & 6. Fixpoint structural validation pass for pipeline lineage
+  const markUnclassified = (step: Step, reason: string): void => {
+    step.unclassified = true;
+    step.contractValid = false;
+    step.unclassifiedReason = reason;
+    step.decision = undefined;
+    step.completionOutcome = undefined;
+    step.verdict = undefined;
+    step.outcome = undefined;
+    if (!unclassified.includes(step)) unclassified.push(step);
+  };
+
+  // 5 & 6. Fixpoint structural validation pass for pipeline lineage.
   let changed = true;
   while (changed) {
     changed = false;
     for (const step of steps) {
       if (step.unclassified) continue;
-      
       let invalidReason = '';
-      
-      // 5. Require a stage-continuation root to point to a classified, completed artifact from expectedPredecessor(...) in the same pipeline run
+
+      // Historical continuation validation is binding/phase-aware. It does
+      // not consult current fingerprints or later activity.
       if (step.pipelineId && step.chainMode === 'stage-continuation') {
-        const parentId = step.parentArtifactIdentity;
-        const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
-        const predStage = expectedPredecessor(step.pipelineId, step.stageId!, manifest);
-        
-        if (!parentId) {
-          invalidReason = `stage-continuation is missing parentArtifactIdentity.`;
-        } else if (!parent) {
-          invalidReason = `stage-continuation parent artifact '${parentId}' not found or is unclassified.`;
-        } else {
-          const isParentCompleted = parent.decision === 'accepted' ||
-            parent.completionOutcome === 'completed' ||
-            (parent.contractValid === true && parent.decision === undefined && parent.completionOutcome === undefined);
-            
-          if (
-            parent.pipelineId !== step.pipelineId ||
-            parent.pipelineRunId !== step.pipelineRunId ||
-            parent.stageId !== predStage ||
-            !isParentCompleted
-          ) {
-            invalidReason = `stage-continuation parent artifact '${parentId}' is in a different pipeline/run/stage, or is not completed.`;
-          }
-        }
+        const validation = validateContinuationParent(
+          artifactRecordFromStep(step),
+          steps.map(artifactRecordFromStep),
+          manifest,
+        );
+        if (!validation.valid) invalidReason = validation.reason;
       }
-      
-      // 6. Keep exact immediate-parent validation for subsequent same-chain artifacts
+
+      // Same-chain artifacts must point to their immediate predecessor. A
+      // stage-continuation root is validated against the predecessor stage
+      // above and begins a new chain.
       if (step.parentArtifactIdentity !== null && step.chainMode !== 'stage-continuation') {
         const parentId = step.parentArtifactIdentity;
         const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
-        
         if (!parent || parent.chainId !== step.chainId) {
           invalidReason = `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
         }
       }
-      
+
       if (invalidReason) {
-        step.unclassified = true;
-        step.contractValid = false;
-        step.unclassifiedReason = invalidReason;
-        step.decision = undefined;
-        step.completionOutcome = undefined;
-        step.verdict = undefined;
-        step.outcome = undefined;
-        if (!unclassified.includes(step)) {
-          unclassified.push(step);
-        }
+        markUnclassified(step, invalidReason);
         changed = true;
       }
     }
@@ -469,15 +460,46 @@ export function scanGlobalSnapshot(
           : current.parentArtifactIdentity === null
         : current.parentArtifactIdentity === chain[index - 1]!.artifactIdentity;
       if (!lineageValid) {
-        current.unclassified = true;
-        current.contractValid = false;
-        current.unclassifiedReason = 'Chain lineage invalid: parent artifact identity mismatch.';
-        current.decision = undefined;
-        current.completionOutcome = undefined;
-        current.verdict = undefined;
-        current.outcome = undefined;
-        if (!unclassified.includes(current)) unclassified.push(current);
+        markUnclassified(current, 'Chain lineage invalid: parent artifact identity mismatch.');
       }
+    }
+
+  }
+
+  const loopChains = new Map<string, Step[]>();
+  for (const step of steps) {
+    if (step.unclassified || step.bindingKind !== 'loop' || !step.chainId || !step.artifactIdentity) continue;
+    const key = `${step.pipelineId ?? 'null'}:${step.pipelineRunId ?? 'null'}:${step.stageId ?? 'null'}:${step.chainId}`;
+    const chain = loopChains.get(key) ?? [];
+    chain.push(step);
+    loopChains.set(key, chain);
+  }
+  for (const chain of loopChains.values()) {
+    const reduced = reduceApprovalChain(chain.map(artifactRecordFromStep).map(record => ({
+      artifactIdentity: record.artifactIdentity,
+      bindingKind: record.bindingKind,
+      bindingId: record.bindingId,
+      phase: record.phase,
+      chainId: record.chainId,
+      chainMode: record.chainMode,
+      pipelineId: record.pipelineId,
+      pipelineRunId: record.pipelineRunId,
+      stageId: record.stageId,
+      version: record.version,
+      parentArtifactIdentity: record.parentArtifactIdentity,
+      normalizedResult: record.normalizedResult,
+      contractValid: record.contractValid,
+      unclassified: record.unclassified,
+      artifactPath: record.artifactPath,
+      resultFingerprint: record.resultFingerprint,
+    })));
+    if (reduced.kind === 'unknown') {
+      const bad = reduced.artifact ? chain.find(step => step.artifactIdentity === reduced.artifact!.artifactIdentity) : undefined;
+      if (bad) markUnclassified(bad, `Approval chain is unknown (${reduced.reason}).`);
+    } else if (reduced.kind === 'conflict') {
+      const badIdentity = reduced.artifacts.at(-1)?.artifactIdentity;
+      const bad = chain.find(step => step.artifactIdentity === badIdentity);
+      if (bad) markUnclassified(bad, `Approval chain is in conflict (${reduced.reason}).`);
     }
   }
   unclassified.sort((a, b) => a.mtime - b.mtime);

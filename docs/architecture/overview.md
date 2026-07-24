@@ -17,6 +17,7 @@ bin/orc.js
       │       ├─ loop.ts ── loops/binding-engine.ts
       │       │              └─ loops/execution.ts ── adapters/*
       │       ├─ binding-inputs.ts / target-snapshot.ts / pipeline-state.ts
+      │       ├─ approval-loop-state.ts / pipeline-stage-state.ts
       │       ├─ provenance.ts / artifact-contract.ts / state.ts
       │       └─ interrupted-artifact.ts / run-ownership.ts / kill-gate.ts
       └─ commands/status.ts ── state.ts ── status*.ts
@@ -42,9 +43,14 @@ ownership admission or provider spawn. Output patterns are validated and use
 `loops/execution.ts` is the one provider-step seam. A loop follows:
 
 ```text
-evaluate ── accepted ── completed
-    └──── retry ── repair ── evaluate
+evaluate ── accepted ── successor eligible
+    └──── retry ── repair (completed/valid) ── evaluate
 ```
+
+`approval-loop-state.ts` is the sole pure reducer for approval-chain state and
+next-phase recovery. Only `evaluate/accepted` is successor evidence; repair is
+resumable but never completes an approval stage. Task completion remains
+contract-specific.
 
 Configured decision tokens normalize to `accepted`, `retry`, or `unknown`.
 Unknown output, transport failure, invalid provenance, or invalid contracts
@@ -58,7 +64,11 @@ post-step target result fingerprint. `binding-inputs.ts` owns canonical prior
 artifact snapshots. `target-snapshot.ts` captures file content or the complete
 visible worktree (including staged, unstaged, and untracked content while
 excluding configured harness artifacts). `pipeline-state.ts` owns identity,
-fingerprinting, predecessor resolution, and pure eligibility rules.
+fingerprinting, run context, and predecessor-resolution primitives.
+`pipeline-stage-state.ts` owns binding-aware completion evidence, historical
+continuation validation, candidate eligibility, exact-edge replay suppression,
+and typed unavailable reasons. These same domain results feed status, menus,
+and the final execution-time eligibility recheck.
 
 Ad-hoc loop/task starts have null pipeline fields. Explicit pipeline starts
 mint a pipeline run and first stage identity. Only an operator-confirmed
@@ -72,8 +82,9 @@ timeline chronologically, validates lineage, and ignores `docs/dev/archived/`.
 `project-snapshot-view.ts` derives a pure view model (`ProjectSnapshotView`)
 containing per-binding state summaries (latest evaluate/repair/task steps with
 provenance, missing inputs, unclassified counts), manifest-derived prompt contracts
-(`promptContracts`), eligible/stale pipeline candidates, and suggested loop reasons
-without re-scanning disk. `terminal-accent.ts` provides a single shared semantic styling
+(`promptContracts`), eligible/unavailable pipeline candidates with typed reasons,
+and reducer-derived suggested loop reasons without re-scanning disk.
+`terminal-accent.ts` provides a single shared semantic styling
 source for results, availability, emphasis, roles, and lifecycle states.
 `project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
 and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model

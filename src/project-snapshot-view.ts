@@ -1,7 +1,8 @@
 import type { Config } from './config.js';
 import type { GlobalSnapshot, Step } from './state.js';
 import type { InterruptedMarker } from './interrupted-artifact.js';
-import { pipelineStageCandidates, recoverInProgressRun, type Candidate } from './pipeline-state.js';
+import { pipelineStageCandidates, artifactRecordFromStep, type Candidate } from './pipeline-stage-state.js';
+import { approvalNextPhase, resumableApprovalChain } from './approval-loop-state.js';
 import { buildTargetSnapshots } from './next-step.js';
 import { selectDefaultLoop } from './loop-selector.js';
 import type { V1Manifest, ManifestDeclarationOrder } from './manifest.js';
@@ -36,9 +37,17 @@ export interface CandidateSnapshotView {
   completionArtifactIdentity: string;
   decisionOrOutcome: string;
   resultFingerprint?: string;
-  targetFingerprintNow?: string;
+  targetFingerprintNow?: string | null;
   stale: boolean;
   staleReason?: string;
+  reason: string;
+  unavailableReason?: string;
+  predecessorBindingKind: 'loop' | 'task';
+  predecessorBindingId: string;
+  predecessorPhase: 'evaluate' | 'repair' | 'task';
+  predecessorChainId: string;
+  predecessorParentArtifactIdentity: string | null;
+  normalizedResult: string;
 }
 
 export interface ConfiguredPipelineStageView {
@@ -345,14 +354,23 @@ export function buildProjectSnapshotView(
   if (suggestedLoop) {
     const steps = snapshot.byBinding.get(suggestedLoop) ?? [];
     const validSteps = steps.filter(s => !s.unclassified);
-    const latestStep = validSteps[validSteps.length - 1];
-    const isCompletedOrAccepted = Boolean(
-      latestStep && (latestStep.decision === 'accepted' || latestStep.completionOutcome === 'completed')
-    );
-    const recovered = recoverInProgressRun(steps as any);
+    const loopChains = new Map<string, ReturnType<typeof artifactRecordFromStep>[]>();
+    for (const step of validSteps) {
+      const record = artifactRecordFromStep(step);
+      if (record.bindingKind !== 'loop') continue;
+      const chain = loopChains.get(record.chainId) ?? [];
+      chain.push(record);
+      loopChains.set(record.chainId, chain);
+    }
+    const recovered = [...loopChains.values()]
+      .map(chain => resumableApprovalChain(chain))
+      .find(value => value !== null) ?? null;
 
-    if (recovered && !isCompletedOrAccepted) {
-      suggestedLoopReason = `in-progress chain active for loop '${suggestedLoop}'`;
+    if (recovered) {
+      const next = approvalNextPhase(recovered.state);
+      suggestedLoopReason = next
+        ? `in-progress chain active for loop '${suggestedLoop}' (${next.phase} v${next.version} required)`
+        : `in-progress chain active for loop '${suggestedLoop}'`;
     } else if (marker?.loop === suggestedLoop) {
       suggestedLoopReason = `interrupted run pending for binding '${suggestedLoop}'`;
     } else if (loopMaxMtimes[suggestedLoop] !== null && loopMaxMtimes[suggestedLoop] !== undefined) {
@@ -421,21 +439,7 @@ export function buildProjectSnapshotView(
     });
   }
 
-  const artifactsForCandidates = snapshot.steps.map(s => ({
-    artifactIdentity: s.artifactIdentity ?? '',
-    pipelineId: s.pipelineId ?? null,
-    pipelineRunId: s.pipelineRunId ?? null,
-    stageId: s.stageId ?? null,
-    chainId: s.chainId ?? '',
-    chainMode: (s.chainMode ?? null) as any,
-    parentArtifactIdentity: s.parentArtifactIdentity ?? null,
-    resultFingerprint: s.resultFingerprint ?? '',
-    artifactPath: s.artifactPath,
-    decision: s.decision,
-    completionOutcome: s.completionOutcome,
-    contractValid: !s.unclassified,
-    version: s.version,
-  }));
+  const artifactsForCandidates = snapshot.steps.map(artifactRecordFromStep);
   const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
   const rawCandidates = pipelineStageCandidates(artifactsForCandidates, manifest, targetSnapshots);
 
@@ -446,15 +450,23 @@ export function buildProjectSnapshotView(
     successorStageId: c.successorStageId,
     completionArtifactPath: c.predecessorArtifactPath,
     completionArtifactIdentity: c.artifactIdentity,
-    decisionOrOutcome: c.evidence.decision ?? c.evidence.completionOutcome ?? 'accepted',
+    decisionOrOutcome: c.evidence.decision ?? c.evidence.completionOutcome ?? c.evidence.normalizedResult,
     resultFingerprint: c.resultFingerprint,
     targetFingerprintNow: c.targetFingerprintNow,
     stale: c.stale,
-    staleReason: c.stale ? 'target fingerprint modified since predecessor completion' : undefined,
+    staleReason: c.reason === 'target-fingerprint-drift' ? 'target fingerprint modified since predecessor completion' : undefined,
+    reason: c.reason,
+    unavailableReason: c.unavailableReason,
+    predecessorBindingKind: c.evidence.bindingKind,
+    predecessorBindingId: c.evidence.bindingId,
+    predecessorPhase: c.evidence.phase,
+    predecessorChainId: c.evidence.chainId,
+    predecessorParentArtifactIdentity: c.evidence.parentArtifactIdentity,
+    normalizedResult: c.evidence.normalizedResult,
   });
 
   const allCandidatesView = rawCandidates.map(candidateToView);
-  const eligibleCandidatesView = rawCandidates.filter(c => !c.stale).map(candidateToView);
+  const eligibleCandidatesView = rawCandidates.filter(c => c.reason === 'eligible').map(candidateToView);
 
   const totalUnclassifiedSteps = snapshot.unclassified;
 
