@@ -4,6 +4,7 @@ models:
   - opencode-go/deepseek-v4-pro
   - opencode-go/glm-5.2
   - opencode-go/glm-5.1
+  - opencode-go/kimi-k3
   - opencode-go/kimi-k2.7-code
   - opencode-go/kimi-k2.6
   - opencode-go/mimo-v2.5
@@ -18,6 +19,7 @@ modelEfforts:
   opencode-go/deepseek-v4-pro: [low, medium, high, xhigh]
   opencode-go/glm-5.2: [low, medium, high]
   opencode-go/glm-5.1: [low, medium, high]
+  opencode-go/kimi-k3: [low, medium]
   opencode-go/kimi-k2.7-code: [low, medium]
   opencode-go/kimi-k2.6: [low, medium]
   opencode-go/mimo-v2.5: [low]

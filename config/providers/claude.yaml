@@ -3,5 +3,5 @@ models:
   - glm-5.2[1m]
   - glm-4.7
 modelEfforts:
-  glm-5.2[1m]: [low, medium, high, xhigh]
-  glm-4.7: [low, medium, high]
+  glm-5.2[1m]: [high, max]
+  glm-4.7: [high, max]
