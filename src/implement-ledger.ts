@@ -200,16 +200,27 @@ function rowDiagnostic(issue: RowIssue): ImplementLedgerDiagnostic {
   };
 }
 
+const OVERALL_CONFIDENCE_LINE_PATTERN =
+  /^\s*(?:[-*+>]|\d+\.)?\s*(?:\*\*)?\s*(?:overall(?:\s+[a-z0-9_-]+)*\s+confidence|confidence\s+score|state\s+overall\s+confidence|confidence)\b(?:\s+(?:that|in)\s+the\s+implementation\b[^*:_]*)?(?:\*\*)?\s*:\s*(.*)$/i;
+
+const CONFIDENCE_VALUE_PATTERN =
+  /^(?:\*\*|\*|__|_|`)?\s*(-?\d+(?:\.\d+)?)\s*(?:\*\*|\*|__|_|`)?\s*\.?\s*$/;
+
 function confidenceDiagnostics(content: string): {
   valid: boolean;
   value?: number;
   diagnostics: ImplementLedgerDiagnostic[];
   belowThreshold: boolean;
 } {
-  const confidenceLines = content
-    .split(/\r?\n/)
-    .filter(line => /\bconfidence\b/i.test(line));
-  if (confidenceLines.length === 0) {
+  const matches: string[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.match(OVERALL_CONFIDENCE_LINE_PATTERN);
+    if (match) {
+      matches.push(match[1]!.trim());
+    }
+  }
+
+  if (matches.length === 0) {
     return {
       valid: false,
       diagnostics: [{ code: 'missing-confidence', message: 'A confidence declaration is required.' }],
@@ -217,17 +228,33 @@ function confidenceDiagnostics(content: string): {
     };
   }
 
-  const line = confidenceLines[confidenceLines.length - 1]!;
-  const colon = line.lastIndexOf(':');
-  const rawValue = colon >= 0 ? line.slice(colon + 1).replace(/[\s*]+$/g, '').trim() : '';
-  const value = Number(rawValue);
-  if (!rawValue || !Number.isFinite(value)) {
+  if (matches.length > 1) {
+    return {
+      valid: false,
+      diagnostics: [{ code: 'malformed-confidence', message: 'Multiple overall confidence declarations found.' }],
+      belowThreshold: false,
+    };
+  }
+
+  const rawValue = matches[0]!;
+  const valueMatch = rawValue.match(CONFIDENCE_VALUE_PATTERN);
+  if (!valueMatch) {
     return {
       valid: false,
       diagnostics: [{ code: 'malformed-confidence', message: 'Confidence must declare a numeric value.' }],
       belowThreshold: false,
     };
   }
+
+  const value = Number(valueMatch[1]);
+  if (!Number.isFinite(value)) {
+    return {
+      valid: false,
+      diagnostics: [{ code: 'malformed-confidence', message: 'Confidence must declare a numeric value.' }],
+      belowThreshold: false,
+    };
+  }
+
   if (value < 0 || value > 1) {
     return {
       valid: false,
@@ -236,6 +263,7 @@ function confidenceDiagnostics(content: string): {
       belowThreshold: false,
     };
   }
+
   if (value < CONFIDENCE_THRESHOLD) {
     return {
       valid: true,
@@ -244,6 +272,7 @@ function confidenceDiagnostics(content: string): {
       belowThreshold: true,
     };
   }
+
   return { valid: true, value, diagnostics: [], belowThreshold: false };
 }
 

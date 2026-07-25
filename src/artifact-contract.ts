@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { OutputContract, OutputSpec } from './manifest.js';
-import { parseArtifactMetaClassified } from './provenance.js';
+import type { OutputSpec } from './manifest.js';
 import { validateImplementLedger, type ImplementLedgerValidation } from './implement-ledger.js';
 
 export type DecisionOutcome = 'accepted' | 'retry' | 'unknown';
@@ -178,8 +177,14 @@ export function diagnoseDecisionContent(
   ];
   const hasBothTokens = lineContainsToken(candidate.raw, acceptedToken)
     && lineContainsToken(candidate.raw, retryToken);
+  const candidateContext = {
+    ...base,
+    invalidLine: bounded(candidate.raw),
+    ...(first ? { firstSubstantiveLine: bounded(first.raw) } : {}),
+    lineIndex: candidate.lineIndex,
+  };
   return {
-    ...withLine,
+    ...candidateContext,
     safe: true,
     lineIndex: candidate.lineIndex,
     lineStart: candidate.start,
@@ -299,7 +304,7 @@ export function classifyOutputBody(
         }
         const result = parseDecisionContent(contractBody, output.decision.heading, output.decision.accepted, output.decision.retry);
         if (result !== 'unknown') return { kind: result, diagnostics: [] };
-        const diagnostic = diagnoseDecisionContent(contractBody, output.decision.heading, output.decision.accepted, output.decision.retry);
+        const diagnostic = diagnoseDecisionContent(body, output.decision.heading, output.decision.accepted, output.decision.retry);
         const message = diagnostic.invalidLine
           ? `Decision line '${bounded(diagnostic.invalidLine)}' does not equal either configured token.`
           : `Decision artifact is unknown: ${diagnostic.reason ?? 'decision section is invalid'}.`;
@@ -349,42 +354,5 @@ export function classifyOutputBody(
   } catch (error: any) {
     const message = bounded(error?.message ?? String(error));
     return { kind: 'unknown', diagnostics: [{ code: 'classifier-error', message }], detail: message };
-  }
-}
-
-/** Check that a required-artifact exists and has valid v1 provenance. */
-export function requiredArtifactExists(filePath: string): boolean {
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const result = parseArtifactMetaClassified(content, { agent: 'unknown', version: 0 });
-    return result.status === 'classified';
-  } catch {
-    return false;
-  }
-}
-
-/**
- * File-path compatibility wrapper. Provenance is deliberately not checked
- * here; artifact-index performs that gate before calling this classifier.
- */
-export function classifyArtifact(
-  filePath: string,
-  contract: OutputContract,
-  decision?: { heading: string; accepted: string; retry: string },
-  validator?: (filePath: string) => boolean,
-): ContractClassification {
-  try {
-    const body = readFileSync(filePath, 'utf-8');
-    return classifyOutputBody(
-      {
-        contract,
-        ...(decision ? { decision } : {}),
-        ...(validator ? { validator: 'custom' } : {}),
-      },
-      body,
-      validator ? () => validator(filePath) : undefined,
-    );
-  } catch {
-    return { kind: 'unknown', diagnostics: [{ code: 'missing-artifact', message: 'Missing or unreadable artifact.' }], detail: 'missing or unreadable artifact' };
   }
 }
