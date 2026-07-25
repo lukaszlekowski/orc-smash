@@ -73,7 +73,8 @@ export function panelBorderColor(ctx: PanelContext): PanelBorderColor {
     return map[ctx.inFlight.kind];
   }
 
-  const last = ctx.timeline[ctx.timeline.length - 1];
+  const relevantRows = ctx.timeline.filter(row => row.relevance !== 'unrelated' && row.relevance !== 'unclassified');
+  const last = relevantRows[relevantRows.length - 1]?.step;
   if (last?.status === 'failed') {
     return 'red';
   }

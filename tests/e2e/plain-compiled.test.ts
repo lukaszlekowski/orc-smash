@@ -21,8 +21,14 @@ function runCompiled(
   args: string[],
   options: { env?: Record<string, string | undefined> } = {}
 ): Promise<CapturedRun> {
+  // This fixture installs only the deterministic opencode shim. Keep the
+  // compiled subprocess independent of the repository's real default runner
+  // profiles (which may point at authenticated provider binaries).
+  const effectiveArgs = args.includes('smash') && !args.includes('--agent')
+    ? [...args, '--agent', 'opencode']
+    : args;
   return new Promise((resolveRun, reject) => {
-    const child = spawn(process.execPath, [compiledBin, ...args], {
+    const child = spawn(process.execPath, [compiledBin, ...effectiveArgs], {
       cwd: repoRoot,
       env: { ...process.env, PATH: `${providerBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`, ...options.env },
       stdio: ['ignore', 'pipe', 'pipe']
@@ -267,6 +273,8 @@ if (mode === 'auth-error') {
     expectPlainRun(implementationRun, 0, 'run.completed');
     expect(implementationRun.merged).toContain('artifact.verified path=docs/dev/impl-v1-opencode.md result=valid');
     expect(implementationRun.merged).toContain('stage.completed binding=task/implement');
+    expect(implementationRun.merged).not.toMatch(/Round \d/);
+    expect(implementationRun.merged.toLowerCase()).not.toContain('maximum evaluation');
   });
 
   it('NO_COLOR=1 piped subprocess test: zero ANSI escape codes produced in smash --plain and orc status', async () => {

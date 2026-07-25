@@ -9,7 +9,7 @@ feeds it. Batches 2–6 are out of scope.
 
 ## Status
 
-Draft for the `plan` approval loop.
+Implementation complete. See `docs/dev/review-followup-v2-opencode.md` for follow-up closure status.
 
 ## Objective
 
@@ -118,27 +118,63 @@ never confused with a lost selected value.
 ### D3 — Task executions use task vocabulary; loop budget vocabulary is loop-only (item 2)
 
 **Design.** `PanelContext` gains a required `bindingKind: 'loop' | 'task'`
-field, passed from `deps.bindingKind` through `buildPanelContext`
-(`src/loops/execution.ts` is the only production caller). Renderers branch on
-it:
+field, threaded through `buildPanelContext` as a required parameter (inserted
+among the required parameters, before the defaulted ones, so every caller
+must supply it). `src/loops/execution.ts:185` is the only production caller
+and passes `deps.bindingKind`. Renderers branch on `bindingKind`:
 
 - loops keep `Iteration: Round n/max - provider calls N`;
 - tasks render `Execution: Single task - provider calls N` (with the provider
-  call count when available; `Single task` otherwise) in both
-  `src/status-panel.ts` and `src/plain-render.ts`;
-- the `execution.ts:332` note line branches identically
-  (`Single task - provider calls N` for tasks).
+  call count when available; `Single task` otherwise). The production
+  interactive panel branch is `src/status-panel.ts`. `src/plain-render.ts`
+  is updated for test consistency and future snapshots, but it has **no
+  production caller today** (verified: production plain mode is
+  `createPlainCliOutput` in `src/cli-output.ts`, whose `renderPanel` is a
+  no-op at `:290` and `attachLiveRegion` is a no-op at `:299`; plain output
+  is driven by `renderRunEvent` over the event stream). The real
+  plain-output loop-vocabulary vector is the note line at
+  `src/loops/execution.ts:332` (`Round n/max - provider calls N` today),
+  which branches identically to `Single task - provider calls N` for tasks.
 
 No task retry/iteration semantics are invented to reuse the loop display;
 adapter-internal CLI retry is not an orc-smash evaluator iteration. Task
 completion, failure, timeout, interruption, and restart remain
 single-invocation states in `binding-engine.ts` (unchanged).
 
-**File impact.** `src/status.ts` (`PanelContext`, `buildPanelContext`),
-`src/status-panel.ts`, `src/plain-render.ts`, `src/loops/execution.ts`, and
-the `PanelContext` construction sites in tests
-(`tests/status-panel.test.ts`, `tests/plain-render.test.ts`,
-`tests/terminal-surfaces.test.ts`, `tests/helpers/panel-context.ts`).
+**File impact.** `src/status.ts` (`PanelContext` plus the required
+`buildPanelContext` parameter), `src/status-panel.ts`, `src/plain-render.ts`
+(test/future only), `src/loops/execution.ts`, and **every**
+`PanelContext`/`buildPanelContext` construction site in tests. Verified by
+grep + reading each fixture, the full set is:
+
+*Literal/helper sites that must add `bindingKind`.* These break the Release 1
+`pnpm typecheck` if left unupdated, because they build a full `PanelContext`
+without the now-required field:
+
+- `tests/status.test.ts:6` — raw `renderStatusPanel({...})` literal;
+- `tests/cli-output.test.ts:220` — `output.renderPanel({...})` literal
+  (`renderPanel(context: PanelContext)`);
+- `tests/terminal-accent.test.ts:21` — `makeContext(overrides)` helper whose
+  base object must default `bindingKind`;
+- `tests/cli-output-live.test.ts:36` — `makeContext(...)` helper feeding the
+  `attachLiveRegion` suppliers (lines 84, 100, 114, 128, …);
+- `tests/status-panel.test.ts`, `tests/plain-render.test.ts`,
+  `tests/terminal-surfaces.test.ts` — direct `PanelContext` literals;
+- `tests/helpers/panel-context.ts` — the shared context helper; and
+- `tests/status-core.test.ts:68,75` — the only test that calls
+  `buildPanelContext(...)` positionally; both calls gain the new required
+  `bindingKind` argument.
+
+*Supplier-driven sites.* These receive `PanelContext` from `execution.ts`, so
+`bindingKind` flows in automatically and they do **not** break Release 1, but
+their render assertions must be re-validated under D5/D6/D8 (see those
+decisions):
+
+- `tests/execution-panel.test.ts` (captures the supplier at `:101` and renders
+  at `:131`, `:214`, `:249`);
+- `tests/loop-live.test.ts:73`; and
+- `tests/lease-expiry.execution.test.ts` (already sets `bindingKind: 'loop'`,
+  lowest risk, but it exercises the `executeLoopStep` seam that D6 modifies).
 
 **Verification.**
 
@@ -195,7 +231,10 @@ renders as the selected level or `provider default`; session renders as
 (`src/plain-render.ts`) stays line-oriented and is not changed by this
 decision.
 
-**File impact.** `src/status-panel.ts`.
+**File impact.** `src/status-panel.ts`; existing run-configuration assertions
+in `tests/execution-panel.test.ts` (and any `renderStatusPanel`/
+`renderPlainPanel` snapshot checks) are updated from the padded-line format to
+the aligned table as part of this release.
 
 **Verification.**
 
@@ -206,6 +245,9 @@ decision.
   (ANSI-stripped line-width assertion with `COLUMNS` forced).
 - Provider default effort and fresh/resumed session policy remain explicit.
 - Plain output format is byte-stable for the runner section.
+- Existing run-configuration assertions in `tests/execution-panel.test.ts`
+  and any panel-render snapshots are updated from padded lines to the aligned
+  table and re-pass; no assertion is left pointing at the old padded format.
 
 ### D6 — One global timeline derivation with typed relevance (item 4)
 
@@ -258,9 +300,17 @@ Rendering in `src/status-panel.ts`:
   output;
 - `panelBorderColor` ignores `unrelated`/`unclassified` rows when choosing the
   resting border color;
-- **Latest version** derives from current-binding rows (including the
-  in-flight version) instead of the possibly empty in-memory list, fixing the
-  continuation-time `v0` display as a deliberate, called-out correction.
+- **Latest version** derives from the global snapshot, not the possibly empty
+  in-memory `deps.steps`: it is
+  `max(snapshot.steps.filter(s => s.bindingId === deps.loopName).map(s => s.version), inFlightVersion, 0)`,
+  including the in-flight version so a running step is counted. At the
+  `execution.ts:194` call site, `latestVersion(deps.steps)` is **replaced** by
+  a small pure helper that takes the snapshot, the binding id, and the
+  in-flight version (e.g. `latestVersionForBinding(snapshot, deps.loopName, inFlightVersion)`), so the value never again reads the stale in-memory
+  list. The existing `status.ts:latestVersion(steps: Step[])` helper is either
+  given an overload or removed once its last caller migrates — it must not be
+  left pointing at `deps.steps`. This fixes the continuation-time `v0`
+  display as a deliberate, called-out correction.
 
 `src/plain-render.ts` adapts to the row type with its per-artifact block
 format otherwise unchanged (plus the D3 line). Read-only parity is structural:
@@ -294,6 +344,15 @@ tests.
   fixed project, and `orc status` continues to derive from the same snapshot.
 - Per-step (not per-tick) scanning: the supplier serves identical rows across
   two paints without a second scan (spy on the scanner seam).
+- Per-step scan cost is bounded and called out: `scanGlobalSnapshot`
+  (`src/artifact-index.ts:96`) walks the project, parses every artifact,
+  recomputes every identity digest, and runs the lineage + approval-reduction
+  passes — O(artifacts) per provider step, bounded by the project artifact
+  count. No caching is added in this batch (deliberate); the cadence stays
+  once per provider step, never per tick. While the renderer is open, the
+  stale `across 200ms ticks` comment at `src/status-panel.ts:86` is corrected
+  — the interval is `PANEL_RENDER_INTERVAL_MS = 1000`
+  (`src/cli-output.ts:14`), so it reads `across 1s ticks`.
 
 ### D7 — Relevance is presentation-only (item 4)
 
@@ -319,9 +378,13 @@ existing ones:
 Artifact  Parent  Input FP  Result FP
 ```
 
-Each value renders through a new `formatCompactId(value?: string | null)` in
-`src/status.ts` (beside `formatSessionId`): the final five characters prefixed
-with `*` (`*a1b2c`), or an em dash when the value is missing. Completed and
+Each value renders through one shared compact formatter in `src/status.ts`.
+`formatSessionId` (`status.ts:22`) already returns
+`sessionId.length > 5 ? \`*${sessionId.slice(-5)}\` : sessionId` with an em-dash
+fallback, so rather than duplicate it, extract `formatCompactId(value?: string | null)` with the same five-suffix rule and have `formatSessionId`
+delegate to it. Every compact identity and session cell then uses one helper
+(artifact identities are 64-char sha256 digests, so the `≤ 5` branch is never
+hit in practice, but the two functions no longer drift). Completed and
 interrupted rows map the fields from provenance: `artifactIdentity`,
 `parentArtifactIdentity`, `inputFingerprint`, `resultFingerprint`.
 
@@ -332,6 +395,17 @@ draft identity (the same value the durable interrupted marker records), the
 run-context parent, and `request.inputFingerprint`. The result fingerprint is
 genuinely pending while running and renders as an em dash; it appears once the
 artifact persists.
+
+Provisional identity: a running row's compact `Artifact` is the pre-spawn
+draft identity (`execution.ts:273`, computed from `targetFingerprintBefore`),
+recorded by the durable interrupted marker. The persisted artifact identity
+(`binding-engine.ts:325`) is recomputed after the step with the post-step
+`resultFingerprint` (`binding-engine.ts:320`). When the target changes, these
+two identities differ, so the same version's compact `Artifact` suffix can
+shift between the running row and the completed row. This is display-only
+(compact suffixes are never compared — see below), but it is called out here
+so the suffix change on completion is not reported as a regression; provenance
+full values remain authoritative.
 
 The compact form is a render-time derivative of `Step`/in-flight fields. It is
 never fed back into comparison, selection, parent lookup, or authorization;
@@ -345,9 +419,12 @@ not, the four compact fields move to a dimmed continuation row beneath each
 artifact row, preserving their labels and their association with the correct
 artifact (e.g. `artifact *a1b2c  parent *d4e5f  in *g6h7i  out —`).
 
-**File impact.** `src/status.ts` (`formatCompactId`, in-flight fields),
-`src/loops/execution.ts` (population), `src/status-panel.ts` (columns and
-width-adaptive layout).
+**File impact.** `src/status.ts` (`formatCompactId`/`formatSessionId`
+shared helper, in-flight fields), `src/loops/execution.ts` (population),
+`src/status-panel.ts` (columns and width-adaptive layout). Existing
+timeline-table assertions in `tests/execution-panel.test.ts` (and any
+`renderStatusPanel`/`renderPlainPanel` snapshot checks) are updated from the
+current column set to the four new compact columns as part of this release.
 
 **Verification.**
 
@@ -362,6 +439,9 @@ width-adaptive layout).
 - Long model names plus the new columns do not overflow the panel border, in
   both the column layout and the continuation-row layout (`COLUMNS` forced,
   ANSI-stripped width assertions).
+- Existing timeline-table assertions in `tests/execution-panel.test.ts` and
+  any panel-render snapshots are updated to the new column set and re-pass;
+  no assertion is left pointing at the old column layout.
 - Plain output changes only through the deliberate, tested D3/D4 format
   update; no compact columns are added to plain rendering in this batch.
 
@@ -369,28 +449,44 @@ width-adaptive layout).
 
 Each release is independently verifiable with `pnpm typecheck && pnpm test`.
 
-### Release 1 — Execution vocabulary and effort consistency (D1–D4)
+### Release 1 — Execution vocabulary and effort consistency (D1–D4) ✅
 
 - In-flight effort, `provider default` vocabulary, task `Execution` line,
   loop-only iteration prompt regression coverage.
-- Gate: new/updated tests green; e2e task run shows no `Round` text and no
-  iteration prompt; loop runs unchanged.
+- All `PanelContext`/`buildPanelContext` construction sites listed in D3 are
+  updated to supply `bindingKind` — including `tests/status-core.test.ts`,
+  the four literal sites (`status.test.ts`, `cli-output.test.ts`,
+  `terminal-accent.test.ts`, `cli-output-live.test.ts`), the direct-literal
+  sites, and `tests/helpers/panel-context.ts`. This is what makes the
+  required field safe to land in Release 1; it is not deferred.
+- Gate: `pnpm typecheck` passes with `bindingKind` required (no literal or
+  `buildPanelContext` call left without it); new/updated tests green; e2e
+  task run shows no `Round` text and no iteration prompt; loop runs
+  unchanged. (Coverage gaps in D4 assertions closed by review follow-up.)
 
-### Release 2 — Run configuration table (D5)
+### Release 2 — Run configuration table (D5) ✅
 
 - Borderless aligned table for resolved runners.
 - Gate: table layout, wrapping, narrow-width, and plain-output stability tests
   green; interior-grid invariant holds.
 
-### Release 3 — Global timeline and compact identity columns (D6–D8)
+### Release 3 — Global timeline and compact identity columns (D6–D8) ✅
 
 - `src/timeline-rows.ts`, relevance rendering, per-step snapshot sourcing,
   compact columns with width-adaptive layout.
-- Gate: all D6–D8 verification bullets green; existing state/eligibility
+- Supplier-driven render assertions (`tests/execution-panel.test.ts`,
+  `tests/loop-live.test.ts`, `tests/lease-expiry.execution.test.ts`) and the
+  existing run-config/timeline-table assertions are re-validated and updated
+  under D5/D6/D8 — this is part of the release, not follow-up work.
+- Gate: `pnpm typecheck` passes with `PanelContext.timeline` as
+  `TimelineRow[]` and the four compact columns present; `pnpm test` green
+  with all D6–D8 verification bullets passing; existing state/eligibility
   suites unmodified and green; `docs/architecture/overview.md` gains a
   one-line mention of `timeline-rows.ts` next to the `state.ts` snapshot
   description (the only doc-sync required — `AGENTS.md` and `README.md`
-  statements remain accurate).
+  statements remain accurate). (D6 verification gaps in per-step spy and
+  parity tests closed by review follow-up; D8 result-accenting regression
+  fixed.)
 
 ## Verification
 

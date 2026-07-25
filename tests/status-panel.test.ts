@@ -3,7 +3,8 @@ import chalk from 'chalk';
 import { renderStatusPanel } from '../src/status-panel.js';
 import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
 import type { PanelContext } from '../src/status.js';
-import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
+import { roleForKind, type Step, type StepKind, type StepStatus } from '../src/state.js';
+import type { TimelineRow } from '../src/timeline-rows.js';
 
 // Force chalk to emit ANSI color codes so the role-accent assertion can compare
 // raw substrings. Without this, chalk auto-detects the test environment and
@@ -33,6 +34,7 @@ function makeContext(overrides: Partial<PanelContext>): PanelContext {
   return {
     projectRoot: '/p',
     loopName: 'plan',
+    bindingKind: 'loop',
     currentIteration: 1,
     maxIterations: 5,
     activeSkillRunner: null,
@@ -42,6 +44,16 @@ function makeContext(overrides: Partial<PanelContext>): PanelContext {
     latestVersion: 0,
     readOnly: false,
     ...overrides
+  };
+}
+
+function makeRow(overrides: Partial<Step>, relevance: TimelineRow['relevance'] = 'current-chain'): TimelineRow {
+  return {
+    relevance,
+    step: {
+      kind: 'audit', role: 'auditor', agent: 'fake', model: 'fake-model', version: 1,
+      status: 'done', artifactPath: '/tmp/audit.md', mtime: 0, ...overrides,
+    },
   };
 }
 
@@ -57,10 +69,8 @@ describe('renderStatusPanel — minimal border treatment + stage-driven color', 
   it('contains no interior vertical grid char in the timeline region (cli-table3 chars are stripped)', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        {
-          kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm',
-          status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0
-        }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm',
+          status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 })
       ]
     }));
     // The boxen frame has exactly 2 walls (left + right) per content line.
@@ -84,9 +94,9 @@ describe('renderStatusPanel — minimal border treatment + stage-driven color', 
   it('"*" latest-row marker appears exactly once and only on the last historical row', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 },
-        { kind: 'follow-up', role: 'planner', version: 1, agent: 'opencode', model: 'm', status: 'done', outcome: 'patched', artifactPath: '/y', mtime: 1 },
-        { kind: 'audit', role: 'auditor', version: 2, agent: 'opencode', model: 'm', status: 'done', verdict: 'APPROVED', artifactPath: '/z', mtime: 2 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 }),
+        makeRow({ kind: 'follow-up', role: 'planner', version: 1, agent: 'opencode', model: 'm', status: 'done', outcome: 'patched', artifactPath: '/y', mtime: 1 }),
+        makeRow({ kind: 'audit', role: 'auditor', version: 2, agent: 'opencode', model: 'm', status: 'done', verdict: 'APPROVED', artifactPath: '/z', mtime: 2 })
       ]
     }));
     const matches = out.match(/\*/g) || [];
@@ -142,7 +152,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     const out = renderStatusPanel(makeContext({
       inFlight: makeInFlight('follow-up'),
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 })
       ]
     }));
     const activeIdx = out.indexOf('Active Step:');
@@ -158,7 +168,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     const out = renderStatusPanel(makeContext({
       inFlight: makeInFlight('follow-up'),
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 })
       ]
     }));
     // Compute the expected ANSI-decorated role token (raw chalk output).
@@ -186,7 +196,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
     const out = renderStatusPanel(makeContext({
       inFlight: makeInFlight('follow-up'),
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm', status: 'done', verdict: 'REJECTED', artifactPath: '/x', mtime: 0 })
       ]
     }));
     const rejectedIdx = out.indexOf('REJECTED');
@@ -278,11 +288,130 @@ describe('renderStatusPanel — read-only non-live label (v9 audit Major #1 clos
   });
 });
 
+describe('renderStatusPanel — binding vocabulary', () => {
+  it('renders a task as one execution without loop iteration vocabulary', () => {
+    const out = renderStatusPanel(makeContext({
+      bindingKind: 'task',
+      providerCalls: 1,
+      currentIteration: 0,
+      maxIterations: 4,
+    }));
+    expect(out).toContain('Execution:');
+    expect(out).toContain('Single task - provider calls 1');
+    expect(out).not.toContain('Round');
+    expect(out).not.toContain('0/4');
+  });
+});
+
+describe('renderStatusPanel — bounded tables and compact identities', () => {
+  it('keeps the run configuration inside a narrow panel while preserving headers', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '40';
+    try {
+      const out = renderStatusPanel(makeContext({
+        resolvedRunners: [{
+          skillId: 'very-long-skill-name',
+          agent: 'opencode',
+          model: 'opencode-go/deepseek-v4-flash',
+          role: 'implementer',
+          phase: 'task',
+          effort: null,
+          sessionStrategy: 'fresh-per-invocation',
+        }],
+      }));
+      const plain = out.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+      expect(Math.max(...plain.split('\n').map(line => line.length))).toBeLessThanOrEqual(40);
+      expect(plain).toContain('Run configuration');
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('shows all compact identity columns when a wide table fits', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '160';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          artifactIdentity: 'a'.repeat(64),
+          parentArtifactIdentity: 'b'.repeat(64),
+          inputFingerprint: 'c'.repeat(64),
+          resultFingerprint: 'd'.repeat(64),
+          decision: 'accepted',
+        })],
+      }));
+      expect(out).toContain('Artifact');
+      expect(out).toContain('Parent');
+      expect(out).toContain('Input FP');
+      expect(out).toContain('Result FP');
+      expect(out).toContain('*aaaaa');
+      expect(out).toContain('*bbbbb');
+      expect(out).toContain('*ccccc');
+      expect(out).toContain('*ddddd');
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+});
+
+describe('renderStatusPanel — result accenting per-cell (Major #1 closure)', () => {
+  it('duplicate outcomes each get their own accented result in wide layout (no double-wrap, no bleed)', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '160';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [
+          makeRow({
+            kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm',
+            status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0,
+          }),
+          makeRow({
+            kind: 'audit', role: 'auditor', version: 2, agent: 'opencode', model: 'm',
+            status: 'done', verdict: 'APPROVED', artifactPath: '/x/b.md', mtime: 1,
+          }),
+          makeRow({
+            kind: 'audit', role: 'auditor', version: 3, agent: 'opencode', model: 'm',
+            status: 'done', verdict: 'APPROVED', artifactPath: '/x/c.md', mtime: 2,
+          }, 'unrelated'),
+        ],
+      }));
+      const greenApproved = out.match(/\u001B\[32mAPPROVED\u001B\[39m/g);
+      expect(greenApproved).toHaveLength(2);
+      expect(out).not.toContain('\u001B[32m\u001B[32m');
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('role and status cells carry per-cell accent for current rows and plain text for dimmed rows', () => {
+    chalk.level = 1;
+    const out = renderStatusPanel(makeContext({
+      timeline: [
+        makeRow({
+          kind: 'audit', role: 'auditor', version: 1, agent: 'opencode', model: 'm',
+          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0,
+        }),
+        makeRow({
+          kind: 'audit', role: 'auditor', version: 2, agent: 'opencode', model: 'm',
+          status: 'done', verdict: 'REJECTED', artifactPath: '/x/b.md', mtime: 1,
+        }, 'unrelated'),
+      ],
+    }));
+    expect(out).toContain('\u001B[36mauditor\u001B[39m');
+    const dimmedAuditor = out.match(/\u001B\[2mauditor\u001B\[22m/g);
+    expect(dimmedAuditor).not.toBeNull();
+    expect(dimmedAuditor!.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('renderStatusPanel — interrupted steps render the literal "interrupted" (§3)', () => {
   it('renders an interrupted audit step with the "interrupted" status label', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x/plan-audit-v3-codex.md', mtime: 0 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x/plan-audit-v3-codex.md', mtime: 0 })
       ]
     }));
     expect(out).toContain('interrupted');
@@ -291,7 +420,7 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
   it('renders an interrupted follow-up step with the "interrupted" status label', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'follow-up', role: 'planner', version: 2, agent: 'claude', model: 'glm-5.2', status: 'interrupted', artifactPath: '/x/plan-followup-v2-claude.md', mtime: 0 }
+        makeRow({ kind: 'follow-up', role: 'planner', version: 2, agent: 'claude', model: 'glm-5.2', status: 'interrupted', artifactPath: '/x/plan-followup-v2-claude.md', mtime: 0 })
       ]
     }));
     expect(out).toContain('interrupted');
@@ -301,7 +430,7 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
     const out = renderStatusPanel(makeContext({
       loopName: 'implement',
       timeline: [
-        { kind: 'implement', role: 'implementer', version: 1, agent: 'agy', model: 'gemini-3.6-flash', status: 'interrupted', artifactPath: '/x/impl-v1-agy.md', mtime: 0 }
+        makeRow({ kind: 'implement', role: 'implementer', version: 1, agent: 'agy', model: 'gemini-3.6-flash', status: 'interrupted', artifactPath: '/x/impl-v1-agy.md', mtime: 0 })
       ]
     }));
     expect(out).toContain('interrupted');
@@ -310,7 +439,7 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
   it('an interrupted step shows an em-dash result cell, not a misleading "unknown" verdict', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x', mtime: 0 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 3, agent: 'codex', model: 'gpt-5.4', status: 'interrupted', artifactPath: '/x', mtime: 0 })
       ]
     }));
     expect(out).toContain('—'); // em dash result cell
@@ -320,8 +449,8 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
   it('renders a Time column with formatted per-step duration (Xm Ys)', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
-          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, durationMs: 65000 }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
+          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, durationMs: 65000 })
       ]
     }));
     expect(out).toContain('Time');
@@ -331,8 +460,8 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
   it('renders a Session ID column with the corresponding sessionId', () => {
     const out = renderStatusPanel(makeContext({
       timeline: [
-        { kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
-          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, sessionId: 'sess_timeline_123' }
+        makeRow({ kind: 'audit', role: 'auditor', version: 1, agent: 'codex', model: 'gpt-5.4',
+          status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 0, sessionId: 'sess_timeline_123' })
       ]
     }));
     expect(out).toContain('Session');

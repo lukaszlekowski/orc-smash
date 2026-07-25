@@ -17,11 +17,14 @@ import {
 } from '../src/terminal-accent.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type StepKind, type StepStatus } from '../src/state.js';
+import type { Step } from '../src/state.js';
+import type { TimelineRow } from '../src/timeline-rows.js';
 
 function makeContext(overrides: Partial<PanelContext>): PanelContext {
   return {
     projectRoot: '/tmp/project',
     loopName: 'plan',
+    bindingKind: 'loop',
     currentIteration: 1,
     maxIterations: 5,
     activeSkillRunner: null,
@@ -49,6 +52,10 @@ function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
     toolCallCount: 0,
     progressMessage: null
   };
+}
+
+function row(step: Step): TimelineRow {
+  return { step, relevance: 'current-chain' };
 }
 
 function stripAnsi(s: string): string {
@@ -172,20 +179,20 @@ describe('panelBorderColor (stage-driven border color)', () => {
   it('timeline with last step of a given kind drives border color when inFlight is null', () => {
     expect(panelBorderColor(makeContext({
       inFlight: null,
-      timeline: [{
+      timeline: [row({
         kind: 'follow-up', role: 'planner', agent: 'opencode', model: 'm',
         version: 1, status: 'done', artifactPath: '/x', mtime: 0
-      }]
+      })]
     }))).toBe('yellow');
   });
 
   it('timeline last step status === failed → red (historical-failure override)', () => {
     expect(panelBorderColor(makeContext({
       inFlight: null,
-      timeline: [{
+      timeline: [row({
         kind: 'audit', role: 'auditor', agent: 'opencode', model: 'm',
         version: 1, status: 'failed', artifactPath: '/x', mtime: 0
-      }]
+      })]
     }))).toBe('red');
   });
 });

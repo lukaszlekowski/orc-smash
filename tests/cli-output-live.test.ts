@@ -37,6 +37,7 @@ function makeContext(inFlight: PanelContext['inFlight']): PanelContext {
   return {
     projectRoot: '/p',
     loopName: 'plan',
+    bindingKind: 'loop',
     currentIteration: 1,
     maxIterations: 5,
     activeSkillRunner: inFlight

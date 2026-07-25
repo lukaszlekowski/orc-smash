@@ -1,16 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { renderStatusPanel } from '../src/status-panel.js';
+import type { Step } from '../src/state.js';
+import type { TimelineRow } from '../src/timeline-rows.js';
+
+function row(step: Step): TimelineRow {
+  return { step, relevance: 'current-chain' };
+}
 
 describe('Status panel renderer', () => {
   it('renders box, details, and timeline table correctly from read-only view', () => {
     const output = renderStatusPanel({
       projectRoot: '/my/test/project',
       loopName: 'plan',
+      bindingKind: 'loop',
       currentIteration: 0,
       maxIterations: 5,
       activeSkillRunner: null,
       timeline: [
-        {
+        row({
           kind: 'evaluate',
           role: 'auditor',
           version: 1,
@@ -20,8 +27,8 @@ describe('Status panel renderer', () => {
           decision: 'retry' as const,
           artifactPath: '/my/test/project/docs/dev/plan-audit-v1-opencode.md',
           mtime: 12345
-        },
-        {
+        }),
+        row({
           kind: 'repair',
           role: 'planner',
           version: 1,
@@ -31,7 +38,7 @@ describe('Status panel renderer', () => {
           completionOutcome: 'completed' as const,
           artifactPath: '/my/test/project/docs/dev/plan-followup-v1-fake.md',
           mtime: 12346
-        }
+        })
       ],
       nextStepMessage: 'Smashing version 2...',
       inFlight: null,
