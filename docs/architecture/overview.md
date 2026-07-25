@@ -79,6 +79,12 @@ unclassified and cannot provide completion, continuation, or resume evidence.
 `state.ts` scans every configured loop/task output pattern into one global
 snapshot, classifies each artifact through `artifact-contract.ts`, sorts the
 timeline chronologically, validates lineage, and ignores `docs/dev/archived/`.
+`artifact-contract.ts` exposes one provenance-independent body classifier for
+both the live pre-persistence path and restart reconstruction. Its named
+required-artifact validators are outcome-aware: the implementation ledger is
+`valid`, `blocked`, or `unknown`, with bounded table/row diagnostics. A blocked
+ledger remains classified (`contractValid: true`, `completionOutcome: blocked`)
+but is excluded from completion evidence and stage continuation.
 `timeline-rows.ts` derives display-only global timeline rows and typed relevance
 tiers from that snapshot.
 `project-snapshot-view.ts` derives a pure view model (`ProjectSnapshotView`)
@@ -91,6 +97,14 @@ source for results, availability, emphasis, roles, and lifecycle states.
 `project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
 and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model
 without performing any filesystem reads or prompt content calls.
+
+Decision parsing remains strict and exact-token-only. `commands/smash.ts` is the
+only owner of the optional correction prompt; `binding-engine.ts` receives a
+typed callback but never prompts. A safe one-line correction is reclassified in
+memory before the raw artifact is quarantined, then the corrected artifact is
+provenance-stamped with the archived evidence path and emits
+`artifact.decision-corrected`. Callback absence, ambiguity, decline, and plain
+or explicit execution fail closed without a second provider invocation.
 
 ## Runner and provider boundaries
 

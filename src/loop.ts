@@ -6,7 +6,8 @@ import type { OwnershipContext } from './run-ownership.js';
 import type { RunnerOverrideMap } from './runner-overrides.js';
 import type { RunContext } from './pipeline-state.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
-import { runBinding } from './loops/binding-engine.js';
+import { runBinding, type DecisionCorrectionChoice } from './loops/binding-engine.js';
+import type { DecisionCorrectionDiagnostic } from './artifact-contract.js';
 import type { RunnerPreselection } from './continuation-runners.js';
 import type { Step } from './state.js';
 
@@ -23,6 +24,7 @@ export interface LoopOptions {
   continuationDefaults?: Map<string, RunnerPreselection>;
   continuationSteps?: Step[];
   continuationChainId?: string;
+  decisionCorrection?: (request: DecisionCorrectionDiagnostic & { artifactPath: string }) => Promise<DecisionCorrectionChoice>;
   /** smashAction owns terminal emission when false; direct callers default to true. */
   emitTerminal?: boolean;
 

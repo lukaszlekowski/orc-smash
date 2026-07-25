@@ -32,6 +32,24 @@ Remove the duplicate contract interpretation from
 `src/loops/binding-engine.ts`; live execution and restart scans must not derive
 different outcomes from the same body and manifest output specification.
 
+The canonical classifier is a **body + output-spec function** — for example
+`classifyOutputBody(output, body, validator)` — that performs *no* provenance
+check and reads only the raw artifact body plus the configured `OutputSpec`.
+This decoupling is mandatory: the live path (`src/loops/binding-engine.ts`)
+classifies the raw provider `body` *before* `writeArtifactWithMeta` stamps
+provenance, so any classifier that reads a file path and demands v1 front matter
+(the current `classifyArtifact`, which calls `parseArtifactMetaClassified`
+first) would return `unknown` for every live artifact. Provenance validity stays
+a separate, earlier gate that the canonical classifier must not fold in: the
+restart path keeps its existing `parseArtifactMetaClassified` provenance gate in
+`src/artifact-index.ts`, and the live path relies on the post-classification
+`writeArtifactWithMeta` stamping. Both call sites must invoke the same body-based
+classifier — the live site (today `validateOutput` in
+`src/loops/binding-engine.ts`) and the restart site (`classifyArtifact` in
+`src/artifact-index.ts`, reached only after the provenance gate). The existing
+file-path `classifyArtifact` is re-implemented on top of the body-based
+classifier; `parseArtifactMetaClassified` is never embedded inside it.
+
 A classification result carries:
 
 - `kind`: the normalized outcome;
@@ -71,14 +89,25 @@ provides an optional correction callback to the engine. The callback is
 installed only for an interactive, non-plain run; explicit CLI runs and
 `--plain` runs fail closed with actionable diagnostics.
 
-Before applying an approved correction, move the untouched provider output to
-the existing `docs/dev/archived/` quarantine area with reason
-`decision-correction`. Recreate the active artifact by changing only the first
-substantive decision line in the configured decision section, validate the
-corrected body through the ordinary classifier, then add normal provenance.
-Record the correction and archived evidence path in provenance and emit a
-structured correction event. If archiving, rewriting, or revalidation fails,
-leave the raw evidence recoverable and do not advance.
+Before applying an approved correction, build the corrected body in memory by
+changing only the first substantive decision line in the configured decision
+section, then validate that corrected body through the ordinary classifier
+*before* touching the active artifact. Only on a valid reclassification does the
+engine move the untouched provider output to the existing `docs/dev/archived/`
+quarantine area with reason `decision-correction`, write the corrected body to
+the active path, and add normal provenance. This ordering is mandatory because
+`quarantineArtifact` performs an irreversible `renameSync`: validating the
+corrected body *first* means the irreversible archive never runs until the
+replacement is known valid, so the active path always holds either the untouched
+original (on rewrite/revalidation failure) or the provenance-stamped corrected
+body (on success) — never an invalid rewritten body with the original already
+moved. Record the correction and archived evidence path in provenance and emit a
+structured correction event. If rewriting or revalidation fails, leave the
+original untouched at the active path as the recoverable evidence and stop; if
+the archive or corrected-body write fails after a valid reclassification, the
+archived original (when the rename completed) is the canonical recoverable
+evidence and the active path is left invalid or empty. In every failure case no
+provenance-stamped active artifact exists and the run does not advance.
 
 Choosing not to correct archives the unchanged invalid output and stops. It
 does not provenance-stamp the invalid body or invoke the provider again.
@@ -138,13 +167,38 @@ provider output.
   - emit blocked diagnostics and terminate the task as `blocked`.
 - `src/artifact-index.ts`, `src/state.ts`, and
   `src/pipeline-stage-state.ts`
-  - reconstruct a blocked required artifact as classified blocked evidence;
+  - reconstruct a blocked required artifact as classified blocked evidence using
+    the existing field that `artifactRecordFromStep` already maps to
+    `normalizedResult: 'blocked'`: for a blocked implement ledger the restart
+    scan sets `step.contractValid = true`, `step.unclassified = false`, and
+    `step.completionOutcome = 'blocked'`. Do **not** introduce a new carrier
+    field — `artifactRecordFromStep` only consults `decision`, `completionOutcome`,
+    and `contractValid`, so a new field would be silently dropped;
   - exclude it from successor completion evidence without marking it
-    unclassified.
+    unclassified. Today `src/artifact-index.ts` marks any `contractValid === false`
+    step as unclassified, so the blocked ledger must keep `contractValid = true`
+    precisely to avoid that path, and `completionEvidenceForStage` already
+    accepts only `normalizedResult === 'valid'` for a required-artifact task, so
+    a blocked ledger naturally resolves to neither completion evidence nor an
+    eligible continuation parent.
 - `src/run-event.ts`, `src/plain-event-renderer.ts`, and the status/final-summary
   presentation
   - show the bounded diagnostics on the verified blocked artifact and terminal
     outcome rather than `implementation evidence ledger validator failed`.
+- `tests/implement-ledger.test.ts` and `tests/adapters-contract.test.ts`
+  - the existing `validateImplementLedger(...).toEqual({ valid,
+    evidenceTableValid, coverageTableValid, confidenceValid })` shape
+    assertions (≈7 sites in `tests/implement-ledger.test.ts`) migrate to the new
+    typed outcome/diagnostic model;
+  - the `isCompleteImplementLedger` assertions for `skip` / `not run` /
+    `untested` status cells flip from "invalid" (`toBe(false)`) to "`blocked`
+    with an unresolved-row diagnostic" — under the new contract those ledgers
+    are structurally complete and recognized, just unresolved, so they are
+    `blocked`, not malformed;
+  - `tests/adapters-contract.test.ts:389` continues to assert a clean body (no
+    front matter) is a complete ledger, and additionally covers the blocked
+    distinction so the public validator shape change does not silently pass an
+    out-of-date suite.
 
 No manifest schema change is required. The existing explicit pairing
 `contract: required-artifact` plus `validator: implement-ledger` selects this
@@ -164,11 +218,20 @@ behavior.
     terminal blocked outcome with exact diagnostics;
   - unknown emits `artifact.unknown` with structural diagnostics and does not
     advance.
+- Prove the canonical classifier is provenance-decoupled: for the same body,
+  assert it returns the identical `kind` and diagnostics with and without v1
+  front matter prepended (this is the regression guard for F1 — a
+  provenance-coupled classifier would misclassify the bare live body).
 - Rescan each persisted fixture and prove live and reconstructed
   `contractValid`, normalized result, status rendering, and pipeline
   eligibility agree.
 - Prove a blocked task is not offered as resumable provider work and gains no
   implicit repair loop.
+- Prove a blocked implement ledger never unlocks a successor: assert it is
+  absent from `completionEvidenceForStage` for the configured successor review
+  stage, and assert a stage-continuation child anchored to it fails
+  `validateContinuationParent` ("not completion-capable") — both must hold while
+  the blocked artifact remains classified (not `unclassified`).
 
 ## Feature 2 — Operator-confirmed decision correction
 
@@ -223,8 +286,14 @@ available, then stop as `unknown`.
   - add the operator correction prompt using configured tokens.
 - `src/commands/smash.ts`, `src/loop.ts`, and
   `src/loops/runtime.ts`
-  - install the correction callback only at the interactive command boundary
-    and carry its typed result through the shared executor options.
+  - install the correction callback only at the interactive command boundary,
+    gated on `setup.isInteractive && !options.plain` (where `isInteractive` is
+    `!options.loop && !options.task && !options.pipeline` and `--plain` is the
+    renderer-only flag from `src/cli.ts`), and carry its typed result through the
+    shared executor options. The binding engine never receives a `plain` flag:
+    it treats "no correction callback" as fail-closed, so the `--plain`
+    guarantee falls out of callback *absence* rather than engine-level branching
+    or a new `BindingEngineOptions` field.
 - `src/loops/binding-engine.ts`
   - request correction only for a recoverable decision-classification result;
   - archive, rewrite, revalidate, provenance-stamp, and continue atomically at
@@ -233,10 +302,21 @@ available, then stop as `unknown`.
   - reuse the generic quarantine operation with the distinct
     `decision-correction` reason; do not introduce hidden state.
 - `src/provenance.ts`
-  - add and round-trip optional decision-correction evidence.
+  - add the decision-correction field to the `ArtifactMeta` interface **and** to
+    the `optionalKeys` array in `parseArtifactMeta`; `parseArtifactMeta` only
+    preserves keys listed in `optionalKeys`, so a field omitted from that list is
+    silently dropped on reparse and the correction record would be written once
+    by `writeArtifactWithMeta` but vanish on the next restart scan. Round-trip it
+    losslessly (original line, selected canonical token, correction timestamp,
+    project-relative archived evidence path) without changing pipeline/chain
+    identity or fingerprint rules.
 - `src/run-event.ts`, `src/plain-event-renderer.ts`, and panel/final-summary
   rendering
-  - add the structured correction event and precise fail-closed diagnostics.
+  - add the `artifact.decision-corrected` event to the `RunEvent` union **and**
+    handle it in the exhaustive `fmtEvent` / `renderRunEvent` switch (an
+    unhandled union member is either a TypeScript exhaustiveness error or a
+    silently unrendered event in plain mode), plus the precise fail-closed
+    diagnostics.
 
 ### Verification
 
@@ -257,7 +337,19 @@ available, then stop as `unknown`.
 - Prove declining archives the unchanged raw output, leaves no classified
   active artifact, and stops unknown.
 - Inject archive, rewrite, and revalidation failures and prove the run remains
-  fail-closed with recoverable raw evidence.
+  fail-closed with recoverable raw evidence. Specifically, after an injected
+  revalidation failure assert the untouched original is still intact at the
+  active path (archive/rename did not run) and no provenance-stamped active
+  artifact exists; after an injected archive failure following a valid
+  reclassification assert the archived original is intact and the active path
+  holds no classified artifact.
+- Re-scan a corrected artifact from disk and assert the correction provenance
+  (original line, selected canonical token, archived evidence path) survives the
+  `parseArtifactMeta` round-trip — this is the guard for F6, since a field missing
+  from `optionalKeys` would be silently dropped.
+- Render the `artifact.decision-corrected` event through both the panel and the
+  plain (`renderRunEvent`) renderer so the correction is observable in each
+  output mode (F7 exhaustiveness guard).
 - Prove explicit-binding, non-interactive, and `--plain` executions never open
   the correction prompt.
 - Cover custom manifest headings/tokens and at least two differently named loop
@@ -266,9 +358,16 @@ available, then stop as `unknown`.
 ## Delivery order
 
 1. Centralize contract results and add ledger diagnostics without changing
-   behavior.
+   behavior. The current `validateImplementLedger` return shape and all existing
+   assertions stay green in this step.
 2. Enable the ledger `blocked` classification across live execution, events,
-   indexing, restart reconstruction, and pipeline eligibility.
+   indexing, restart reconstruction, and pipeline eligibility. Update
+   `tests/implement-ledger.test.ts` and `tests/adapters-contract.test.ts` in
+   this same step: migrate the `toEqual` shape assertions to the new
+   outcome/diagnostic model and flip the `skip` / `not run` / `untested` cases
+   from invalid to `blocked` with an unresolved-row diagnostic. Step 1 keeps the
+   old shape, so the suite is green until this step changes both the contract
+   and its assertions together.
 3. Add pure decision diagnostics and replacement tests.
 4. Add the interactive correction callback, quarantine evidence, provenance,
    and event presentation.

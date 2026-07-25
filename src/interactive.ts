@@ -7,6 +7,8 @@ import type { Step } from './state.js';
 import { resolveContinuity, type ResumeRecord, type RunnerPreselection } from './continuation-runners.js';
 
 import { availabilityAccent, emphasisAccent, type AvailabilityState } from './terminal-accent.js';
+import type { DecisionCorrectionDiagnostic } from './artifact-contract.js';
+import type { DecisionCorrectionChoice } from './loops/binding-engine.js';
 
 export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean; availability?: AvailabilityState }>(
   item: T,
@@ -609,4 +611,29 @@ export async function promptPostRunRecovery(): Promise<'menu' | 'exit'> {
     ],
     default: 'menu'
   });
+}
+
+/** Operator authority for a qualified one-line decision correction. */
+export async function promptDecisionCorrection(
+  request: DecisionCorrectionDiagnostic & { artifactPath: string },
+): Promise<DecisionCorrectionChoice> {
+  console.log(`\n${emphasisAccent('warning')('Unclassified decision artifact requires operator confirmation.')}`);
+  console.log(`  Artifact: ${request.artifactPath}`);
+  console.log(`  Invalid line: ${request.invalidLine ? JSON.stringify(request.invalidLine) : '(not identifiable)'}`);
+  console.log(`  Canonical choices: ${request.acceptedToken} / ${request.retryToken}`);
+  if (request.suggestedToken) {
+    console.log(`  ${emphasisAccent('supporting')(`Presentation-only suggestion: ${request.suggestedToken} (not selected automatically)`)}`);
+  }
+
+  const selected = await select({
+    message: 'Choose the exact canonical decision token, or archive unchanged and stop:',
+    choices: [
+      { name: `Use ${request.acceptedToken}`, value: request.acceptedToken },
+      { name: `Use ${request.retryToken}`, value: request.retryToken },
+      { name: 'Archive unchanged invalid output and stop', value: '__archive__' },
+    ],
+  });
+  return selected === '__archive__'
+    ? { kind: 'archive' }
+    : { kind: 'correct', token: selected };
 }

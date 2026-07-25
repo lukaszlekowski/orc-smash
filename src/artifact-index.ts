@@ -2,9 +2,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from '
 import { join, relative, resolve } from 'node:path';
 import { parseArtifactMeta, parseArtifactMetaClassified, type StepKind } from './provenance.js';
 import { patternToRegex } from './patterns.js';
-import type { V1Manifest } from './manifest.js';
-import { classifyArtifact } from './artifact-contract.js';
-import { validateImplementLedger } from './implement-ledger.js';
+import type { V1Manifest, OutputSpec } from './manifest.js';
+import { classifyOutputBody } from './artifact-contract.js';
 import { roleForKind, type Step, type GlobalSnapshot, type BindingInputAvailability } from './state.js';
 import { computeArtifactIdentity } from './pipeline-state.js';
 import { artifactRecordFromStep, validateContinuationParent } from './pipeline-stage-state.js';
@@ -109,6 +108,7 @@ export function scanGlobalSnapshot(
     bindingKind: 'loop' | 'task';
     phase: StepKind;
     contract: { type: string; decision?: any; validator?: string };
+    output: OutputSpec;
   }> = [];
 
   for (const [loopId, loop] of Object.entries(manifest.loops ?? {})) {
@@ -125,6 +125,7 @@ export function scanGlobalSnapshot(
           decision: step.output.decision,
           validator: step.output.validator,
         },
+        output: step.output,
       });
     }
   }
@@ -141,6 +142,7 @@ export function scanGlobalSnapshot(
         decision: undefined,
         validator: task.output.validator,
       },
+      output: task.output,
     });
   }
 
@@ -284,6 +286,7 @@ export function scanGlobalSnapshot(
         status: 'done',
         artifactPath: file,
         mtime,
+        unclassified: false,
         durationMs: meta.durationMs,
         sessionMode: meta.sessionMode,
         sessionId: meta.sessionId,
@@ -300,6 +303,7 @@ export function scanGlobalSnapshot(
         effortStatus: meta.effortStatus,
         effectiveEffort: meta.effectiveEffort,
         sessionStrategy: meta.sessionStrategy,
+        decisionCorrection: meta.decisionCorrection,
         provider,
         contract: patternInfo.contract.type as any,
       };
@@ -317,39 +321,21 @@ export function scanGlobalSnapshot(
         continue;
       }
 
-      try {
-        switch (patternInfo.contract.type) {
-          case 'decision-artifact': {
-            const decision = patternInfo.contract.decision;
-            if (decision) {
-              const result = classifyArtifact(file, 'decision-artifact', decision);
-              step.decision = result.kind;
-              step.contractValid = result.kind !== 'unknown';
-            } else step.contractValid = false;
-            break;
-          }
-          case 'completion-artifact': {
-            const result = classifyArtifact(file, 'completion-artifact');
-            step.completionOutcome = result.kind;
-            step.contractValid = result.kind !== 'unknown';
-            break;
-          }
-          case 'required-artifact': {
-            const validator = patternInfo.contract.validator === 'implement-ledger'
-              ? (path: string) => validateImplementLedger(readFileSync(path, 'utf8')).valid
-              : undefined;
-            step.contractValid = classifyArtifact(file, 'required-artifact', undefined, validator).kind === 'valid';
-            break;
-          }
-        }
-      } catch {
-        step.contractValid = false;
+      const result = classifyOutputBody(patternInfo.output, content);
+      step.contractDiagnostics = result.diagnostics;
+      step.contractValid = result.kind !== 'unknown';
+      if (result.kind === 'accepted' || result.kind === 'retry') {
+        step.decision = result.kind;
+      } else if (result.kind === 'completed' || result.kind === 'blocked') {
+        step.completionOutcome = result.kind === 'completed' ? 'completed' : 'blocked';
       }
 
       const bindingId = meta.bindingId ?? patternInfo.bindingId;
       if (step.contractValid === false) {
         step.unclassified = true;
-        step.unclassifiedReason = 'Output contract validation failed.';
+        step.unclassifiedReason = result.detail
+          ? `Output contract validation failed: ${result.detail}`
+          : result.diagnostics[0]?.message ?? 'Output contract validation failed.';
         step.decision = undefined;
         step.completionOutcome = undefined;
         step.verdict = undefined;

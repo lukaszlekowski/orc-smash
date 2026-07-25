@@ -126,9 +126,12 @@ export function renderPlainPanel(context: PanelContext): string {
       const rawRes = s.status === 'interrupted'
         ? '—'
         : (s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome ?? 'unknown');
+      const diagnosticText = rawRes === 'blocked' && s.contractDiagnostics?.[0]
+        ? ` — ${s.contractDiagnostics[0].message}`
+        : '';
       const resultText = s.status === 'interrupted'
         ? '—'
-        : resultAccent(toResultState(rawRes))(rawRes);
+        : resultAccent(toResultState(rawRes))(rawRes + diagnosticText);
       const statusAcc = statusAccent(s.status);
       const statusStr = statusAcc.chalk(statusAcc.label);
 

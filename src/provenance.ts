@@ -6,6 +6,13 @@ export type StepKind = 'audit' | 'follow-up' | 'implement' | 'evaluate' | 'repai
 
 export type ChainMode = 'pipeline-start' | 'stage-continuation' | 'ad-hoc' | 'second-opinion';
 
+export interface DecisionCorrectionProvenance {
+  originalLine: string;
+  selectedToken: string;
+  correctedAt: string;
+  archivedEvidencePath: string;
+}
+
 // Legacy fields retained alongside new fields for migration.
 export interface ArtifactMeta {
   // legacy fields
@@ -42,6 +49,7 @@ export interface ArtifactMeta {
   sessionStrategy?: string;
   effortStatus?: 'requested' | 'confirmed' | 'mismatch' | 'reported';
   effectiveEffort?: string;
+  decisionCorrection?: DecisionCorrectionProvenance;
 }
 
 /**
@@ -239,6 +247,7 @@ export function parseArtifactMeta(
       'inputFingerprint', 'resultFingerprint', 'parentArtifactIdentity',
       'pipelineId', 'pipelineRunId', 'stageId', 'provider', 'effort',
       'sessionStrategy', 'step', 'effortStatus', 'effectiveEffort',
+      'decisionCorrection',
     ];
     for (const key of optionalKeys) {
       if (Object.prototype.hasOwnProperty.call(obj, key)) {

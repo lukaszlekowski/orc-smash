@@ -107,6 +107,16 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
     const eventText = renderRunEvent(makeRunEvent({ type: 'note', atMs: Date.now(), message: 'Event test' }));
     expect(eventText).toMatch(/\u001b\[/);
     expect(eventText.replace(/\u001b\[\d+m/g, '')).toContain('Event test');
+    const correctionText = renderRunEvent(makeRunEvent({
+      type: 'artifact.decision-corrected',
+      atMs: Date.now(),
+      path: 'docs/dev/review-v1-fake.md',
+      archivedPath: 'docs/dev/archived/review-v1-fake.md.decision-correction.1',
+      originalLine: 'REJECTED (narrow)',
+      selectedToken: 'APPROVED',
+    }));
+    expect(correctionText.replace(/\u001b\[\d+m/g, '')).toContain('artifact.decision-corrected');
+    expect(correctionText).toMatch(/\u001b\[/);
 
     // 6. Plain Panel
     const plainPanel = renderPlainPanel(sampleContext);

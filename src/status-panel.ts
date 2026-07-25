@@ -5,6 +5,7 @@ import { formatCompactId, formatDurationMs, formatSessionId, type PanelContext, 
 import { resolveTerminalWidth } from './plain-render.js';
 import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
 import type { TimelineRow } from './timeline-rows.js';
+import type { Step } from './state.js';
 
 const ANSI_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
 
@@ -221,6 +222,14 @@ function compactIdentityLine(
   return `artifact ${formatCompactId(artifactIdentity)}  parent ${formatCompactId(parentArtifactIdentity)}  in ${formatCompactId(inputFingerprint)}  out ${formatCompactId(resultFingerprint)}`;
 }
 
+function diagnosticSuffix(step: Step): string {
+  if (!step.contractDiagnostics || step.contractDiagnostics.length === 0) return '';
+  const first = step.contractDiagnostics[0]?.message;
+  if (!first) return '';
+  const omitted = step.contractDiagnostics.filter(item => item.code === 'diagnostics-omitted').length;
+  return ` — ${first}${omitted ? ' (additional diagnostics omitted)' : ''}`;
+}
+
 function timelineCells(row: TimelineRow, marked: boolean): string[] {
   const s = row.step;
   let resultStr = '';
@@ -231,9 +240,10 @@ function timelineCells(row: TimelineRow, marked: boolean): string[] {
   } else {
     const result = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome;
     if (result) {
+      const display = result === 'blocked' ? `${result}${diagnosticSuffix(s)}` : result;
       resultStr = row.relevance === 'unrelated'
-        ? result
-        : resultAccent(toResultState(result))(result);
+        ? display
+        : resultAccent(toResultState(result))(display);
     }
   }
   if (marked) resultStr += ` ${emphasisAccent('supporting')('*')}`;
@@ -327,5 +337,3 @@ function renderTimelineSection(context: PanelContext): string {
   });
   return [table, ...rowBlocks].join('\n');
 }
-
-

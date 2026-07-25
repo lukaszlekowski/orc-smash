@@ -12,7 +12,7 @@ import { parseVerdict } from '../src/verdict.js';
 import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
-import { isCompleteImplementLedger } from '../src/implement-ledger.js';
+import { isCompleteImplementLedger, validateImplementLedger } from '../src/implement-ledger.js';
 
 describe('Real-provider contract tests', () => {
   const tempDir = join(process.cwd(), 'temp-contract-test');
@@ -399,6 +399,22 @@ describe('Real-provider contract tests', () => {
     expect(implContent2.startsWith('---\nloop:')).toBe(true);
     expect(implContent2).toContain(`priorAudit: docs/dev/plan-audit-v1-${agent}.md`);
   }
+
+  it('keeps a clean ledger valid while recognizing unresolved evidence as blocked', () => {
+    const evidence =
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n'
+      + '| --- | --- | --- | --- | --- |\n'
+      + '| Step 1 | src/x.ts | pnpm test | pending | none |\n';
+    const coverage =
+      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n'
+      + '| --- | --- | --- | --- |\n'
+      + '| Req A | src/x.ts | tests/x.test.ts | pass |\n';
+    expect(isCompleteImplementLedger(evidence + '\n' + coverage + '\nConfidence: 0.95')).toBe(false);
+    expect(validateImplementLedger(evidence + '\n' + coverage + '\nConfidence: 0.95')).toMatchObject({
+      kind: 'blocked',
+      diagnostics: [expect.objectContaining({ code: 'unresolved-row', table: 'evidence' })],
+    });
+  });
 
   describe('implement loop', () => {
     it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('opencode — ledger writing and closeout', async () => {
