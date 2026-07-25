@@ -1,17 +1,127 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
-import { formatDurationMs, formatSessionId, type PanelContext } from './status.js';
+import chalk from 'chalk';
+import { formatCompactId, formatDurationMs, formatSessionId, type PanelContext, type ResolvedRunnerDisplay } from './status.js';
+import { resolveTerminalWidth } from './plain-render.js';
 import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
+import type { TimelineRow } from './timeline-rows.js';
+
+const ANSI_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+function strippedWidth(text: string): number {
+  return text.replace(ANSI_PATTERN, '').length;
+}
+
+function maxLineWidth(text: string): number {
+  return Math.max(0, ...text.split('\n').map(strippedWidth));
+}
+
+function tableChars(): Record<string, string> {
+  return {
+    top: '', 'top-mid': '', 'top-left': '', 'top-right': '',
+    bottom: '', 'bottom-mid': '', 'bottom-left': '', 'bottom-right': '',
+    left: '', 'left-mid': '', mid: '', 'mid-mid': '',
+    right: '', 'right-mid': '', middle: ' '
+  };
+}
+
+function fitColumnWidths(preferred: number[], minimum: number[], available: number): number[] {
+  const maxSum = Math.max(0, available - Math.max(0, preferred.length - 1));
+  const widths = minimum.map((value, index) => Math.min(value, preferred[index] ?? value));
+  while (widths.reduce((sum, width) => sum + width, 0) > maxSum) {
+    const largest = widths.reduce((candidate, width, index) =>
+      width > (widths[candidate] ?? 0) && width > 3 ? index : candidate, 0);
+    if (widths[largest]! <= 3) break;
+    widths[largest] = widths[largest]! - 1;
+  }
+  let remaining = Math.max(0, maxSum - widths.reduce((sum, width) => sum + width, 0));
+
+  while (remaining > 0) {
+    let grew = false;
+    for (let index = 0; index < widths.length && remaining > 0; index += 1) {
+      const target = preferred[index] ?? widths[index]!;
+      if (widths[index]! < target) {
+        widths[index] = widths[index]! + 1;
+        remaining -= 1;
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return widths;
+}
+
+function renderAlignedTable(
+  head: string[],
+  rows: string[][],
+  preferred: number[],
+  minimum: number[],
+): string {
+  const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
+  const colWidths = fitColumnWidths(preferred, minimum, panelInnerWidth);
+  const table = new Table({
+    head,
+    colWidths,
+    style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
+    chars: tableChars(),
+    wordWrap: true,
+  });
+  for (const row of rows) table.push(row);
+
+  // cli-table3 accounts for cell padding and stripped separators in the
+  // rendered width. Keep this defensive bound in case a future dependency
+  // version changes that accounting.
+  let rendered = table.toString();
+  if (maxLineWidth(rendered) > panelInnerWidth) {
+    const emergencyWidths = colWidths.map(width => Math.max(3, width - 1));
+    const emergency = new Table({
+      head,
+      colWidths: emergencyWidths,
+      style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
+      chars: tableChars(),
+      wordWrap: true,
+    });
+    for (const row of rows) emergency.push(row);
+    rendered = emergency.toString();
+  }
+  return rendered;
+}
+
+function renderRunConfiguration(runners: ResolvedRunnerDisplay[]): string {
+  const rows = runners.map(runner => [
+    runner.phase.charAt(0).toUpperCase() + runner.phase.slice(1),
+    runner.skillId,
+    runner.role,
+    runner.agent,
+    runner.model,
+    runner.effort ?? 'provider default',
+    runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation',
+  ]);
+  return renderAlignedTable(
+    ['Phase', 'Skill', 'Role', 'Provider', 'Model', 'Effort', 'Session'],
+    rows,
+    [9, 22, 15, 14, 28, 18, 22],
+    [5, 7, 6, 8, 7, 16, 20],
+  );
+}
 
 export function renderStatusPanel(context: PanelContext): string {
   const pName = emphasisAccent('identity')(context.projectRoot);
   const lName = emphasisAccent('binding-identity')(context.loopName);
+  const panelTitle = resolveTerminalWidth() < 60
+    ? ' ORC SMASH STATUS PANEL '
+    : emphasisAccent('identity')(' ORC SMASH STATUS PANEL ');
 
+  const iterationLabel = context.bindingKind === 'task' ? 'Execution' : 'Iteration';
   const iterationValue = context.readOnly
     ? 'not running'
-    : context.providerCalls !== undefined
-      ? `Round ${context.currentIteration}/${context.maxIterations} - provider calls ${context.providerCalls}`
-      : `${context.currentIteration}/${context.maxIterations}`;
+    : context.bindingKind === 'task'
+      ? context.providerCalls !== undefined
+        ? `Single task - provider calls ${context.providerCalls}`
+        : 'Single task'
+      : context.providerCalls !== undefined
+        ? `Round ${context.currentIteration}/${context.maxIterations} - provider calls ${context.providerCalls}`
+        : `${context.currentIteration}/${context.maxIterations}`;
 
   let activeStr = 'None';
   if (context.activeSkillRunner) {
@@ -23,7 +133,7 @@ export function renderStatusPanel(context: PanelContext): string {
   const contentLines: string[] = [
     `Project:          ${pName}`,
     `Loop:             ${lName}`,
-    `Iteration:        ${emphasisAccent('supporting')(iterationValue)}`,
+    `${iterationLabel}:        ${emphasisAccent('supporting')(iterationValue)}`,
     `Active Runner:    ${activeStr}`,
     `Next Step:        ${emphasisAccent('identity')(context.nextStepMessage)}`,
     `Latest version:   v${context.latestVersion}`
@@ -32,13 +142,7 @@ export function renderStatusPanel(context: PanelContext): string {
   if (context.resolvedRunners && context.resolvedRunners.length > 0) {
     contentLines.push('');
     contentLines.push(emphasisAccent('identity')('Run configuration'));
-    for (const runner of context.resolvedRunners) {
-      const phaseLabel = runner.phase ? runner.phase.charAt(0).toUpperCase() + runner.phase.slice(1) : 'Skill';
-      const roleStr = runner.role ? ` (${runner.role})` : '';
-      const effortStr = runner.effort ?? 'provider default';
-      const stratStr = runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation';
-      contentLines.push(`  ${phaseLabel.padEnd(10)} ${`${runner.skillId}${roleStr}`.padEnd(24)} ${emphasisAccent('identity')(`${runner.agent} · ${runner.model}`)}  ${effortStr}  ${stratStr}`);
-    }
+    contentLines.push(renderRunConfiguration(context.resolvedRunners));
   }
 
   if (context.activeInvocation) {
@@ -68,7 +172,8 @@ export function renderStatusPanel(context: PanelContext): string {
   }
 
   return boxen(contentLines.join('\n'), {
-    title: emphasisAccent('identity')(' ORC SMASH STATUS PANEL '),
+    width: resolveTerminalWidth(),
+    title: panelTitle,
     titleAlignment: 'center',
     padding: 1,
     margin: 0,
@@ -82,11 +187,12 @@ function renderInFlightSection(context: PanelContext): string | null {
 
   // Elapsed since the spawn started; the renderer reads the closed-over
   // `startedAtMs` at paint time so the displayed elapsed grows monotonically
-  // across 200ms ticks.
+  // across 1s ticks.
   const elapsedStr = formatDurationMs(Date.now() - context.inFlight.startedAtMs);
 
   const detailLines = [
     `${emphasisAccent('identity')('Active Step:')} ${emphasisAccent('supporting')(`(elapsed ${elapsedStr})`)}`,
+    `Role:             ${roleAccent(context.inFlight.role).chalk(context.inFlight.role)}`,
     `Spawn:            ${emphasisAccent('identity')(context.inFlight.spawnLabel)}`
   ];
 
@@ -101,81 +207,125 @@ function renderInFlightSection(context: PanelContext): string | null {
   return detailLines.join('\n');
 }
 
-function renderTimelineSection(context: PanelContext): string {
-  const latestIndex = context.timeline.length - 1;
-
-  const rows = context.timeline.map((s, index) => {
-    const roleAcc = roleAccent(s.role);
-
-    // An interrupted step has no verdict/outcome — render an em dash so the
-    // status column's literal "interrupted" is the signal, not a misleading
-    // "unknown" result.
-    let resultStr = '';
-    if (s.status === 'interrupted') {
-      resultStr = '—';
-    } else {
-      const result = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome;
-      if (result) {
-        resultStr = resultAccent(toResultState(result))(result);
-      }
-    }
-
-    if (index === latestIndex) {
-      resultStr += ` ${emphasisAccent('supporting')('*')}`;
-    }
-
-    const statusAcc = statusAccent(s.status);
-    const statusStr = statusAcc.chalk(statusAcc.label);
-
-    return [
-      String(s.version),
-      roleAcc.chalk(roleAcc.label),
-      s.agent,
-      s.model,
-      s.effort ?? 'default',
-      resultStr,
-      emphasisAccent('supporting')(formatDurationMs(s.durationMs)),
-      formatSessionId(s.sessionId),
-      statusStr
-    ];
-  });
-
-  if (context.inFlight) {
-    const roleAcc = roleAccent(context.inFlight.role);
-    const statusAcc = statusAccent(context.inFlight.status);
-    rows.push([
-      String(context.inFlight.version),
-      roleAcc.chalk(roleAcc.label),
-      context.inFlight.agent,
-      context.inFlight.model,
-      context.inFlight.effort ?? 'default',
-      '\u2014',
-      emphasisAccent('supporting')(formatDurationMs(Date.now() - context.inFlight.startedAtMs)),
-      '\u2014',
-      statusAcc.chalk(statusAcc.label)
-    ]);
-  }
-
-  if (rows.length === 0) {
-    return '';
-  }
-
-  const table = new Table({
-    head: ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status'],
-    style: { head: ['cyan'], border: [] },
-    chars: {
-      top: '', 'top-mid': '', 'top-left': '', 'top-right': '',
-      bottom: '', 'bottom-mid': '', 'bottom-left': '', 'bottom-right': '',
-      left: '', 'left-mid': '', mid: '', 'mid-mid': '',
-      right: '', 'right-mid': '',
-      middle: ' '
-    },
-    wordWrap: true
-  });
-
-  for (const row of rows) {
-    table.push(row);
-  }
-
-  return table.toString();
+function truncateUnclassifiedReason(reason: string | undefined): string {
+  const value = reason || 'unclassified artifact';
+  return value.length > 48 ? `${value.slice(0, 47)}…` : value;
 }
+
+function compactIdentityLine(
+  artifactIdentity: string | null | undefined,
+  parentArtifactIdentity: string | null | undefined,
+  inputFingerprint: string | null | undefined,
+  resultFingerprint: string | null | undefined,
+): string {
+  return `artifact ${formatCompactId(artifactIdentity)}  parent ${formatCompactId(parentArtifactIdentity)}  in ${formatCompactId(inputFingerprint)}  out ${formatCompactId(resultFingerprint)}`;
+}
+
+function timelineCells(row: TimelineRow, marked: boolean): string[] {
+  const s = row.step;
+  let resultStr = '';
+  if (row.relevance === 'unclassified') {
+    resultStr = truncateUnclassifiedReason(s.unclassifiedReason);
+  } else if (s.status === 'interrupted') {
+    resultStr = '—';
+  } else {
+    const result = s.decision ?? s.completionOutcome ?? s.verdict ?? s.outcome;
+    if (result) {
+      resultStr = row.relevance === 'unrelated'
+        ? result
+        : resultAccent(toResultState(result))(result);
+    }
+  }
+  if (marked) resultStr += ` ${emphasisAccent('supporting')('*')}`;
+
+  const isDimmed = row.relevance === 'unrelated' || row.relevance === 'unclassified';
+  const roleCell = isDimmed ? s.role : roleAccent(s.role).chalk(s.role);
+  const statusStr = row.relevance === 'unclassified'
+    ? 'unclassified'
+    : isDimmed
+      ? statusAccent(s.status).label
+      : statusAccent(s.status).chalk(statusAccent(s.status).label);
+  const cells = [
+    String(s.version),
+    roleCell,
+    s.agent,
+    s.model,
+    s.effort ?? 'provider default',
+    resultStr,
+    formatDurationMs(s.durationMs),
+    formatSessionId(s.sessionId),
+    statusStr,
+    formatCompactId(s.artifactIdentity),
+    formatCompactId(s.parentArtifactIdentity),
+    formatCompactId(s.inputFingerprint),
+    formatCompactId(s.resultFingerprint),
+  ];
+  return isDimmed ? cells.map(cell => chalk.dim(cell)) : cells;
+}
+
+function inFlightCells(context: PanelContext): string[] {
+  const active = context.inFlight!;
+  return [
+    String(active.version),
+    roleAccent(active.role).chalk(active.role),
+    active.agent,
+    active.model,
+    active.effort ?? 'provider default',
+    '—',
+    formatDurationMs(Date.now() - active.startedAtMs),
+    '—',
+    statusAccent(active.status).chalk(statusAccent(active.status).label),
+    formatCompactId(active.artifactIdentity),
+    formatCompactId(active.parentArtifactIdentity),
+    formatCompactId(active.inputFingerprint),
+    formatCompactId(active.resultFingerprint),
+  ];
+}
+
+function renderTimelineSection(context: PanelContext): string {
+  const rows: string[][] = [];
+  let latestCurrentChain = -1;
+  for (let index = 0; index < context.timeline.length; index += 1) {
+    if (context.timeline[index]!.relevance === 'current-chain') latestCurrentChain = index;
+  }
+  context.timeline.forEach((row, index) => rows.push(timelineCells(row, index === latestCurrentChain)));
+  if (context.inFlight) rows.push(inFlightCells(context));
+  if (rows.length === 0) return '';
+
+  const head = ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status', 'Artifact', 'Parent', 'Input FP', 'Result FP'];
+  const preferred = [5, 10, 13, 22, 14, 16, 8, 10, 11, 9, 9, 9, 9];
+  const minimum = [3, 10, 6, 6, 8, 11, 5, 7, 11, 10, 8, 10, 10];
+  const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
+  const minTableWidth = minimum.reduce((sum, width) => sum + width, 0) + head.length - 1;
+
+  if (minTableWidth <= panelInnerWidth) {
+    return renderAlignedTable(head, rows, preferred, minimum);
+  }
+
+  const coreHead = head.slice(0, 9);
+  const corePreferred = preferred.slice(0, 9);
+  const coreMinimum = minimum.slice(0, 9);
+  const coreRows = rows.map(row => row.slice(0, 9));
+  const table = renderAlignedTable(coreHead, [], corePreferred, coreMinimum);
+  const rowBlocks = coreRows.map((row, index) => {
+    const rowText = renderAlignedTable([], [row], corePreferred, coreMinimum);
+    const historical = context.timeline[index];
+    const identity = historical
+      ? compactIdentityLine(
+        historical.step.artifactIdentity,
+        historical.step.parentArtifactIdentity,
+        historical.step.inputFingerprint,
+        historical.step.resultFingerprint,
+      )
+      : compactIdentityLine(
+        context.inFlight?.artifactIdentity,
+        context.inFlight?.parentArtifactIdentity,
+        context.inFlight?.inputFingerprint,
+        context.inFlight?.resultFingerprint,
+      );
+    return `${rowText}\n  ${chalk.dim(identity)}`;
+  });
+  return [table, ...rowBlocks].join('\n');
+}
+
+

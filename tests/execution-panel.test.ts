@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { executeLoopStep, type LoopExecutionDeps, type ExecuteLoopStep } from '../src/loops/execution.js';
 import { runBinding } from '../src/loops/binding-engine.js';
 import { writeArtifactWithMeta } from '../src/provenance.js';
@@ -7,6 +7,9 @@ import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 import { createTestAdapterRegistry, resetFakeAdapterState } from '../src/adapters/testing.js';
 import { renderStatusPanel } from '../src/status-panel.js';
 import type { PanelContext } from '../src/status.js';
+import type { TimelineRow } from '../src/timeline-rows.js';
+import type { Step } from '../src/state.js';
+import * as artifactIndex from '../src/artifact-index.js';
 import { createPanelCliOutput } from '../src/cli-output.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -30,6 +33,8 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
   afterEach(() => {
     removeTempDir(tempWorkspace);
   });
+
+  const row = (step: Step): TimelineRow => ({ step, relevance: 'current-chain' });
 
   it('populates resolvedRunners and activeInvocation in PanelContext during executeLoopStep (fresh session)', async () => {
     let capturedPanelContextCallback: (() => PanelContext) | null = null;
@@ -130,9 +135,17 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
     // 3. Verify status panel rendered output contains Run configuration (with role) and Active invocation (with pending) sections
     const rendered = renderStatusPanel(panelContext);
     expect(rendered).toContain('Run configuration');
-    expect(rendered).toContain('Evaluate   plan-audit (auditor)');
-    expect(rendered).toContain('opencode · opencode-model');
-    expect(rendered).toContain('Repair     plan-follow-up (planner)');
+    expect(rendered).toContain('Phase');
+    expect(rendered).toContain('Skill');
+    expect(rendered).toContain('Role');
+    expect(rendered).toContain('Provider');
+    expect(rendered).toContain('Model');
+    expect(rendered).toContain('Effort');
+    expect(rendered).toContain('Session');
+    expect(rendered).toContain('opencode');
+    expect(rendered).toContain('medium');
+    expect(rendered).toContain('provider default');
+    expect(panelContext.inFlight?.effort).toBe('medium');
     expect(rendered).toContain('Active invocation');
     expect(rendered).toContain('plan-audit v1 — fresh session (policy, new session ID: pending)');
 
@@ -222,11 +235,12 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
     const panelContext: PanelContext = {
       projectRoot: tempWorkspace,
       loopName: 'plan',
+      bindingKind: 'loop',
       currentIteration: 1,
       maxIterations: 5,
       activeSkillRunner: null,
       timeline: [
-        {
+        row({
           kind: 'evaluate',
           role: 'auditor',
           agent: 'opencode',
@@ -238,7 +252,7 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
           decision: 'accepted',
           sessionId: 'sess-persist-999',
           durationMs: 1200,
-        },
+        }),
       ],
       nextStepMessage: 'accepted',
       inFlight: null,
@@ -374,5 +388,159 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
     expect(activeRendered).toContain('plan-audit v2 — resuming session *m-789');
 
     expect(result.success).toBe(true);
+  });
+
+  it('scanGlobalSnapshot is called once per provider step and supplier returns byte-identical rows across two paints (D6 spy)', async () => {
+    const scanSpy = vi.spyOn(artifactIndex, 'scanGlobalSnapshot');
+
+    let capturedPanelContextCallback: (() => PanelContext) | null = null;
+    const output = createPanelCliOutput();
+    output.attachLiveRegion = (cb: () => PanelContext) => {
+      capturedPanelContextCallback = cb;
+    };
+
+    const registry = createTestAdapterRegistry();
+    const config = {
+      projectRoot: tempWorkspace,
+      manifestPath: join(tempWorkspace, 'config/orc-smash.yaml'),
+      manifestRoot: tempWorkspace,
+      manifest: {
+        schemaVersion: 1,
+        roles: { auditor: 'roles/auditor.md', planner: 'roles/planner.md' },
+        skills: {
+          'plan-audit': { file: 'skills/audit.md', role: 'auditor', runnerProfile: 'default' },
+          'plan-follow-up': { file: 'skills/repair.md', role: 'planner', runnerProfile: 'default' },
+        },
+        loops: {
+          plan: {
+            type: 'approval-loop',
+            target: { path: 'docs/dev/plan.md', kind: 'file' },
+            inputs: [],
+            evaluate: { skill: 'plan-audit', output: { pattern: 'out.md', contract: 'decision-artifact' } },
+            repair: { skill: 'plan-follow-up', output: { pattern: 'out.md', contract: 'completion-artifact' } },
+          },
+        },
+        tasks: {},
+        pipelines: {},
+      },
+      registry: { providers: {} },
+    } as any;
+
+    const deps: LoopExecutionDeps = {
+      projectRoot: tempWorkspace,
+      loopName: 'plan',
+      bindingKind: 'loop',
+      loopSpec: config.manifest.loops.plan,
+      config,
+      registry,
+      output,
+      steps: [],
+      maxIterations: 5,
+      runners: {
+        'plan-audit': { agent: 'opencode', model: 'opencode-model', effort: 'medium', sessionStrategy: 'resume-per-skill' },
+        'plan-follow-up': { agent: 'fake', model: 'fake-model', effort: undefined, sessionStrategy: 'fresh-per-invocation' },
+      },
+    };
+
+    const request: ExecuteLoopStep = {
+      runner: deps.runners!['plan-audit']!,
+      prompt: 'Test prompt',
+      spawnLabel: 'Running plan-audit v1...',
+      kind: 'evaluate',
+      skillId: 'plan-audit',
+      version: 1,
+      iteration: 1,
+      continuity: { mode: 'fresh', freshReason: 'policy' },
+      sessionStrategy: 'resume-per-skill',
+      inputFingerprint: 'hash123',
+    };
+
+    const runPromise = executeLoopStep(deps, request);
+
+    expect(scanSpy).toHaveBeenCalledTimes(1);
+
+    const panelContext1 = capturedPanelContextCallback!();
+    const panelContext2 = capturedPanelContextCallback!();
+
+    expect(scanSpy).toHaveBeenCalledTimes(1);
+    expect(panelContext1).toEqual(panelContext2);
+    expect(panelContext1.timeline).toEqual(panelContext2.timeline);
+
+    scanSpy.mockRestore();
+    await runPromise;
+  });
+
+  it('live timeline step set equals scanGlobalSnapshot(...).steps for a fixed project (D6 parity)', async () => {
+    let capturedPanelContextCallback: (() => PanelContext) | null = null;
+    const output = createPanelCliOutput();
+    output.attachLiveRegion = (cb: () => PanelContext) => {
+      capturedPanelContextCallback = cb;
+    };
+
+    const registry = createTestAdapterRegistry();
+    const config = {
+      projectRoot: tempWorkspace,
+      manifestPath: join(tempWorkspace, 'config/orc-smash.yaml'),
+      manifestRoot: tempWorkspace,
+      manifest: {
+        schemaVersion: 1,
+        roles: { auditor: 'roles/auditor.md', planner: 'roles/planner.md' },
+        skills: {
+          'plan-audit': { file: 'skills/audit.md', role: 'auditor', runnerProfile: 'default' },
+          'plan-follow-up': { file: 'skills/repair.md', role: 'planner', runnerProfile: 'default' },
+        },
+        loops: {
+          plan: {
+            type: 'approval-loop',
+            target: { path: 'docs/dev/plan.md', kind: 'file' },
+            inputs: [],
+            evaluate: { skill: 'plan-audit', output: { pattern: 'out.md', contract: 'decision-artifact' } },
+            repair: { skill: 'plan-follow-up', output: { pattern: 'out.md', contract: 'completion-artifact' } },
+          },
+        },
+        tasks: {},
+        pipelines: {},
+      },
+      registry: { providers: {} },
+    } as any;
+
+    const deps: LoopExecutionDeps = {
+      projectRoot: tempWorkspace,
+      loopName: 'plan',
+      bindingKind: 'loop',
+      loopSpec: config.manifest.loops.plan,
+      config,
+      registry,
+      output,
+      steps: [],
+      maxIterations: 5,
+      runners: {
+        'plan-audit': { agent: 'opencode', model: 'opencode-model', effort: 'medium', sessionStrategy: 'resume-per-skill' },
+        'plan-follow-up': { agent: 'fake', model: 'fake-model', effort: undefined, sessionStrategy: 'fresh-per-invocation' },
+      },
+    };
+
+    const request: ExecuteLoopStep = {
+      runner: deps.runners!['plan-audit']!,
+      prompt: 'Test prompt (no output)',
+      spawnLabel: 'Running plan-audit v1...',
+      kind: 'evaluate',
+      skillId: 'plan-audit',
+      version: 1,
+      iteration: 1,
+      continuity: { mode: 'fresh', freshReason: 'policy' },
+      sessionStrategy: 'resume-per-skill',
+      inputFingerprint: 'hash-parity',
+    };
+
+    const runPromise = executeLoopStep(deps, request);
+    expect(capturedPanelContextCallback).not.toBeNull();
+    const panelContext = capturedPanelContextCallback!();
+
+    const snapshot = artifactIndex.scanGlobalSnapshot(tempWorkspace, config.manifest);
+    const capturedSteps = panelContext.timeline.map(r => r.step);
+    expect(capturedSteps).toEqual(snapshot.steps);
+
+    await runPromise;
   });
 });

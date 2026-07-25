@@ -49,10 +49,15 @@ export function renderPlainPanel(context: PanelContext): string {
 
   lines.push(...wrapField('Loop', context.loopName, width));
 
+  const iterationLabel = context.bindingKind === 'task' ? 'Execution' : 'Iteration';
   const iterValue = context.readOnly
     ? 'not running'
-    : `${context.currentIteration}/${context.maxIterations}`;
-  lines.push(...wrapField('Iteration', iterValue, width));
+    : context.bindingKind === 'task'
+      ? context.providerCalls !== undefined
+        ? `Single task - provider calls ${context.providerCalls}`
+        : 'Single task'
+      : `${context.currentIteration}/${context.maxIterations}`;
+  lines.push(...wrapField(iterationLabel, iterValue, width));
 
   const activeStr = context.activeSkillRunner
     ? `${context.activeSkillRunner.skillId} (${context.activeSkillRunner.agent} \u00b7 ${context.activeSkillRunner.model})`
@@ -92,7 +97,7 @@ export function renderPlainPanel(context: PanelContext): string {
 
   if (context.timeline.length > 0) {
     for (let i = 0; i < context.timeline.length; i++) {
-      const s = context.timeline[i]!;
+      const s = context.timeline[i]!.step;
       const kindAcc = kindAccent(s.kind);
       const roleAcc = roleAccent(s.role);
 

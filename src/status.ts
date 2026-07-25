@@ -1,5 +1,6 @@
-import type { Step, StepKind, StepStatus } from './state.js';
+import type { StepKind, StepStatus } from './state.js';
 import type { LoopSpec, Manifest } from './manifest.js';
+import type { TimelineRow } from './timeline-rows.js';
 
 /**
  * Format a millisecond duration as the compact `Xm Ys` / `Xs` form used in the
@@ -20,10 +21,15 @@ export function formatDurationMs(ms: number | undefined | null): string {
  * prefixed by `*`. Returns `—` if missing or `'none'`.
  */
 export function formatSessionId(sessionId?: string | null): string {
-  if (!sessionId || sessionId === 'none') {
+  return formatCompactId(sessionId === 'none' ? null : sessionId);
+}
+
+/** Format an identity-bearing value with the shared compact suffix convention. */
+export function formatCompactId(value?: string | null): string {
+  if (!value) {
     return '—';
   }
-  return sessionId.length > 5 ? `*${sessionId.slice(-5)}` : sessionId;
+  return value.length > 5 ? `*${value.slice(-5)}` : value;
 }
 
 export interface ActiveInvocationDisplay {
@@ -38,12 +44,13 @@ export interface ActiveInvocationDisplay {
 export interface PanelContext {
   projectRoot: string;
   loopName: string;
+  bindingKind: 'loop' | 'task';
   currentIteration: number;
   maxIterations: number;
   activeSkillRunner: { skillId: string; agent: string; model: string } | null;
   resolvedRunners?: ResolvedRunnerDisplay[];
   activeInvocation?: ActiveInvocationDisplay;
-  timeline: Step[];
+  timeline: TimelineRow[];
   nextStepMessage: string;
   inFlight: {
     kind: StepKind;
@@ -59,6 +66,10 @@ export interface PanelContext {
     spawnLabel: string;
     toolCallCount: number;
     progressMessage: string | null;
+    artifactIdentity?: string;
+    parentArtifactIdentity?: string | null;
+    inputFingerprint?: string;
+    resultFingerprint?: string;
   } | null;
   latestVersion: number;
   readOnly: boolean;
@@ -78,10 +89,11 @@ export interface ResolvedRunnerDisplay {
 export function buildPanelContext(
   projectRoot: string,
   loopName: string,
+  bindingKind: 'loop' | 'task',
   currentIteration: number,
   maxIterations: number,
   activeSkillRunner: { skillId: string; agent: string; model: string } | null,
-  timeline: Step[],
+  timeline: TimelineRow[],
   nextStepMessage: string,
   inFlight: PanelContext['inFlight'] = null,
   latestVersion: number = 0,
@@ -93,6 +105,7 @@ export function buildPanelContext(
   return {
     projectRoot,
     loopName,
+    bindingKind,
     currentIteration,
     maxIterations,
     activeSkillRunner,
@@ -105,10 +118,6 @@ export function buildPanelContext(
     readOnly,
     providerCalls
   };
-}
-
-export function latestVersion(steps: Step[]): number {
-  return steps.reduce((max, step) => Math.max(max, step.version), 0);
 }
 
 export interface LoopLabels {

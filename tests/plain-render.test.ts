@@ -7,11 +7,13 @@ import {
 } from '../src/plain-render.js';
 import type { PanelContext } from '../src/status.js';
 import type { Step } from '../src/state.js';
+import type { TimelineRow } from '../src/timeline-rows.js';
 
 function makeContext(overrides: Partial<PanelContext>): PanelContext {
   return {
     projectRoot: '/p',
     loopName: 'plan',
+    bindingKind: 'loop',
     currentIteration: 1,
     maxIterations: 5,
     activeSkillRunner: null,
@@ -24,17 +26,20 @@ function makeContext(overrides: Partial<PanelContext>): PanelContext {
   };
 }
 
-function makeStep(overrides: Partial<Step>): Step {
+function makeStep(overrides: Partial<Step>): TimelineRow {
   return {
-    kind: 'audit',
-    role: 'auditor',
-    agent: 'fake',
-    model: 'fake-model',
-    version: 1,
-    status: 'done',
-    artifactPath: '/tmp/audit.md',
-    mtime: 0,
-    ...overrides
+    relevance: 'current-chain',
+    step: {
+      kind: 'audit',
+      role: 'auditor',
+      agent: 'fake',
+      model: 'fake-model',
+      version: 1,
+      status: 'done',
+      artifactPath: '/tmp/audit.md',
+      mtime: 0,
+      ...overrides
+    }
   };
 }
 
@@ -258,21 +263,25 @@ describe('renderPlainPanel — wrapField integration and Latest version (review 
       const sampleContext: PanelContext = {
         projectRoot: '/tmp/test-project-with-very-long-name',
         loopName: 'plan',
+        bindingKind: 'loop',
         currentIteration: 1,
         maxIterations: 5,
         readOnly: false,
         activeSkillRunner: null,
         timeline: [
           {
-            kind: 'evaluate',
-            role: 'auditor',
-            agent: 'opencode',
-            model: 'opencode-go/deepseek-v4-flash',
-            decision: 'accepted',
-            version: 1,
-            artifactPath: '/path/to/eval-v1-opencode.md',
-            mtime: Date.now(),
-            status: 'done'
+            relevance: 'current-chain',
+            step: {
+              kind: 'evaluate',
+              role: 'auditor',
+              agent: 'opencode',
+              model: 'opencode-go/deepseek-v4-flash',
+              decision: 'accepted',
+              version: 1,
+              artifactPath: '/path/to/eval-v1-opencode.md',
+              mtime: Date.now(),
+              status: 'done'
+            }
           }
         ],
         nextStepMessage: 'Ready',
@@ -323,6 +332,20 @@ describe('renderPlainPanel — plain mode is non-live (v10 audit Critical closur
     const out = renderPlainPanel(makeContext({ inFlight: null, readOnly: true }));
     expect(out).not.toContain('\u2500\u2500 IN-FLIGHT');
     expect(out).not.toContain('Active Step:');
+  });
+});
+
+describe('renderPlainPanel — binding vocabulary', () => {
+  it('renders a task as one execution without loop iteration vocabulary', () => {
+    const out = renderPlainPanel(makeContext({
+      bindingKind: 'task',
+      providerCalls: 1,
+      currentIteration: 0,
+      maxIterations: 4,
+    }));
+    expect(out).toContain('Execution: Single task - provider calls 1');
+    expect(out).not.toContain('Round');
+    expect(out).not.toContain('0/4');
   });
 });
 

@@ -3,11 +3,9 @@ import type { PanelContext } from '../../src/status.js';
 
 /**
  * Frozen snapshot of a PanelContext at capture time. The live `PanelContext`
- * holds a reference to the loop's `steps` array (the `timeline` field), which
- * is mutated as the loop progresses. Tests that need to assert against the
- * pre-spawn or mid-spawn state must snapshot the timeline (and other fields)
- * immediately — without snapshotting, every captured context reflects the
- * final loop state and the pre-artifact assertions become impossible.
+ * holds the precomputed global timeline rows. Tests that need to assert
+ * against the pre-spawn or mid-spawn state snapshot the other live fields
+ * immediately; the timeline itself is intentionally stable for one step.
  */
 export interface PanelContextSnapshot {
   projectRoot: string;

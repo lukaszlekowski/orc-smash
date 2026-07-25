@@ -6,7 +6,8 @@ import type { Config } from '../config.js';
 import { debugLoopSpawn } from '../debug-spawn.js';
 import { setStepCtx } from '../interrupted-artifact.js';
 import { roleForKind, type Step } from '../state.js';
-import { buildPanelContext, latestVersion, resolveLoopLabels, type ActiveInvocationDisplay, type ResolvedRunnerDisplay } from '../status.js';
+import { scanGlobalSnapshot } from '../artifact-index.js';
+import { buildPanelContext, resolveLoopLabels, type ActiveInvocationDisplay, type ResolvedRunnerDisplay } from '../status.js';
 import type { PanelContext } from '../status.js';
 import type { StepKind } from '../provenance.js';
 import type { LoopSpec } from '../manifest.js';
@@ -17,6 +18,7 @@ import { makeRunEvent, MAX_PROGRESS_EVENTS, PROGRESS_MAX_LENGTH, TOOL_CALL_DISPL
 
 import { computeArtifactIdentity, type RunContext } from '../pipeline-state.js';
 import { captureTargetFingerprint } from '../target-snapshot.js';
+import { buildTimelineRows, latestVersionForBinding } from '../timeline-rows.js';
 
 export interface LoopExecutionDeps {
   projectRoot: string;
@@ -60,6 +62,46 @@ export async function executeLoopStep(
 
   const startedAtMs = Date.now();
   const labels = resolveLoopLabels(deps.loopSpec, deps.config.manifest);
+  const parentArtifactIdentity = deps.runContext?.parentArtifactIdentity ?? null;
+  const targetFingerprintBefore = captureTargetFingerprint(
+    deps.projectRoot,
+    deps.loopSpec.target ?? { path: '.', kind: 'worktree' },
+    deps.config.manifest,
+  );
+  const chainId = deps.runContext?.chainId ?? `interrupted-${Date.now()}`;
+  const chainMode = deps.runContext?.chainMode ?? 'ad-hoc';
+  const pipelineId = deps.runContext?.pipelineId ?? null;
+  const pipelineRunId = deps.runContext?.pipelineRunId ?? null;
+  const stageId = deps.runContext?.stageId ?? null;
+  const sessionMode = continuity?.mode ?? 'fresh';
+  const sessionId = continuity?.sessionId ?? 'interrupted';
+  const draftArtifactIdentity = computeArtifactIdentity({
+    schemaVersion: 1,
+    pipelineId,
+    pipelineRunId,
+    stageId,
+    bindingKind: deps.bindingKind,
+    bindingId: deps.loopName,
+    chainId,
+    chainMode,
+    step: kind,
+    version,
+    provider: runner.agent,
+    model: runner.model,
+    effort: runner.effort,
+    sessionMode,
+    sessionId,
+    parentArtifactIdentity,
+    inputFingerprint: request.inputFingerprint,
+    resultFingerprint: targetFingerprintBefore,
+  });
+  const snapshot = scanGlobalSnapshot(deps.projectRoot, deps.config.manifest);
+  const timelineRows = buildTimelineRows(snapshot, {
+    chainId: deps.runContext?.chainId ?? null,
+    pipelineId,
+    pipelineRunId,
+    bindingId: deps.loopName,
+  });
   let lastProgressMessage = '';
   let toolCallCount = 0;
   let distinctProgressCount = 0;
@@ -111,13 +153,18 @@ export async function executeLoopStep(
     skillId,
     agent: runner.agent,
     model: runner.model,
+    effort: runner.effort,
     version,
     iteration,
     startedAtMs,
     status: 'running',
     spawnLabel,
     toolCallCount,
-    progressMessage: null
+    progressMessage: null,
+    artifactIdentity: draftArtifactIdentity,
+    parentArtifactIdentity,
+    inputFingerprint: request.inputFingerprint,
+    resultFingerprint: undefined,
   };
 
   const onLifecycle = (event: LifecycleEvent) => {
@@ -185,13 +232,14 @@ export async function executeLoopStep(
       return buildPanelContext(
         deps.projectRoot,
         deps.loopName,
+        deps.bindingKind,
         iteration,
         deps.maxIterations,
         { skillId, agent: runner.agent, model: runner.model },
-        deps.steps,
+        timelineRows,
         `Running ${activeLabel} v${version}...`,
         liveInFlight,
-        latestVersion(deps.steps),
+        latestVersionForBinding(snapshot, deps.loopName, version),
         false,
         resolvedRunnersList,
         deps.providerCallCount?.value,
@@ -256,41 +304,6 @@ export async function executeLoopStep(
     const adapter = getAdapter(deps.registry, runner.agent);
     debugLoopSpawn({ loopName: deps.loopName, skillId, kind, agent: runner.agent, model: runner.model, version, cwd: deps.projectRoot, prompt });
     
-    const parentArtifactIdentity = deps.runContext?.parentArtifactIdentity ?? null;
-    const targetFingerprintBefore = captureTargetFingerprint(
-      deps.projectRoot,
-      deps.loopSpec.target ?? { path: '.', kind: 'worktree' },
-      deps.config.manifest,
-    );
-    const chainId = deps.runContext?.chainId ?? `interrupted-${Date.now()}`;
-    const chainMode = deps.runContext?.chainMode ?? 'ad-hoc';
-    const pipelineId = deps.runContext?.pipelineId ?? null;
-    const pipelineRunId = deps.runContext?.pipelineRunId ?? null;
-    const stageId = deps.runContext?.stageId ?? null;
-    const sessionMode = continuity?.mode ?? 'fresh';
-    const sessionId = continuity?.sessionId ?? 'interrupted';
-
-    const draftArtifactIdentity = computeArtifactIdentity({
-      schemaVersion: 1,
-      pipelineId,
-      pipelineRunId,
-      stageId,
-      bindingKind: deps.bindingKind,
-      bindingId: deps.loopName,
-      chainId,
-      chainMode,
-      step: kind,
-      version,
-      provider: runner.agent,
-      model: runner.model,
-      effort: runner.effort,
-      sessionMode,
-      sessionId,
-      parentArtifactIdentity,
-      inputFingerprint: request.inputFingerprint,
-      resultFingerprint: targetFingerprintBefore,
-    });
-
     setStepCtx({
       loop: deps.loopName,
       kind,
@@ -329,7 +342,12 @@ export async function executeLoopStep(
     if (deps.providerCallCount) {
       deps.providerCallCount.value++;
     }
-    deps.output.note(`Round ${iteration}/${deps.maxIterations} - provider calls ${deps.providerCallCount?.value ?? 0}`);
+    const providerCalls = deps.providerCallCount?.value;
+    deps.output.note(deps.bindingKind === 'task'
+      ? providerCalls === undefined
+        ? 'Single task'
+        : `Single task - provider calls ${providerCalls}`
+      : `Round ${iteration}/${deps.maxIterations} - provider calls ${providerCalls ?? 0}`);
 
     const runInput = {
       prompt,

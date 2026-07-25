@@ -220,6 +220,7 @@ describe('Plain mode loop-level integration', () => {
     output.renderPanel({
       projectRoot: '/tmp/project',
       loopName: 'plan',
+      bindingKind: 'loop',
       currentIteration: 1,
       maxIterations: 5,
       activeSkillRunner: {

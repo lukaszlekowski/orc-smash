@@ -118,6 +118,13 @@ describe('generic smash dispatch', () => {
     expect(readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8')).toContain('bindingKind: task');
   });
 
+  it('direct task execution never prompts for maximum evaluation rounds', async () => {
+    vi.clearAllMocks();
+    const result = await run({ task: 'implement' });
+    expect(result.exitCode).toBe(0);
+    expect(promptMaxIterations).not.toHaveBeenCalled();
+  });
+
   it('starts a pipeline with pipeline and stage identity', async () => {
     const result = await run({ pipeline: 'default' });
     expect(result.exitCode).toBe(0);
@@ -187,6 +194,7 @@ describe('generic smash dispatch', () => {
     });
 
     it('Interactive mode: task detail Back returns to task chooser menu without re-rendering startup snapshot', async () => {
+      vi.mocked(promptMaxIterations).mockClear();
       // 1. Top menu -> run-task
       vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
       // 2. Task menu -> implement
@@ -210,6 +218,30 @@ describe('generic smash dispatch', () => {
       expect(result.exitCode).toBe(0);
       expect(promptTaskMenu).toHaveBeenCalledTimes(2);
       expect(promptTaskDetailConfirmation).toHaveBeenCalledTimes(1);
+      expect(promptMaxIterations).not.toHaveBeenCalled();
+    });
+
+    it('Interactive mode: task execution to completion never calls the maximum-evaluation-round prompt', async () => {
+      vi.mocked(promptMaxIterations).mockClear();
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('implement' as any);
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        implement: { agent: 'opencode', model: MODEL },
+      });
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptMaxIterations).not.toHaveBeenCalled();
     });
 
     it('Interactive mode: provider failure followed by menu choice menu then exit', async () => {
@@ -596,6 +628,7 @@ describe('generic smash dispatch', () => {
     });
 
     it('Start suggested stage binds the correct run identity and pipelineId', async () => {
+      vi.mocked(promptMaxIterations).mockClear();
       const { writeArtifactWithMeta } = await import('../src/provenance.js');
       const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
 
@@ -638,7 +671,6 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptRunners).mockResolvedValueOnce({
         implement: { agent: 'opencode', model: MODEL },
       });
-      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
       const adapter = scriptedAdapter();
@@ -651,6 +683,7 @@ describe('generic smash dispatch', () => {
       } as any);
 
       expect(result.exitCode).toBe(0);
+      expect(promptMaxIterations).not.toHaveBeenCalled();
 
       // Verify the generated artifact at docs/dev/impl-v1-opencode.md
       const implArtifact = readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8');
@@ -661,6 +694,7 @@ describe('generic smash dispatch', () => {
     });
 
     it('only eligible (non-stale) candidates are selectable in Start suggested stage', async () => {
+      vi.mocked(promptMaxIterations).mockClear();
       const { writeArtifactWithMeta } = await import('../src/provenance.js');
       const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
       const { loadConfig } = await import('../src/config.js');
@@ -720,7 +754,6 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptRunners).mockResolvedValueOnce({
         implement: { agent: 'opencode', model: MODEL },
       });
-      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
       const adapter = scriptedAdapter();
@@ -735,6 +768,7 @@ describe('generic smash dispatch', () => {
       expect(offeredCandidates.length).toBe(1);
       expect(offeredCandidates[0]!.pipelineRunId).toBe('fresh-run-uuid');
       expect(result.exitCode).toBe(0);
+      expect(promptMaxIterations).not.toHaveBeenCalled();
     });
 
     it('Start suggested stage is aborted immediately and does not run provider if no eligible candidates exist', async () => {

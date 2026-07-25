@@ -54,7 +54,7 @@ function snapshot(ctx: PanelContext): PanelContextSnapshot {
     currentIteration: ctx.currentIteration,
     maxIterations: ctx.maxIterations,
     activeSkillRunner: ctx.activeSkillRunner,
-    timelineKinds: ctx.timeline.map(s => s.kind),
+    timelineKinds: ctx.timeline.map(row => row.step.kind),
     nextStepMessage: ctx.nextStepMessage,
     inFlightKind: ctx.inFlight?.kind ?? null,
     inFlightRole: ctx.inFlight?.role ?? null,
