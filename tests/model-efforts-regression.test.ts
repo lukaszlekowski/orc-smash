@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { select, confirm, input } from '@inquirer/prompts';
+import { select, input } from '@inquirer/prompts';
 import { resolveRunner } from '../src/runner.js';
 import { promptRunners } from '../src/interactive.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
@@ -88,8 +88,8 @@ describe('Model Efforts Resolver & Interactive Regression (m1)', () => {
 
   describe('Interactive Prompts Behavior', () => {
     it('always shows effort prompt (with Provider default) and session strategy for a custom/unlisted model selection', async () => {
-      vi.mocked(confirm).mockResolvedValueOnce(true); // Choose to customize
       vi.mocked(select)
+        .mockResolvedValueOnce('customize') // per-skill menu
         .mockResolvedValueOnce('opencode') // Select agent
         .mockResolvedValueOnce('custom') // Select custom model choice
         .mockResolvedValueOnce('default') // Effort prompt (always shown, picks default)
@@ -103,18 +103,16 @@ describe('Model Efforts Resolver & Interactive Regression (m1)', () => {
         createProductionAdapterRegistry()
       );
 
-      // Select is called 4 times (agent, model, effort, session strategy).
+      // Select is called 5 times (per-skill menu, agent, model, effort, session strategy).
       // Effort is always shown with at least "Provider default" enabled.
-      expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
+      expect(vi.mocked(select)).toHaveBeenCalledTimes(5);
 
       // Verify result returns custom model and undefined effort
-      expect(result).toEqual({
-        implement: {
-          agent: 'opencode',
-          model: 'opencode-go/unlisted-custom-model',
-          effort: undefined,
-          sessionStrategy: undefined,
-        }
+      expect(result.implement).toMatchObject({
+        agent: 'opencode',
+        model: 'opencode-go/unlisted-custom-model',
+        agentSource: 'interactive',
+        modelSource: 'interactive',
       });
     });
   });

@@ -7,6 +7,8 @@ import type { RunnerOverrideMap } from './runner-overrides.js';
 import type { RunContext } from './pipeline-state.js';
 import type { LoopReturn, Runner } from './loops/runtime.js';
 import { runBinding } from './loops/binding-engine.js';
+import type { RunnerPreselection } from './continuation-runners.js';
+import type { Step } from './state.js';
 
 /** Options shared by the generic loop and one-off task executors. */
 export interface LoopOptions {
@@ -18,6 +20,9 @@ export interface LoopOptions {
   ownership?: OwnershipContext | null;
   runnerOverrides?: RunnerOverrideMap;
   runContext?: RunContext;
+  continuationDefaults?: Map<string, RunnerPreselection>;
+  continuationSteps?: Step[];
+  continuationChainId?: string;
   /** smashAction owns terminal emission when false; direct callers default to true. */
   emitTerminal?: boolean;
 

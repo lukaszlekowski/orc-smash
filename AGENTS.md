@@ -88,6 +88,18 @@ itself.
   the adapter **per step**
   from the registry passed via `LoopOptions.registry`. The production registry (`registry.ts`)
   excludes `fake`, which is only available in the test registry (`testing.ts`).
+- Interactive **Continue current loop** derives each skill's editable default from the
+  latest same-skill record in the active chain; the configured profile remains an
+  explicit fallback with a reason. `src/continuation-runners.ts` is the single seam
+  for that chain walk and the capability/tuple continuity predicate. The per-skill
+  menu offers chain/configured default, effort-only selection, or full customization;
+  `(recommended next action)` scopes recommendations to workflow actions, not models.
+- Interactive resolution emits one attributed `runner.resolved` event per skill at
+  binding-run entry. Runner provenance records the requested effort; structured
+  provider telemetry may confirm, mismatch, or report an effective effort, while an
+  effective-model mismatch is warning-only and is not persisted. Provider default
+  effort is represented by omission, so it remains distinct from a configured or
+  operator-selected effort.
 - **Artifact filenames follow each binding's validated `output.pattern`.** The
   pattern supplies `{version}` and `{provider}`; model and effort belong in
   provenance, not filenames. Do not hardcode audit/review filename families in

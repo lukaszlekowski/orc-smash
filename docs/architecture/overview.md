@@ -13,7 +13,7 @@ the safety and supervisor invariants that apply during the migration.
 bin/orc.js
   └─ src/cli.ts
       ├─ commands/smash.ts ── config.ts ── manifest.ts
-      │       ├─ runner.ts / runner-overrides.ts / interactive.ts
+      │       ├─ runner.ts / continuation-runners.ts / runner-overrides.ts / interactive.ts
       │       ├─ loop.ts ── loops/binding-engine.ts
       │       │              └─ loops/execution.ts ── adapters/*
       │       ├─ binding-inputs.ts / target-snapshot.ts / pipeline-state.ts
@@ -107,6 +107,15 @@ logical model slugs with separate effort choices. Its opaque
 `agy:v1:<project-uuid>:<conversation-uuid>` token is parsed by the purposeful
 `adapters/agy-session.ts` module from a temporary invocation log; `--continue`
 and provider history are not used.
+
+Interactive continuation uses `continuation-runners.ts` for the canonical
+same-chain candidate walk and capability/tuple continuity predicate. Continue
+current loop presents chain metadata as an editable per-skill default with the
+configured profile as a reasoned fallback; effort-only changes preserve the
+provider/model pair. The resolved runner summary distinguishes chain metadata,
+configured profile, and operator selection. Artifacts call the selected effort
+requested unless structured provider telemetry confirms, mismatches, or reports
+an effective effort; effective-model mismatch is transient warning-only telemetry.
 
 Typed events in `run-event.ts` are the canonical lifecycle stream consumed by
 plain and panel output. Provider and harness diagnostics are separate debug

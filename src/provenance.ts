@@ -40,6 +40,8 @@ export interface ArtifactMeta {
   provider?: string;
   effort?: string;
   sessionStrategy?: string;
+  effortStatus?: 'requested' | 'confirmed' | 'mismatch' | 'reported';
+  effectiveEffort?: string;
 }
 
 /**
@@ -236,7 +238,7 @@ export function parseArtifactMeta(
       'bindingId', 'chainId', 'chainMode', 'artifactIdentity',
       'inputFingerprint', 'resultFingerprint', 'parentArtifactIdentity',
       'pipelineId', 'pipelineRunId', 'stageId', 'provider', 'effort',
-      'sessionStrategy', 'step',
+      'sessionStrategy', 'step', 'effortStatus', 'effectiveEffort',
     ];
     for (const key of optionalKeys) {
       if (Object.prototype.hasOwnProperty.call(obj, key)) {

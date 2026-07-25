@@ -37,7 +37,9 @@ describe('F7 top-level menu', () => {
     expect(ids).toEqual(['start-loop', 'run-task', 'change-loop', 'start-suggested-stage', 'display-status', 'stop']);
     expect(actions.find(a => a.id === 'start-loop')!.disabledReason).toBeUndefined();
     expect(actions.find(a => a.id === 'run-task')!.disabledReason).toBeUndefined();
-    expect(actions.find(a => a.id === 'start-suggested-stage')!.disabledReason).toBeUndefined();
+    const suggested = actions.find(a => a.id === 'start-suggested-stage')!;
+    expect(suggested.disabledReason).toBeUndefined();
+    expect(suggested.label).toContain('runner defaults editable before execution');
   });
 
   it('builds task menu choices for configured tasks', () => {
@@ -60,7 +62,7 @@ describe('F7 top-level menu', () => {
     const item = { label: 'Continue loop', recommended: true, disabledReason: 'no active chain' };
     const choice = formatMenuChoice(item, 'continue-loop');
     expect(choice.name).toBe('Continue loop (unavailable: no active chain)');
-    expect(choice.name).not.toContain('(recommended)');
+    expect(choice.name).not.toContain('(recommended next action)');
     expect(choice.disabled).toBe(true);
   });
 

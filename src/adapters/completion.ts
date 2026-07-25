@@ -1,4 +1,17 @@
 import type { RunResult } from './types.js';
+import type { Runner } from '../loops/runtime.js';
+
+export type EffortConfirmation = 'requested' | 'confirmed' | 'mismatch' | 'reported';
+
+/** Normalize structured provider effort telemetry without scraping text. */
+export function resolveEffortConfirmation(
+  runner: Pick<Runner, 'effort'>,
+  result: Pick<RunResult, 'effectiveEffort'>,
+): EffortConfirmation {
+  if (result.effectiveEffort === undefined) return 'requested';
+  if (runner.effort === undefined) return 'reported';
+  return runner.effort === result.effectiveEffort ? 'confirmed' : 'mismatch';
+}
 
 /**
  * Classify a run's execution-completeness from the adapter's raw completion

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyCompletion } from '../../src/adapters/completion.js';
+import { classifyCompletion, resolveEffortConfirmation } from '../../src/adapters/completion.js';
 import type { RunResult } from '../../src/adapters/types.js';
 
 describe('classifyCompletion (normalized execution-completeness)', () => {
@@ -33,5 +33,14 @@ describe('classifyCompletion (normalized execution-completeness)', () => {
 
   it('claude + no signal => undefined (deferred to a later batch)', () => {
     expect(classifyCompletion('claude', resultWith('stop'))).toBeUndefined();
+  });
+});
+
+describe('resolveEffortConfirmation', () => {
+  it('distinguishes requested, confirmed, mismatch, and reported', () => {
+    expect(resolveEffortConfirmation({ effort: 'high' }, {})).toBe('requested');
+    expect(resolveEffortConfirmation({ effort: 'high' }, { effectiveEffort: 'high' })).toBe('confirmed');
+    expect(resolveEffortConfirmation({ effort: 'high' }, { effectiveEffort: 'max' })).toBe('mismatch');
+    expect(resolveEffortConfirmation({}, { effectiveEffort: 'default' })).toBe('reported');
   });
 });

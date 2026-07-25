@@ -61,6 +61,10 @@ export interface RunResult {
   toolCalls?: ToolCall[];     // opencode: parsed tool calls (also feeds item 5 later)
   stopReason?: string | null; // opencode: raw last step_finish.part.reason (e.g. "stop"); diagnostics only
   completion?: 'complete' | 'truncated' | 'interrupted' | 'missing'; // normalized execution-completeness (Batch 1: opencode only)
+  /** Structured provider telemetry only; never inferred from provider text. */
+  effectiveModel?: string;
+  /** Structured provider telemetry only; never inferred from provider text. */
+  effectiveEffort?: string;
   sessionId?: string;
 }
 
@@ -73,4 +77,3 @@ export interface AgentAdapter {
   buildRun(input: RunInput): { command: string; args: string[] };
   run(input: RunInput): Promise<RunResult>;
 }
-

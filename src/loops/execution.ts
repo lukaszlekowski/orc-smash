@@ -53,6 +53,27 @@ export type ExecuteLoopStepOutcome =
   | { kind: 'ran'; result: RunResult; durationMs: number }
   | { kind: 'ownership-lost'; reason?: string };
 
+function boundedTelemetryValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+}
+
+function warnOnEffectiveTelemetry(
+  output: CliOutput,
+  runner: Runner,
+  result: RunResult,
+): void {
+  if (result.effectiveEffort !== undefined && result.effectiveEffort !== runner.effort) {
+    output.warn(
+      `Provider reported effective effort '${boundedTelemetryValue(result.effectiveEffort)}' for requested '${boundedTelemetryValue(runner.effort ?? 'provider default')}'.`,
+    );
+  }
+  if (result.effectiveModel !== undefined && result.effectiveModel !== runner.model) {
+    output.warn(
+      `Provider reported effective model '${boundedTelemetryValue(result.effectiveModel)}' for requested '${boundedTelemetryValue(runner.model)}'.`,
+    );
+  }
+}
+
 /** Executes one provider step while keeping UI and interrupt state scoped to a loop instance. */
 export async function executeLoopStep(
   deps: LoopExecutionDeps,
@@ -394,16 +415,15 @@ export async function executeLoopStep(
       }
     }
 
-    emitProviderCompletion(
-      raceResult.result,
-      Boolean(
+    const failed = Boolean(
         raceResult.result.error ||
         raceResult.result.exitCode !== 0 ||
         raceResult.result.completion === 'truncated' ||
         raceResult.result.completion === 'interrupted' ||
         raceResult.result.completion === 'missing'
-      )
     );
+    emitProviderCompletion(raceResult.result, failed);
+    if (!failed) warnOnEffectiveTelemetry(deps.output, runner, raceResult.result);
     return { kind: 'ran', result: raceResult.result, durationMs: Date.now() - startedAtMs };
   } finally {
     if (watcher) {

@@ -45,7 +45,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.completed'
@@ -70,7 +69,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
@@ -95,7 +93,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
@@ -120,7 +117,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
@@ -145,7 +141,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
@@ -170,7 +165,6 @@ const matrixCases: MatrixCase[] = [
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
       'ownership.finalized',
       'run.failed'
@@ -344,8 +338,8 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
+      'runner.resolved',
       'provider.started',
       'provider.failed',
       'ownership.finalized',
@@ -398,8 +392,8 @@ describe('Task Smash Outcomes Matrix (M7 Verification)', () => {
       'run.started',
       'config.loaded',
       'binding.selected',
-      'runner.resolved',
       'ownership.opened',
+      'runner.resolved',
       'provider.started',
       'run.interrupted'
     ]);

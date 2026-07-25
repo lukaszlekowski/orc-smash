@@ -92,7 +92,7 @@ export function buildTopLevelMenu(
 
   actions.push({
     id: 'start-suggested-stage',
-    label: 'Start suggested stage',
+    label: 'Start suggested stage (runner defaults editable before execution)',
     group: 'start-suggested-stage',
     disabledReason: hasEligibleCandidates ? undefined : 'no eligible pipeline stage candidates',
     availability: hasEligibleCandidates ? 'available' : 'unavailable',
@@ -153,7 +153,7 @@ export function buildLoopSubmenu(
   hasInProgressChain: boolean,
   hasSecondOpinionTarget: boolean,
   loopMissingInputs?: string[],
-  continueDetail?: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string },
+  continueDetail?: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string; source?: string; sessionId?: string; fallbackReason?: string },
 ): LoopSubmenuItem[] {
   const isMissing = Boolean(loopMissingInputs && loopMissingInputs.length > 0);
   const freshDisabledReason = isMissing
@@ -161,7 +161,7 @@ export function buildLoopSubmenu(
     : undefined;
 
   const continueLabel = continueDetail
-    ? `Continue current ${loopName} loop (next: ${continueDetail.skillId} ${continueDetail.phase} v${continueDetail.version}, ${continueDetail.agent}/${continueDetail.model}${continueDetail.effort ? `/${continueDetail.effort}` : ''}${continueDetail.sessionStrategy ? `, ${continueDetail.sessionStrategy}` : ''})`
+    ? `Continue current ${loopName} loop (next: ${continueDetail.skillId} ${continueDetail.phase} v${continueDetail.version}, ${continueDetail.agent}/${continueDetail.model}${continueDetail.effort ? `/${continueDetail.effort}` : ''}${continueDetail.sessionStrategy ? `, ${continueDetail.sessionStrategy}` : ''}${continueDetail.source ? `, ${continueDetail.source}` : ''}${continueDetail.sessionId ? `, session *${continueDetail.sessionId.slice(-6)}` : ''}${continueDetail.fallbackReason ? `, fallback: ${continueDetail.fallbackReason}` : ''})`
     : `Continue current ${loopName} loop`;
 
   const continueDisabled = hasInProgressChain
