@@ -75,7 +75,20 @@ fail execution preflight without admitting ownership or spawning a provider.
 Decision artifacts normalize configured tokens to `accepted`, `retry`, or
 `unknown`. Completion artifacts require exactly one `## Outcome` section whose
 first non-blank line is exactly `COMPLETED` or `BLOCKED`. Unknown evidence is
-terminal; repair runs only after a concrete `retry` decision.
+terminal; repair runs only after a concrete `retry` decision. The shared
+body-based classifier is used both after a provider run and during restart
+scans, independently of provenance parsing. The named implementation-ledger
+validator distinguishes `valid`, structurally classifiable `blocked` (with
+bounded table/row diagnostics), and malformed `unknown`; blocked ledgers are
+durable evidence but never unlock a pipeline successor.
+
+When an interactive, non-plain run produces a qualified decision line such as
+`REJECTED (narrow)`, the operator may explicitly choose one configured
+canonical token. The replacement is validated before the untouched raw output
+is archived, the active artifact receives normal provenance plus the correction
+record, and the correction is visible in both event renderers. Declining,
+ambiguous output, explicit CLI runs, and `--plain` runs fail closed with the
+recoverable raw evidence and do not invoke the provider again.
 
 Artifacts persist pipeline/run/stage/chain identity, parent lineage, runner and
 session provenance, input fingerprints, and target result fingerprints. Legacy

@@ -8,6 +8,7 @@ import {
   promptLoopSelect,
   promptMaxIterations,
   promptPostRunRecovery,
+  promptDecisionCorrection,
   promptTopLevelMenu,
   promptLoopSubmenu,
   promptPipelineLaunchContext,
@@ -884,6 +885,9 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
           continuationDefaults: setup.continuationDefaults,
           continuationSteps: setup.continuationSteps,
           continuationChainId: setup.continuationChainId,
+          decisionCorrection: setup.isInteractive && !options.plain
+            ? (request: import('../artifact-contract.js').DecisionCorrectionDiagnostic & { artifactPath: string }) => promptDecisionCorrection(request)
+            : undefined,
           emitTerminal: false,
         };
         runResult = setup.bindingKind === 'task'

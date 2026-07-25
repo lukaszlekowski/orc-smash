@@ -2,7 +2,15 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import type { CliOutput } from '../cli-output.js';
 import type { Config } from '../config.js';
-import { parseCompletionContent, parseDecisionContent, type DecisionOutcome } from '../artifact-contract.js';
+import {
+  classifyOutputBody,
+  replaceDecisionLine,
+  diagnoseDecisionContent,
+  type ContractClassification,
+  type ContractDiagnostic,
+  type DecisionCorrectionDiagnostic,
+  type DecisionOutcome,
+} from '../artifact-contract.js';
 import { composePrompt } from '../prompt-composer.js';
 import { writeArtifactWithMeta, type ArtifactMeta } from '../provenance.js';
 import { renderPattern } from '../patterns.js';
@@ -27,7 +35,6 @@ import type { OwnershipContext } from '../run-ownership.js';
 import type { RunnerOverrideMap } from '../runner-overrides.js';
 import type { Step } from '../state.js';
 import { quarantineArtifact, quarantineInterruptedResume } from '../interrupted-artifact.js';
-import { validateImplementLedger } from '../implement-ledger.js';
 import { promptRunners, promptIterationExtension } from '../interactive.js';
 import { makeRunEvent } from '../run-event.js';
 import { scanGlobalSnapshot } from '../artifact-index.js';
@@ -51,7 +58,12 @@ export interface BindingEngineOptions {
   continuationDefaults?: Map<string, RunnerPreselection>;
   continuationSteps?: Step[];
   continuationChainId?: string;
+  decisionCorrection?: (request: DecisionCorrectionDiagnostic & { artifactPath: string }) => Promise<DecisionCorrectionChoice>;
 }
+
+export type DecisionCorrectionChoice =
+  | { kind: 'correct'; token: string }
+  | { kind: 'archive' };
 
 interface StepRequest {
   phase: 'evaluate' | 'repair' | 'task';
@@ -73,11 +85,8 @@ interface PersistedArtifact {
   completion?: 'completed' | 'blocked' | 'unknown';
   classified: boolean;
   valid: boolean;
-}
-
-interface ContractResult {
-  kind: 'accepted' | 'retry' | 'completed' | 'blocked' | 'valid' | 'unknown';
-  detail?: string;
+  contract?: OutputSpec['contract'];
+  diagnostics?: ContractDiagnostic[];
 }
 
 /**
@@ -104,6 +113,7 @@ export async function runBinding(
   const steps: Step[] = [];
   let lastArtifact: PersistedArtifact | null = null;
   let lastPath: string | null = null;
+  let terminalDiagnostics: ContractDiagnostic[] = [];
 
   const emit = (event: Parameters<CliOutput['emit']>[0]): void => options.output.emit(event);
 
@@ -116,7 +126,7 @@ export async function runBinding(
     if (outcome.kind === 'completed') {
       emit(makeRunEvent({ type: 'stage.completed', atMs: Date.now(), bindingId, bindingKind }));
     } else if (outcome.kind === 'blocked') {
-      emit(makeRunEvent({ type: 'stage.blocked', atMs: Date.now(), bindingId, bindingKind }));
+      emit(makeRunEvent({ type: 'stage.blocked', atMs: Date.now(), bindingId, bindingKind, diagnostics: terminalDiagnostics.length ? terminalDiagnostics : undefined }));
     } else if (outcome.kind === 'budget-exhausted') {
       emit(makeRunEvent({ type: 'stage.incomplete', atMs: Date.now(), bindingId, bindingKind, reason: message }));
     }
@@ -303,19 +313,101 @@ export async function runBinding(
       return finish({ kind: 'unknown', message, artifactPath: lastPath }, 'unknown', message);
     }
 
-    const body = readFileSync(outputPath, 'utf8');
-    const contract = validateOutput(request.output, body, outputPath);
-    if (contract.kind === 'unknown') {
-      const message = `${request.phase} artifact is invalid at ${relative(projectRoot, outputPath)}${contract.detail ? `: ${contract.detail}` : '.'}`;
-      emit(makeRunEvent({ type: request.phase === 'evaluate' ? 'decision.unknown' : 'artifact.unknown', atMs: Date.now(), path: relative(projectRoot, outputPath), reason: message } as any));
+    let body = readFileSync(outputPath, 'utf8');
+    let contract: ContractClassification = classifyOutputBody(request.output, body);
+    let decisionCorrection: ArtifactMeta['decisionCorrection'];
+    let correctedArchivedPath: string | null = null;
+    const activeRequest = request;
+
+    const stopUnknown = (message: string, diagnostics: ContractDiagnostic[]): LoopReturn => {
+      terminalDiagnostics = diagnostics;
+      emit(makeRunEvent({
+        type: activeRequest.phase === 'evaluate' ? 'decision.unknown' : 'artifact.unknown',
+        atMs: Date.now(),
+        path: relative(projectRoot, outputPath),
+        reason: message,
+        diagnostics,
+      }));
       options.output.stepFailed({
-        kind: request.phase,
-        skillId: request.skillId,
-        version: request.version,
+        kind: activeRequest.phase,
+        skillId: activeRequest.skillId,
+        version: activeRequest.version,
         message,
         errorKind: 'invalid_output',
       });
-      return finish({ kind: 'unknown', message, artifactPath: lastPath }, 'unknown', message);
+      return finish({ kind: 'unknown', message, artifactPath: outputPath }, 'unknown', message);
+    };
+
+    if (contract.kind === 'unknown') {
+      const isDecision = request.output.contract === 'decision-artifact' && Boolean(request.output.decision);
+      if (isDecision) {
+        const diagnostic = contract.correction ?? diagnoseDecisionContent(
+          body,
+          request.output.decision!.heading,
+          request.output.decision!.accepted,
+          request.output.decision!.retry,
+        );
+        let choice: DecisionCorrectionChoice = { kind: 'archive' };
+        if (diagnostic.safe && options.decisionCorrection) {
+          try {
+            choice = await options.decisionCorrection({
+              ...diagnostic,
+              artifactPath: relative(projectRoot, outputPath),
+            });
+          } catch (error: any) {
+            const message = `Decision correction prompt failed: ${error?.message ?? String(error)}. The raw artifact remains at ${relative(projectRoot, outputPath)}.`;
+            return stopUnknown(message, contract.diagnostics);
+          }
+        }
+
+        if (choice.kind === 'correct') {
+          const correctedBody = replaceDecisionLine(body, diagnostic, choice.token);
+          if (correctedBody === null) {
+            const message = `Decision correction was not structurally safe for ${relative(projectRoot, outputPath)}; raw evidence remains recoverable.`;
+            return stopUnknown(message, contract.diagnostics);
+          }
+          const corrected = classifyOutputBody(request.output, correctedBody);
+          if (corrected.kind !== 'accepted' && corrected.kind !== 'retry') {
+            const message = `Decision correction did not reclassify ${relative(projectRoot, outputPath)} as an accepted or retry token; raw evidence remains untouched.`;
+            return stopUnknown(message, corrected.diagnostics.length ? corrected.diagnostics : contract.diagnostics);
+          }
+          try {
+            const archived = quarantineArtifact(projectRoot, outputPath, { reason: 'decision-correction' });
+            if (!archived.quarantined || !archived.archivedPath) {
+              const message = `Decision correction could not archive the original artifact at ${relative(projectRoot, outputPath)}; raw evidence remains recoverable.`;
+              return stopUnknown(message, contract.diagnostics);
+            }
+            correctedArchivedPath = archived.archivedPath;
+            body = correctedBody;
+            contract = corrected;
+            decisionCorrection = {
+              originalLine: diagnostic.invalidLine ?? '',
+              selectedToken: choice.token,
+              correctedAt: new Date().toISOString(),
+              archivedEvidencePath: relative(projectRoot, archived.archivedPath),
+            };
+          } catch (error: any) {
+            const message = `Decision correction archive failed: ${error?.message ?? String(error)}. The active raw artifact remains recoverable when present.`;
+            return stopUnknown(message, contract.diagnostics);
+          }
+        } else {
+          try {
+            const archived = quarantineArtifact(projectRoot, outputPath, { reason: 'decision-correction' });
+            const archivedText = archived.archivedPath
+              ? ` Archived evidence: ${relative(projectRoot, archived.archivedPath)}.`
+              : '';
+            const invalidLine = diagnostic.invalidLine ? ` Invalid line: '${diagnostic.invalidLine}'.` : '';
+            const message = `${request.phase} artifact is unknown at ${relative(projectRoot, outputPath)}.${invalidLine} Expected exactly '${request.output.decision!.accepted}' or '${request.output.decision!.retry}'.${archivedText}`;
+            return stopUnknown(message, contract.diagnostics);
+          } catch (error: any) {
+            const message = `Unable to archive invalid decision artifact at ${relative(projectRoot, outputPath)}: ${error?.message ?? String(error)}. The raw artifact remains active.`;
+            return stopUnknown(message, contract.diagnostics);
+          }
+        }
+      } else {
+        const message = `${request.phase} artifact is invalid at ${relative(projectRoot, outputPath)}${contract.detail ? `: ${contract.detail}` : '.'}`;
+        return stopUnknown(message, contract.diagnostics);
+      }
     }
 
     if (contract.kind === 'accepted' || contract.kind === 'retry') {
@@ -371,8 +463,17 @@ export async function runBinding(
         : relative(projectRoot, resolve(projectRoot, binding.target.path)),
       effortStatus,
       effectiveEffort: result.effectiveEffort,
+      decisionCorrection,
     });
-    writeArtifactWithMeta(outputPath, body, meta);
+    try {
+      writeArtifactWithMeta(outputPath, body, meta);
+    } catch (error: any) {
+      const archivedDetail = correctedArchivedPath
+        ? ` Archived evidence: ${relative(projectRoot, correctedArchivedPath)}.`
+        : '';
+      const message = `Unable to persist classified ${request.phase} artifact at ${relative(projectRoot, outputPath)}: ${error?.message ?? String(error)}.${archivedDetail}`;
+      return stopUnknown(message, contract.diagnostics);
+    }
     const persistedArtifact: PersistedArtifact = {
       path: outputPath,
       version: request.version,
@@ -383,6 +484,8 @@ export async function runBinding(
       completion: contract.kind === 'completed' || contract.kind === 'blocked' ? contract.kind : undefined,
       classified: true,
       valid: true,
+      contract: request.output.contract,
+      diagnostics: contract.diagnostics,
     };
     lastArtifact = persistedArtifact;
     lastPath = outputPath;
@@ -393,7 +496,18 @@ export async function runBinding(
       version: request.version,
       message: `${request.skillId} completed and wrote ${relative(projectRoot, outputPath)}`,
     });
-    emit(makeRunEvent({ type: 'artifact.verified', atMs: Date.now(), path: relative(projectRoot, outputPath), result: contract.kind }));
+    if (contract.kind === 'blocked') terminalDiagnostics = contract.diagnostics;
+    if (decisionCorrection && correctedArchivedPath) {
+      emit(makeRunEvent({
+        type: 'artifact.decision-corrected',
+        atMs: Date.now(),
+        path: relative(projectRoot, outputPath),
+        archivedPath: relative(projectRoot, correctedArchivedPath),
+        originalLine: decisionCorrection.originalLine,
+        selectedToken: decisionCorrection.selectedToken,
+      }));
+    }
+    emit(makeRunEvent({ type: 'artifact.verified', atMs: Date.now(), path: relative(projectRoot, outputPath), result: contract.kind, diagnostics: contract.diagnostics.length ? contract.diagnostics : undefined }));
 
     if (bindingKind === 'task') {
       const contractKind = contract.kind as string;
@@ -414,7 +528,7 @@ export async function runBinding(
         return finish({ kind: 'completed', message, artifactPath: lastPath }, 'accepted', message);
       }
       if (contract.kind === 'blocked') {
-        const message = `${bindingId} is blocked at version ${request.version}.`;
+        const message = `${bindingId} is blocked at version ${request.version}${contract.detail ? `: ${contract.detail}` : '.'}`;
         return finish({ kind: 'blocked', message, artifactPath: lastPath }, 'blocked', message);
       }
       if (evaluationCount >= options.maxIterations) {
@@ -456,7 +570,7 @@ export async function runBinding(
     }
 
     if (contract.kind === 'blocked') {
-      const message = `${bindingId} repair is blocked at version ${request.version}.`;
+      const message = `${bindingId} repair is blocked at version ${request.version}${contract.detail ? `: ${contract.detail}` : '.'}`;
       return finish({ kind: 'blocked', message, artifactPath: lastPath }, 'blocked', message);
     }
       request = nextEvaluationRequest(loopBinding!, config, request.version + 1, outputPath, artifactIdentity, body);
@@ -586,6 +700,7 @@ function buildMeta(params: {
   resultFingerprint: string;
   projectRoot: string;
   targetPath: string;
+  decisionCorrection?: ArtifactMeta['decisionCorrection'];
 }): ArtifactMeta {
   return {
     loop: params.bindingId,
@@ -609,6 +724,7 @@ function buildMeta(params: {
     sessionStrategy: params.sessionStrategy ?? 'fresh-per-invocation',
     effortStatus: params.effortStatus,
     effectiveEffort: params.effectiveEffort,
+    decisionCorrection: params.decisionCorrection,
     schemaVersion: 1,
     bindingKind: params.bindingKind,
     bindingId: params.bindingId,
@@ -630,36 +746,6 @@ function isPriorNone(prior: PriorArtifactResolution): prior is { kind: 'none' } 
 
 function providerFailureResult(result: RunResult): boolean {
   return Boolean(result.error) || result.exitCode !== 0 || result.completion === 'truncated' || result.completion === 'interrupted' || result.completion === 'missing';
-}
-
-function validateOutput(output: OutputSpec, body: string, path: string): ContractResult {
-  try {
-    switch (output.contract) {
-      case 'decision-artifact': {
-        if (!output.decision) return { kind: 'unknown', detail: 'decision configuration is missing' };
-        return { kind: parseDecisionContent(body, output.decision.heading, output.decision.accepted, output.decision.retry) };
-      }
-      case 'completion-artifact': {
-        const result = parseCompletionContent(body);
-        return result === 'COMPLETED'
-          ? { kind: 'completed' }
-          : result === 'BLOCKED'
-            ? { kind: 'blocked' }
-            : { kind: 'unknown', detail: 'exactly one Outcome section with COMPLETED or BLOCKED is required' };
-      }
-      case 'required-artifact': {
-        if (!body.trim()) return { kind: 'unknown', detail: 'artifact is empty' };
-        if (output.validator === 'implement-ledger' && !validateImplementLedger(body).valid) {
-          return { kind: 'unknown', detail: 'implementation evidence ledger validator failed' };
-        }
-        return { kind: 'valid' };
-      }
-      default:
-        return { kind: 'unknown', detail: `unsupported contract for ${path}` };
-    }
-  } catch (error: any) {
-    return { kind: 'unknown', detail: error?.message ?? String(error) };
-  }
 }
 
 function initialRequest(
@@ -848,11 +934,14 @@ function discoverArtifacts(projectRoot: string, bindingId: string, config: Confi
       effort: step.effort,
       provider: step.provider,
       sessionStrategy: step.sessionStrategy,
+      decisionCorrection: step.decisionCorrection,
     },
     decision: step.decision as any,
     completion: step.completionOutcome as any,
     classified: !step.unclassified,
     valid: step.contractValid !== false && !step.unclassified,
+    contract: step.contract,
+    diagnostics: step.contractDiagnostics,
   }));
 }
 
@@ -897,6 +986,7 @@ function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
     status: 'done',
     artifactPath: item.path,
     mtime: item.mtime,
+    unclassified: false,
     durationMs: item.meta.durationMs,
     sessionMode: item.meta.sessionMode,
     sessionId: item.meta.sessionId,
@@ -904,6 +994,9 @@ function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
     verdict: item.decision,
     completionOutcome: item.completion,
     outcome: item.completion,
+    contractValid: true,
+    contract: item.contract,
+    contractDiagnostics: item.diagnostics,
     pipelineId: item.meta.pipelineId,
     pipelineRunId: item.meta.pipelineRunId,
     stageId: item.meta.stageId,
@@ -918,5 +1011,6 @@ function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
     effortStatus: item.meta.effortStatus,
     effectiveEffort: item.meta.effectiveEffort,
     sessionStrategy: item.meta.sessionStrategy,
+    decisionCorrection: item.meta.decisionCorrection,
   };
 }

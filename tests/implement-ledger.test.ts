@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { isCompleteImplementLedger, validateImplementLedger } from '../src/implement-ledger.js';
 
 const EVIDENCE_TABLE =
@@ -11,219 +11,137 @@ const COVERAGE_TABLE =
   '| --- | --- | --- | --- |\n' +
   '| Req A | src/x.ts | tests/x.test.ts | pass |\n';
 
-const CONFIDENCE_SCORE = 'Confidence score: 0.95\n';
-const CONFIDENCE = 'Confidence: 0.95\n';
-const STATE_OVERALL_CONFIDENCE = 'State overall confidence: 0.95\n';
-const STATE_OVERALL_CONFIDENCE_FULL = 'State overall confidence that the implementation matches the spec: 0.95\n';
+const CONFIDENCE = 'State overall confidence that the implementation matches the spec: 0.95\n';
 
-describe('isCompleteImplementLedger', () => {
-  it('accepts a ledger with both required tables and a confidence declaration', () => {
-    const body =
-      '# Implementation Evidence Ledger\n\n' + EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
+function ledger(evidence = EVIDENCE_TABLE, coverage = COVERAGE_TABLE, confidence = CONFIDENCE): string {
+  return `${evidence}\n${coverage}\n${confidence}`;
+}
+
+describe('implementation ledger outcomes', () => {
+  it('classifies a complete passing ledger as valid', () => {
+    const result = validateImplementLedger(ledger());
+    expect(result.kind).toBe('valid');
+    expect(result.diagnostics).toEqual([]);
+    expect(result.evidenceTableValid).toBe(true);
+    expect(result.coverageTableValid).toBe(true);
+    expect(result.confidenceValid).toBe(true);
+    expect(isCompleteImplementLedger(ledger())).toBe(true);
   });
 
-  it('accepts a ledger with the requirement coverage table appearing before the evidence table', () => {
-    const body = COVERAGE_TABLE + '\n' + EVIDENCE_TABLE + '\n' + CONFIDENCE_SCORE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
+  it('accepts the existing passing vocabulary and confidence wording variants', () => {
+    for (const status of ['pass', 'passed', 'success', 'succeeded', 'done', 'ok', 'verified', '✅']) {
+      expect(validateImplementLedger(ledger(EVIDENCE_TABLE.replace('| pass |', `| ${status} |`))).kind).toBe('valid');
+    }
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Confidence: 0.95')).kind).toBe('valid');
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'State overall confidence: 0.95')).kind).toBe('valid');
   });
 
-  it('accepts a ledger with case-insensitive Spec Requirement header', () => {
-    const body =
-      EVIDENCE_TABLE + '\n' +
-      '| spec requirement / checklist item | Implemented In | Verified By | Status |\n' +
-      '| --- | --- | --- | --- |\n' +
-      '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
-      CONFIDENCE_SCORE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
+  it.each(['❌', 'blocked', 'failed', 'pending', 'not run', 'skip', 'skipped', 'untested'])(
+    'classifies recognized unresolved evidence status %s as blocked',
+    (status) => {
+      const result = validateImplementLedger(ledger(EVIDENCE_TABLE.replace('| pass |', `| ${status} |`)));
+      expect(result.kind).toBe('blocked');
+      expect(result.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'unresolved-row', table: 'evidence', rowLabel: 'Step 1' }),
+      ]));
+      expect(result.evidenceTableValid).toBe(true);
+      expect(isCompleteImplementLedger(ledger(EVIDENCE_TABLE.replace('| pass |', `| ${status} |`)))).toBe(false);
+    },
+  );
+
+  it('classifies unresolved coverage rows and below-threshold confidence as blocked', () => {
+    const unresolvedCoverage = COVERAGE_TABLE.replace('| pass |', '| not run |');
+    const result = validateImplementLedger(ledger(EVIDENCE_TABLE, unresolvedCoverage, 'Confidence: 0.94'));
+    expect(result.kind).toBe('blocked');
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unresolved-row', table: 'coverage', rowLabel: 'Req A' }),
+      expect.objectContaining({ code: 'confidence-below-threshold' }),
+    ]));
   });
 
-  it('accepts the skill\'s literal post-implementation confidence wording ("State overall confidence:") — v2-audit C1 fix', () => {
-    const body = EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
+  it('keeps free prose such as Status: blocked outside the unresolved vocabulary', () => {
+    const result = validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE.replace('| pass |', '| Status: blocked |')));
+    expect(result.kind).toBe('unknown');
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'invalid-status', table: 'coverage', rowLabel: 'Req A' }),
+    ]));
+    expect(result.coverageTableValid).toBe(false);
   });
 
-  it('accepts the skill\'s full post-implementation confidence template ("State overall confidence that the implementation matches the spec:") — v2-audit C1 fix', () => {
-    const body = EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE_FULL;
-    expect(isCompleteImplementLedger(body)).toBe(true);
-  });
+  it('distinguishes missing and malformed tables', () => {
+    const missingEvidence = validateImplementLedger(`${COVERAGE_TABLE}\n${CONFIDENCE}`);
+    expect(missingEvidence.kind).toBe('unknown');
+    expect(missingEvidence.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing-evidence-table' }),
+    ]));
 
-  it('accepts the standalone "Confidence: 0.95" form', () => {
-    const body = EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
-  });
-
-  it('rejects empty / whitespace', () => {
-    expect(isCompleteImplementLedger('')).toBe(false);
-    expect(isCompleteImplementLedger('   \n  ')).toBe(false);
-  });
-
-  it('rejects a ledger with only an evidence table (no coverage, no confidence) — partial implementation', () => {
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE)).toBe(false);
-  });
-
-  it('rejects a ledger with only a coverage table (no evidence, no confidence) — partial implementation', () => {
-    expect(isCompleteImplementLedger(COVERAGE_TABLE)).toBe(false);
-  });
-
-  it('rejects a ledger with both tables but missing the confidence declaration', () => {
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE)).toBe(false);
-  });
-
-  it('rejects header-only tables with no data rows', () => {
-    const body =
-      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-      '| --- | --- | --- | --- | --- |\n\n' +
-      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-      '| --- | --- | --- | --- |\n\n' +
-      CONFIDENCE_SCORE;
-    expect(isCompleteImplementLedger(body)).toBe(false);
-  });
-
-  it('rejects rows with blank required cells', () => {
-    const badEvidence =
-      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-      '| --- | --- | --- | --- | --- |\n' +
-      '| Step 1 |  | pnpm test | pass | none |\n';
-    expect(isCompleteImplementLedger(badEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects a confidence declaration without a numeric value on the same line', () => {
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\nState overall confidence: high\n')).toBe(false);
-  });
-
-  it('rejects a ledger with a failing evidence Result', () => {
-    const badEvidence =
-      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-      '| --- | --- | --- | --- | --- |\n' +
-      '| Step 1 | src/x.ts | pnpm test | failed | none |\n';
-    expect(isCompleteImplementLedger(badEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects a ledger with a failing coverage Status', () => {
-    const badCoverage =
-      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-      '| --- | --- | --- | --- |\n' +
-      '| Req A | src/x.ts | tests/x.test.ts | blocked |\n';
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + badCoverage + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects evidence Result values that are skipped, not run, or untested', () => {
-    const skipEvidence = EVIDENCE_TABLE.replace('pass', 'skipped');
-    const notRunEvidence = EVIDENCE_TABLE.replace('pass', 'not run');
-    const untestedEvidence = EVIDENCE_TABLE.replace('pass', 'untested');
-    expect(isCompleteImplementLedger(skipEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-    expect(isCompleteImplementLedger(notRunEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-    expect(isCompleteImplementLedger(untestedEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects coverage Status values that are skipped, not run, or untested', () => {
-    const skipCoverage = COVERAGE_TABLE.replace('pass', 'skipped');
-    const notRunCoverage = COVERAGE_TABLE.replace('pass', 'not run');
-    const untestedCoverage = COVERAGE_TABLE.replace('pass', 'untested');
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + skipCoverage + '\n' + CONFIDENCE_SCORE)).toBe(false);
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + notRunCoverage + '\n' + CONFIDENCE_SCORE)).toBe(false);
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + untestedCoverage + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects a ledger with an evidence table whose columns are renamed (Deviation -> Notes) — wrong header cue', () => {
-    const wrongEvidence =
-      '| Plan Step | Files Changed | Tests / Verification | Result | Notes |\n' +
-      '| --- | --- | --- | --- | --- |\n' +
-      '| Step 1 | src/x.ts | pnpm test | pass | none |\n';
-    expect(isCompleteImplementLedger(wrongEvidence + '\n' + COVERAGE_TABLE + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('rejects a coverage table whose columns are renamed (Status -> Done) — wrong header cue', () => {
-    const wrongCoverage =
-      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Done |\n' +
-      '| --- | --- | --- | --- |\n' +
-      '| Req A | src/x.ts | tests/x.test.ts | pass |\n';
-    expect(isCompleteImplementLedger(EVIDENCE_TABLE + '\n' + wrongCoverage + '\n' + CONFIDENCE_SCORE)).toBe(false);
-  });
-
-  it('accepts passing status with optional parenthesized details (e.g. pass (env-gated))', () => {
-    const customEvidence = EVIDENCE_TABLE.replace('pass', 'pass (env-gated)');
-    const customCoverage = COVERAGE_TABLE.replace('pass', 'pass (CI)');
-    const body = customEvidence + '\n' + customCoverage + '\n' + CONFIDENCE_SCORE;
-    expect(isCompleteImplementLedger(body)).toBe(true);
-  });
-
-  it('rejects prose without the two required tables even if confidence appears', () => {
-    expect(isCompleteImplementLedger('Did some work. ' + CONFIDENCE_SCORE)).toBe(false);
-  });
-});
-
-describe('validateImplementLedger', () => {
-  it('reports all validation categories as valid for a complete ledger', () => {
-    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
-      valid: true,
-      evidenceTableValid: true,
-      coverageTableValid: true,
-      confidenceValid: true
-    });
-  });
-
-  it('classifies an empty ledger as invalid in every category', () => {
-    expect(validateImplementLedger('   \n  ')).toEqual({
-      valid: false,
-      evidenceTableValid: false,
-      coverageTableValid: false,
-      confidenceValid: false
-    });
-  });
-
-  it('classifies missing evidence and missing coverage independently', () => {
-    expect(validateImplementLedger(COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
-      valid: false,
-      evidenceTableValid: false,
-      coverageTableValid: true,
-      confidenceValid: true
-    });
-    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
-      valid: false,
-      evidenceTableValid: true,
-      coverageTableValid: false,
-      confidenceValid: true
-    });
-  });
-
-  it('classifies header-only tables as invalid tables', () => {
-    const headerOnlyEvidence =
-      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-      '| --- | --- | --- | --- | --- |\n';
-    expect(validateImplementLedger(headerOnlyEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE)).toEqual({
-      valid: false,
-      evidenceTableValid: false,
-      coverageTableValid: true,
-      confidenceValid: true
-    });
-  });
-
-  it('classifies blank cells and unsupported statuses as invalid tables', () => {
-    const blankEvidence = EVIDENCE_TABLE.replace('src/x.ts', '');
-    const failingCoverage = COVERAGE_TABLE.replace('| pass |', '| pending |');
-    expect(validateImplementLedger(blankEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE).evidenceTableValid).toBe(false);
-    expect(validateImplementLedger(EVIDENCE_TABLE + '\n' + failingCoverage + '\n' + STATE_OVERALL_CONFIDENCE).coverageTableValid).toBe(false);
-  });
-
-  it('classifies rows with the wrong number of cells as invalid tables', () => {
-    const incompleteEvidence = EVIDENCE_TABLE.replace(
-      '| Step 1 | src/x.ts | pnpm test | pass | none |',
-      '| Step 1 | src/x.ts | pnpm test | pass |'
+    const headerOnly = validateImplementLedger(
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n| --- | --- | --- | --- | --- |\n\n'
+      + COVERAGE_TABLE + CONFIDENCE,
     );
-    expect(validateImplementLedger(incompleteEvidence + '\n' + COVERAGE_TABLE + '\n' + STATE_OVERALL_CONFIDENCE).evidenceTableValid).toBe(false);
+    expect(headerOnly.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-evidence-table' }),
+    ]));
+
+    const renamedColumn = validateImplementLedger(ledger(EVIDENCE_TABLE.replace('Deviation', 'Notes')));
+    expect(renamedColumn.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-evidence-table' }),
+    ]));
   });
 
-  it('classifies absent and malformed confidence declarations without invalidating valid tables', () => {
-    const withoutConfidence = validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE);
-    const malformedConfidence = validateImplementLedger(EVIDENCE_TABLE + '\n' + COVERAGE_TABLE + '\nState overall confidence: high\n');
-    expect(withoutConfidence).toEqual({
-      valid: false,
-      evidenceTableValid: true,
-      coverageTableValid: true,
-      confidenceValid: false
-    });
-    expect(malformedConfidence).toEqual(withoutConfidence);
+  it('rejects bad column counts, empty cells, and unknown status cells', () => {
+    const badColumns = EVIDENCE_TABLE.replace('| Step 1 | src/x.ts | pnpm test | pass | none |', '| Step 1 | src/x.ts | pnpm test | pass |');
+    expect(validateImplementLedger(ledger(badColumns)).kind).toBe('unknown');
+
+    const emptyCell = EVIDENCE_TABLE.replace('src/x.ts', '');
+    expect(validateImplementLedger(ledger(emptyCell)).diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'incomplete-row', table: 'evidence', rowLabel: 'Step 1' }),
+    ]));
+
+    const unknownStatus = EVIDENCE_TABLE.replace('| pass |', '| maybe |');
+    expect(validateImplementLedger(ledger(unknownStatus)).kind).toBe('unknown');
+    expect(validateImplementLedger(ledger(unknownStatus)).diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'invalid-status', table: 'evidence' }),
+    ]));
+  });
+
+  it('requires numeric confidence, enforces 0..1, and keeps valid tables visible in diagnostics', () => {
+    const missing = validateImplementLedger(`${EVIDENCE_TABLE}\n${COVERAGE_TABLE}`);
+    expect(missing.kind).toBe('unknown');
+    expect(missing.confidenceValid).toBe(false);
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'missing-confidence' }),
+    ]));
+
+    const malformed = validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Confidence: high'));
+    expect(malformed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-confidence' }),
+    ]));
+
+    for (const value of ['-0.1', '1.01']) {
+      const result = validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, `Confidence: ${value}`));
+      expect(result.kind).toBe('unknown');
+      expect(result.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'confidence-out-of-range' }),
+      ]));
+    }
+  });
+
+  it('bounds row labels and diagnostics deterministically with an omitted count', () => {
+    const rows = Array.from({ length: 14 }, (_, index) =>
+      `| ${index} ${'x'.repeat(120)} | src/x.ts | pnpm test | pending | none |`,
+    ).join('\n');
+    const evidence = EVIDENCE_TABLE.replace('| Step 1 | src/x.ts | pnpm test | pass | none |', rows);
+    const first = validateImplementLedger(ledger(evidence));
+    const second = validateImplementLedger(ledger(evidence));
+    expect(first.kind).toBe('blocked');
+    expect(first).toEqual(second);
+    expect(first.omittedDiagnostics).toBeGreaterThan(0);
+    expect(first.diagnostics.every(item => item.message.length <= 220)).toBe(true);
+    expect(first.diagnostics.filter(item => item.rowLabel).every(item => item.rowLabel!.length <= 72)).toBe(true);
+  });
+
+  it('accepts tables in either order', () => {
+    expect(validateImplementLedger(`${COVERAGE_TABLE}\n${EVIDENCE_TABLE}\n${CONFIDENCE}`).kind).toBe('valid');
   });
 });

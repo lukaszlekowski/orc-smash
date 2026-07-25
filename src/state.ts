@@ -4,6 +4,8 @@ import { renderPattern } from './patterns.js';
 import type { V1Manifest, OutputContract } from './manifest.js';
 import { readInterruptedMarker, type InterruptedMarker } from './interrupted-artifact.js';
 import { scanGlobalSnapshot } from './artifact-index.js';
+import type { ContractDiagnostic } from './artifact-contract.js';
+import type { DecisionCorrectionProvenance } from './provenance.js';
 
 /** Derive the canonical role label for a step kind (used for synthesized steps). */
 export function roleForKind(kind: StepKind): string {
@@ -40,6 +42,8 @@ export interface Step {
   outcome?: string;
   contractValid?: boolean;
   contract?: OutputContract;
+  contractDiagnostics?: ContractDiagnostic[];
+  decisionCorrection?: DecisionCorrectionProvenance;
   unclassified?: boolean;
   unclassifiedReason?: string;
 

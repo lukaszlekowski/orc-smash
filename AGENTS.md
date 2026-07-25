@@ -41,6 +41,21 @@ itself.
   artifact normalized to `accepted` unlocks a pipeline successor. Completed or
   valid repair artifacts are resumable evidence for evaluation, never approval
   or successor evidence; task progression remains contract-specific.
+- `src/artifact-contract.ts` owns the canonical body + `OutputSpec` classifier
+  used by both live execution and restart reconstruction. Provenance validation
+  is a separate earlier index gate; the body classifier is deliberately
+  front-matter-independent. Named required-artifact validators may normalize to
+  `valid | blocked | unknown`; a structurally valid blocked implementation
+  ledger is persisted with `contractValid: true`, `completionOutcome: blocked`,
+  and bounded row diagnostics, but never supplies successor evidence.
+- Strict decision parsing remains exact-token-only. A qualified decision line
+  can be corrected only through the command-owned interactive callback: the
+  corrected body is reclassified before the original is quarantined, the
+  unchanged original is retained under `docs/dev/archived/` with
+  `decision-correction`, and correction provenance plus a typed
+  `artifact.decision-corrected` event identify both values. Explicit, plain,
+  ambiguous, and declined paths archive or retain recoverable raw evidence and
+  stop as `unknown`; they never invoke a provider a second time.
 - `approval-loop-state.ts` is the sole reducer and next-phase owner for
   approval chains. `pipeline-stage-state.ts` owns binding-aware completion
   evidence, current candidate eligibility, historical continuation validation,

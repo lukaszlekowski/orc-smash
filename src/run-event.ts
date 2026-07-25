@@ -4,6 +4,8 @@ export const MAX_PROGRESS_EVENTS = 8;
 export const PROGRESS_MAX_LENGTH = 240;
 export const TOOL_CALL_DISPLAY_CAP = 999;
 
+import type { ContractDiagnostic } from './artifact-contract.js';
+
 type RunEventBase = { schemaVersion: typeof SCHEMA_VERSION; atMs: number };
 
 export type RunEvent =
@@ -20,15 +22,15 @@ export type RunEvent =
   | (RunEventBase & { type: 'provider.progress'; agent: string; message: string })
   | (RunEventBase & { type: 'provider.completed'; agent: string; toolCalls: number | '999+'; progressEmitted: number; progressSuppressed: number })
   | (RunEventBase & { type: 'provider.failed'; agent: string; errorKind?: string; toolCalls: number | '999+'; progressEmitted: number; progressSuppressed: number })
-  | (RunEventBase & { type: 'artifact.verified'; path: string; result?: string })
+  | (RunEventBase & { type: 'artifact.verified'; path: string; result?: string; diagnostics?: ContractDiagnostic[] })
   | (RunEventBase & { type: 'artifact.missing'; path: string; reason: string })
-  | (RunEventBase & { type: 'artifact.unknown'; path: string; reason: string })
+  | (RunEventBase & { type: 'artifact.unknown'; path: string; reason: string; diagnostics?: ContractDiagnostic[] })
   | (RunEventBase & { type: 'input.missing'; missing: string[] })
   | (RunEventBase & { type: 'decision.parsed'; decision: string })
-  | (RunEventBase & { type: 'decision.unknown'; path: string; reason?: string })
+  | (RunEventBase & { type: 'decision.unknown'; path: string; reason?: string; diagnostics?: ContractDiagnostic[] })
   | (RunEventBase & { type: 'completion.parsed'; outcome: string })
   | (RunEventBase & { type: 'stage.completed'; bindingId: string; bindingKind: string })
-  | (RunEventBase & { type: 'stage.blocked'; bindingId: string; bindingKind: string })
+  | (RunEventBase & { type: 'stage.blocked'; bindingId: string; bindingKind: string; diagnostics?: ContractDiagnostic[] })
   | (RunEventBase & { type: 'stage.incomplete'; bindingId: string; bindingKind: string; reason: string })
   | (RunEventBase & { type: 'stage.action'; action: string; phase: string })
   | (RunEventBase & { type: 'ownership.opened'; projectRoot: string })
@@ -37,6 +39,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'run.interrupted'; reason?: string })
   | (RunEventBase & { type: 'run.completed'; result: string; outcome: string })
   | (RunEventBase & { type: 'run.failed'; reason: string; errorKind?: string })
+  | (RunEventBase & { type: 'artifact.decision-corrected'; path: string; archivedPath: string; originalLine: string; selectedToken: string })
   | (RunEventBase & { type: 'note'; message: string })
   | (RunEventBase & { type: 'warning'; message: string })
   | (RunEventBase & { type: 'error'; message: string });

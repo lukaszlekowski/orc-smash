@@ -78,23 +78,23 @@ function fmtEvent(event: RunEvent): string {
     case 'provider.failed':
       return `${ts} ${lvl} provider.failed agent=${quote(event.agent)}${event.errorKind ? ` errorKind=${event.errorKind}` : ''} toolCalls=${event.toolCalls} progressEmitted=${event.progressEmitted} progressSuppressed=${event.progressSuppressed}`;
     case 'artifact.verified':
-      return `${ts} ${lvl} artifact.verified path=${quote(event.path)}${event.result ? ` result=${event.result}` : ''}`;
+      return `${ts} ${lvl} artifact.verified path=${quote(event.path)}${event.result ? ` result=${event.result}` : ''}${event.diagnostics?.length ? ` diagnostics=${quote(event.diagnostics.map(d => d.message).join('; '))}` : ''}`;
     case 'artifact.missing':
       return `${ts} ${lvl} artifact.missing path=${quote(event.path)} reason=${quote(event.reason)}`;
     case 'artifact.unknown':
-      return `${ts} ${lvl} artifact.unknown path=${quote(event.path)} reason=${quote(event.reason)}`;
+      return `${ts} ${lvl} artifact.unknown path=${quote(event.path)} reason=${quote(event.reason)}${event.diagnostics?.length ? ` diagnostics=${quote(event.diagnostics.map(d => d.message).join('; '))}` : ''}`;
     case 'input.missing':
       return `${ts} ${lvl} input.missing items=${event.missing.join(', ')}`;
     case 'decision.parsed':
       return `${ts} ${lvl} decision.parsed decision=${event.decision}`;
     case 'decision.unknown':
-      return `${ts} ${lvl} decision.unknown path=${quote(event.path)}${event.reason ? ` reason=${quote(event.reason)}` : ''}`;
+      return `${ts} ${lvl} decision.unknown path=${quote(event.path)}${event.reason ? ` reason=${quote(event.reason)}` : ''}${event.diagnostics?.length ? ` diagnostics=${quote(event.diagnostics.map(d => d.message).join('; '))}` : ''}`;
     case 'completion.parsed':
       return `${ts} ${lvl} completion.parsed outcome=${event.outcome}`;
     case 'stage.completed':
       return `${ts} ${lvl} stage.completed binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
     case 'stage.blocked':
-      return `${ts} ${lvl} stage.blocked binding=${quote(`${event.bindingKind}/${event.bindingId}`)}`;
+      return `${ts} ${lvl} stage.blocked binding=${quote(`${event.bindingKind}/${event.bindingId}`)}${event.diagnostics?.length ? ` diagnostics=${quote(event.diagnostics.map(d => d.message).join('; '))}` : ''}`;
     case 'stage.incomplete':
       return `${ts} ${lvl} stage.incomplete binding=${quote(`${event.bindingKind}/${event.bindingId}`)} reason=${quote(event.reason)}`;
     case 'stage.action':
@@ -111,6 +111,8 @@ function fmtEvent(event: RunEvent): string {
       return `${ts} ${lvl} run.completed result=${event.result} outcome=${quote(event.outcome)}`;
     case 'run.failed':
       return `${ts} ${lvl} run.failed reason=${quote(event.reason)}${event.errorKind ? ` errorKind=${event.errorKind}` : ''}`;
+    case 'artifact.decision-corrected':
+      return `${ts} ${lvl} artifact.decision-corrected path=${quote(event.path)} archivedPath=${quote(event.archivedPath)} originalLine=${quote(event.originalLine)} selectedToken=${quote(event.selectedToken)}`;
     case 'note':
       return `${ts} ${lvl} note message=${quote(event.message)}`;
     case 'warning':

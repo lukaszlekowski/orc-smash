@@ -8,7 +8,7 @@ import type { AgentRegistry } from '../src/adapters/registry.js';
 import type { RunEvent } from '../src/run-event.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation, promptDecisionCorrection } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 import { loadConfig } from '../src/config.js';
@@ -27,6 +27,7 @@ vi.mock('../src/interactive.js', () => {
     promptIterationExtension: vi.fn(),
     promptTaskMenu: vi.fn(),
     promptTaskDetailConfirmation: vi.fn(),
+    promptDecisionCorrection: vi.fn(),
   };
 });
 
@@ -354,6 +355,38 @@ describe('generic smash dispatch', () => {
 
       expect(result.exitCode).toBe(1);
       expect(promptPostRunRecovery).not.toHaveBeenCalled();
+    });
+
+    it('Non-interactive explicit binding never opens the decision correction prompt', async () => {
+      const adapter = scriptedAdapter(['REJECTED (narrow)']);
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        loop: 'plan',
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+      expect(result.exitCode).toBe(1);
+      expect(promptDecisionCorrection).not.toHaveBeenCalled();
+      expect(existsSync(join(project, 'docs/dev/plan-audit-v1-opencode.md'))).toBe(false);
+    });
+
+    it('interactive plain output never opens the decision correction prompt', async () => {
+      mockInteractiveStartup();
+      vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
+      vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
+      const adapter = scriptedAdapter(['REJECTED (narrow)']);
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        plain: true,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+      expect(result.exitCode).toBe(1);
+      expect(promptDecisionCorrection).not.toHaveBeenCalled();
     });
 
     it('Non-interactive mode: missing project input preflight does NOT prompt recovery', async () => {
