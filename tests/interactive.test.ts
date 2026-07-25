@@ -80,13 +80,12 @@ describe('Interactive registry selection', () => {
   it('shows resolved default runners before asking whether to customize', async () => {
     const config = dummyConfig({ opencode: ['opencode-model'] }, { agent: 'opencode', model: 'opencode-model' });
     const output = vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.mocked(confirm).mockResolvedValueOnce(false);
+    vi.mocked(select).mockResolvedValueOnce('use-default');
 
     await promptRunners(['plan-audit'], config, createProductionAdapterRegistry());
 
-    expect(output).toHaveBeenCalledWith('Default skill runners:');
-    expect(output).toHaveBeenCalledWith('  plan-audit: opencode (opencode-model), effort: provider default, session: fresh-per-invocation');
-    expect(output.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(confirm).mock.invocationCallOrder[0]!);
+    expect(output).toHaveBeenCalledWith('Runner defaults (editable before execution):');
+    expect(output).toHaveBeenCalledWith(expect.stringContaining('plan-audit: opencode (opencode-model), effort: provider default, session: fresh-per-invocation, source: configured profile'));
   });
 
   it('promptRunners uses intersection of configured and runnable agents', async () => {
@@ -98,15 +97,18 @@ describe('Interactive registry selection', () => {
 
     const prodRegistry = createProductionAdapterRegistry(); // has opencode, codex, claude
     
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
-    vi.mocked(select).mockResolvedValueOnce('codex'); // choose agent
-    vi.mocked(select).mockResolvedValueOnce('codex-model'); // choose model
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
+    vi.mocked(select)
+      .mockResolvedValueOnce('codex') // choose agent
+      .mockResolvedValueOnce('codex-model') // choose model
+      .mockResolvedValueOnce('default')
+      .mockResolvedValueOnce('fresh-per-invocation');
 
     await promptRunners(['plan-audit'], config, prodRegistry);
 
     // The first select should have choices intersected (opencode, codex), but not fake (no adapter)
     expect(vi.mocked(select)).toHaveBeenCalled();
-    const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
+    const selectArgs = vi.mocked(select).mock.calls[1]![0] as any;
     const choices = selectArgs.choices.map((c: any) => c.value);
     expect(choices).toContain('opencode');
     expect(choices).toContain('codex');
@@ -121,13 +123,16 @@ describe('Interactive registry selection', () => {
 
     const testRegistry = createTestAdapterRegistry(); // has fake
     
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
-    vi.mocked(select).mockResolvedValueOnce('fake');
-    vi.mocked(select).mockResolvedValueOnce('fake-model');
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
+    vi.mocked(select)
+      .mockResolvedValueOnce('fake')
+      .mockResolvedValueOnce('fake-model')
+      .mockResolvedValueOnce('default')
+      .mockResolvedValueOnce('fresh-per-invocation');
 
     await promptRunners(['plan-audit'], config, testRegistry);
 
-    const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
+    const selectArgs = vi.mocked(select).mock.calls[1]![0] as any;
     const choices = selectArgs.choices.map((c: any) => c.value);
     expect(choices).toContain('fake');
   });
@@ -166,15 +171,15 @@ describe('Interactive registry selection', () => {
 
     const prodRegistry = createProductionAdapterRegistry(); // has codex, opencode
 
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
     vi.mocked(select).mockResolvedValueOnce('codex'); // choose agent
     vi.mocked(select).mockResolvedValueOnce('codex-model'); // choose model
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry);
-    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model' });
+    expect(runners['plan-audit']).toMatchObject({ agent: 'codex', model: 'codex-model', agentSource: 'interactive', modelSource: 'interactive' });
 
     // The default agent choice in select should be 'codex'
-    const selectArgs = vi.mocked(select).mock.calls[0]![0] as any;
+    const selectArgs = vi.mocked(select).mock.calls[1]![0] as any;
     expect(selectArgs.default).toBe('codex');
   });
 
@@ -186,10 +191,10 @@ describe('Interactive registry selection', () => {
 
     const prodRegistry = createProductionAdapterRegistry(); // now includes agy
 
-    vi.mocked(confirm).mockResolvedValueOnce(false); // customize = false
+    vi.mocked(select).mockResolvedValueOnce('use-default'); // configured runner
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
-    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'gemini-3.6-flash' });
+    expect(runners['plan-audit']).toMatchObject({ agent: 'agy', model: 'gemini-3.6-flash', agentSource: 'global', modelSource: 'agent-default' });
     // Global defaults pair is untouched.
     expect(config.registry.profiles.default.provider).toBe('opencode');
     expect(config.registry.providers.opencode.defaultModel).toBe('opencode-model');
@@ -202,14 +207,14 @@ describe('Interactive registry selection', () => {
     }, { agent: 'opencode', model: 'opencode-model' });
     const prodRegistry = createProductionAdapterRegistry();
 
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
     vi.mocked(select).mockResolvedValueOnce('agy'); // choose agent
     vi.mocked(select).mockResolvedValueOnce('gemini-3.6-flash'); // choose model
 
     await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
 
     // Second select (model) choices are the configured providers.agy names + custom.
-    const modelSelectArgs = vi.mocked(select).mock.calls[1]![0] as any;
+    const modelSelectArgs = vi.mocked(select).mock.calls[2]![0] as any;
     const modelChoices = modelSelectArgs.choices.map((c: any) => c.value);
     expect(modelChoices).toContain('gemini-3.6-flash');
     expect(modelChoices).toContain('gpt-oss-120b-medium');
@@ -223,13 +228,13 @@ describe('Interactive registry selection', () => {
     }, { agent: 'opencode', model: 'opencode-model' });
     const prodRegistry = createProductionAdapterRegistry();
 
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
     vi.mocked(select).mockResolvedValueOnce('agy'); // choose agent
     vi.mocked(select).mockResolvedValueOnce('custom'); // choose custom model
     vi.mocked(input).mockResolvedValueOnce('  gemini-3.6-flash  ');
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry, { agent: 'agy' });
-    expect(runners['plan-audit']).toEqual({ agent: 'agy', model: 'gemini-3.6-flash' });
+    expect(runners['plan-audit']).toMatchObject({ agent: 'agy', model: 'gemini-3.6-flash', agentSource: 'interactive', modelSource: 'interactive' });
 
     // The input prompt carried the validate callback; drive it directly to prove
     // the custom-model path enforces the providers.agy allow-list.
@@ -255,7 +260,7 @@ describe('Interactive registry selection', () => {
       run: async () => ({ stdout: '', exitCode: 0 }),
     });
 
-    vi.mocked(confirm).mockResolvedValueOnce(true); // customize = true
+    vi.mocked(select).mockResolvedValueOnce('customize'); // per-skill menu
     vi.mocked(select)
       .mockResolvedValueOnce('non-resume-agent') // choose agent
       .mockResolvedValueOnce('m1') // choose model
@@ -265,8 +270,8 @@ describe('Interactive registry selection', () => {
     await promptRunners(['plan-audit'], config, testRegistry);
 
     // Find effort and session strategy select calls (skip agent + model)
-    const effortCall = vi.mocked(select).mock.calls[2]![0] as any;
-    const sessionCall = vi.mocked(select).mock.calls[3]![0] as any;
+    const effortCall = vi.mocked(select).mock.calls[3]![0] as any;
+    const sessionCall = vi.mocked(select).mock.calls[4]![0] as any;
 
     // Effort choices: Provider default (enabled) + disabled entry with reason
     expect(effortCall.choices.length).toBeGreaterThanOrEqual(2);
@@ -305,7 +310,7 @@ describe('Interactive registry selection', () => {
 
     expect(vi.mocked(confirm)).not.toHaveBeenCalled();
     expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
-    expect(runners['plan-audit']).toEqual({ agent: 'codex', model: 'codex-model', effort: undefined, sessionStrategy: undefined });
+    expect(runners['plan-audit']).toMatchObject({ agent: 'codex', model: 'codex-model', agentSource: 'interactive', modelSource: 'interactive' });
   });
 
   it('selects effort after the provider/model pair when the adapter supports it', async () => {
@@ -314,7 +319,7 @@ describe('Interactive registry selection', () => {
     config.registry.providers.opencode!.defaultEffort = 'medium';
     const prodRegistry = createProductionAdapterRegistry();
 
-    vi.mocked(confirm).mockResolvedValueOnce(true);
+    vi.mocked(select).mockResolvedValueOnce('customize');
     vi.mocked(select)
       .mockResolvedValueOnce('opencode')
       .mockResolvedValueOnce('opencode-model')
@@ -322,8 +327,8 @@ describe('Interactive registry selection', () => {
       .mockResolvedValueOnce('fresh-per-invocation'); // session strategy
 
     const runners = await promptRunners(['plan-audit'], config, prodRegistry);
-    expect(runners['plan-audit']).toEqual({ agent: 'opencode', model: 'opencode-model', effort: 'high', sessionStrategy: undefined });
-    expect(vi.mocked(select)).toHaveBeenCalledTimes(4);
+    expect(runners['plan-audit']).toMatchObject({ agent: 'opencode', model: 'opencode-model', effort: 'high', effortSource: 'interactive' });
+    expect(vi.mocked(select)).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -349,7 +354,7 @@ describe('promptCandidateSelection', () => {
     const result = await promptCandidateSelection([candidate]);
 
     expect(vi.mocked(select)).toHaveBeenCalledWith({
-      message: 'Select a pipeline stage to advance:',
+      message: 'Select a pipeline stage to advance (runner selection happens before execution):',
       choices: [
         { name: candidate.label, value: expectedKey },
         { name: 'Cancel (Go back)', value: 'cancel' }
@@ -412,7 +417,7 @@ describe('promptCandidateSelection', () => {
 
         // 2. Recommended choice
         const rec = formatMenuChoice({ label: 'Run review loop', recommended: true, availability: 'available' }, 'review');
-        expect(rec.name).toContain('Run review loop \u001b[32m(recommended)\u001b[39m');
+        expect(rec.name).toContain('Run review loop \u001b[32m(recommended next action)\u001b[39m');
         expect(rec.value).toBe('review');
         expect(rec.disabled).toBe(false);
 

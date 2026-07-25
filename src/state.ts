@@ -54,6 +54,8 @@ export interface Step {
   resultFingerprint?: string;
   parentArtifactIdentity?: string | null;
   effort?: string;
+  effortStatus?: 'requested' | 'confirmed' | 'mismatch' | 'reported';
+  effectiveEffort?: string;
   provider?: string;
   sessionStrategy?: string;
 }

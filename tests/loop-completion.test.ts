@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runLoop } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
@@ -7,6 +7,7 @@ import { fakeAdapter, fakeAdapterState } from '../src/adapters/fake.js';
 import { createTestAdapterRegistry, resetFakeAdapterState } from '../src/adapters/testing.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
+import { parseArtifactMeta } from '../src/provenance.js';
 
 vi.mock('../src/interactive.js', () => ({
   promptIterationExtension: vi.fn(),
@@ -95,6 +96,30 @@ describe('generic execution-completeness and artifact gates', () => {
     expect(result).toMatchObject({ success: false, verdict: 'unknown' });
     expect(result.message).toContain('produced no artifact at docs/dev/plan-audit-v1-fake.md');
     expect(stepFailed).toContainEqual(expect.objectContaining({ kind: 'evaluate', errorKind: 'missing_output' }));
+  });
+
+  it('records structured effort confirmation and warns on effort/model mismatches without persisting model telemetry', async () => {
+    const root = setupProject();
+    fakeAdapterState.effectiveEffort = 'max';
+    fakeAdapterState.effectiveModel = 'opencode-go/actual-model';
+    const warnings: string[] = [];
+    const output = { ...mockOutput, warn: (message: string) => warnings.push(message) };
+    const config = loadConfig(root);
+    const result = await runLoop(root, 'plan', config.manifest.loops.plan!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model', effort: 'high' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, { maxIterations: 1, registry: testRegistry, output, interactive: false });
+
+    expect(result.success).toBe(true);
+    expect(warnings).toEqual([
+      "Provider reported effective effort 'max' for requested 'high'.",
+      "Provider reported effective model 'opencode-go/actual-model' for requested 'fake-model'.",
+    ]);
+    const artifact = join(root, 'docs/dev/plan-audit-v1-fake.md');
+    const meta = parseArtifactMeta(readFileSync(artifact, 'utf8'), { agent: 'fake', version: 1 });
+    expect(meta.effortStatus).toBe('mismatch');
+    expect(meta.effectiveEffort).toBe('max');
+    expect((meta as any).effectiveModel).toBeUndefined();
   });
 
   it('requires a valid repair artifact before starting the next evaluation', async () => {

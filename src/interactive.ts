@@ -1,8 +1,10 @@
-import { select, input, confirm } from '@inquirer/prompts';
+import { select, input } from '@inquirer/prompts';
 import type { Config } from './config.js';
-import { isValidModelForAgent, resolveRunner } from './runner.js';
+import { isValidEffortForModel, isValidModelForAgent, resolveRunner, type ResolvedRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
 import type { TopMenuAction, LoopSubmenuItem, TaskMenuItem, PipelineLaunchContext, SuggestedStageAction } from './stage-menu.js';
+import type { Step } from './state.js';
+import { resolveContinuity, type ResumeRecord, type RunnerPreselection } from './continuation-runners.js';
 
 import { availabilityAccent, emphasisAccent, type AvailabilityState } from './terminal-accent.js';
 
@@ -13,7 +15,7 @@ export function formatMenuChoice<T extends { label: string; disabledReason?: str
   const isRecommended = Boolean(item.recommended && !item.disabledReason);
   let baseLabel = item.label;
   if (isRecommended) {
-    baseLabel += ` ${emphasisAccent('recommended')('(recommended)')}`;
+    baseLabel += ` ${emphasisAccent('recommended')('(recommended next action)')}`;
   }
   if (item.disabledReason) {
     baseLabel += ` (unavailable: ${item.disabledReason})`;
@@ -179,60 +181,234 @@ export async function promptMaxIterations(defaultVal: number): Promise<number> {
   return parseInt(result, 10);
 }
 
+export interface PromptRunnersOptions {
+  forceSelect?: boolean;
+  preselections?: Map<string, RunnerPreselection>;
+  continuitySteps?: Step[];
+  continuationChainId?: string;
+}
+
+function sessionDisplay(sessionId: string): string {
+  return `*${sessionId.slice(-6)}`;
+}
+
+function preselectionSourceLabel(source: RunnerPreselection['source']): string {
+  return source === 'chain' ? 'chain metadata' : 'configured profile';
+}
+
+function historyForContinuity(steps: Step[] | undefined): ResumeRecord[] {
+  return (steps ?? []).map(step => ({
+    meta: {
+      chainId: step.chainId,
+      skill: step.skillId ?? step.role,
+      sessionId: step.sessionId ?? 'none',
+      agent: step.agent,
+      model: step.model,
+      effort: step.effort,
+    },
+    decision: step.decision,
+    completion: step.completionOutcome,
+  }));
+}
+
+function applyPredictedContinuity(
+  runner: ResolvedRunner,
+  skillId: string,
+  config: Config,
+  agentRegistry: AgentRegistry,
+  globalOverrides: { sessionStrategy?: string },
+  options: PromptRunnersOptions,
+): { runner: ResolvedRunner; continuity: ReturnType<typeof resolveContinuity> } {
+  const continuity = resolveContinuity(
+    undefined,
+    runner,
+    agentRegistry,
+    runner.sessionStrategy ?? globalOverrides.sessionStrategy ?? 'fresh-per-invocation',
+    skillId,
+    historyForContinuity(options.continuitySteps),
+    options.continuationChainId ?? '',
+  );
+  const withSession = { ...runner };
+  delete withSession.inheritedSession;
+  if (continuity.mode === 'resumed' && continuity.sessionId) {
+    withSession.inheritedSession = {
+      agent: runner.agent,
+      model: runner.model,
+      sessionId: continuity.sessionId,
+    };
+  }
+  return { runner: withSession, continuity };
+}
+
+function sourceLabel(runner: ResolvedRunner): string {
+  if (runner.agentSource === 'interactive' || runner.modelSource === 'interactive' || runner.effortSource === 'interactive') {
+    return 'operator selection';
+  }
+  if (runner.agentSource === 'session' || runner.modelSource === 'session' || runner.effortSource === 'session') {
+    return 'chain metadata';
+  }
+  return 'configured profile';
+}
+
+function effortChoices(
+  agent: string,
+  model: string,
+  config: Config,
+  agentRegistry: AgentRegistry,
+): Array<{ name: string; value: string; disabled?: boolean }> {
+  const adapter = agentRegistry.adapters.get(agent);
+  const catalogue = config.registry.providers[agent];
+  const levels = catalogue?.modelEfforts?.[model] ?? catalogue?.efforts ?? [];
+  const choices = [formatMenuChoice({ label: 'Provider default' }, 'default')];
+  if (adapter && !adapter.capabilities.effort) {
+    choices.push(formatMenuChoice({
+      label: 'Configure effort',
+      disabledReason: `${agent} does not support effort`,
+      availability: 'unavailable',
+    }, 'unsupported-effort'));
+  } else if (levels.length > 0) {
+    for (const level of levels) choices.push(formatMenuChoice({ label: level }, level));
+  } else {
+    choices.push(formatMenuChoice({
+      label: 'Configure effort',
+      disabledReason: `no effort levels configured for model '${model}'`,
+      availability: 'unavailable',
+    }, 'unsupported-effort'));
+  }
+  return choices;
+}
+
+function withEffort(
+  runner: ResolvedRunner,
+  effort: string | undefined,
+): ResolvedRunner {
+  const result = { ...runner };
+  delete result.inheritedSession;
+  delete result.effort;
+  delete result.effortSource;
+  if (effort) {
+    result.effort = effort;
+    result.effortSource = 'interactive';
+  }
+  return result;
+}
+
 export async function promptRunners(
   skills: string[],
   config: Config,
   agentRegistry: AgentRegistry,
   globalOverrides: { agent?: string; model?: string; effort?: string; sessionStrategy?: string } = {},
-  opts?: { forceSelect?: boolean }
-): Promise<Record<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }>> {
-  const runners: Record<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }> = {};
-  const defaultRunners = new Map<string, { agent: string; model: string; effort?: string; sessionStrategy?: string }>();
+  opts: PromptRunnersOptions = {},
+): Promise<Record<string, ResolvedRunner>> {
+  const runners: Record<string, ResolvedRunner> = {};
+  const defaultRunners = new Map<string, ResolvedRunner>();
+  const defaultPreselections = new Map<string, RunnerPreselection>();
 
   for (const skillId of skills) {
     if (config.manifest.skills[skillId]) {
-      defaultRunners.set(skillId, resolveRunner(skillId, config, globalOverrides));
+      const resolved = resolveRunner(skillId, config, globalOverrides);
+      const derived = opts.preselections?.get(skillId) ?? {
+        source: 'profile' as const,
+        agent: resolved.agent,
+        model: resolved.model,
+        ...(resolved.effort ? { effort: resolved.effort } : {}),
+        ...(resolved.sessionStrategy ? { sessionStrategy: resolved.sessionStrategy } : {}),
+      };
+      defaultPreselections.set(skillId, derived);
+
+      let preselected = resolved;
+      if (derived.source === 'chain') {
+        preselected = {
+          agent: derived.agent,
+          model: derived.model,
+          agentSource: 'session',
+          modelSource: 'session',
+          ...(derived.effort ? { effort: derived.effort, effortSource: 'session' as const } : {}),
+          ...(derived.sessionStrategy ? { sessionStrategy: derived.sessionStrategy, sessionStrategySource: 'session' as const } : {}),
+          ...(derived.sessionId ? {
+            inheritedSession: { agent: derived.agent, model: derived.model, sessionId: derived.sessionId },
+          } : {}),
+        };
+      }
+      defaultRunners.set(skillId, preselected);
     }
   }
 
   const selectableAgents = [...agentRegistry.adapters.keys()]
     .filter((agent) => agent in config.registry.providers);
 
-  // Show the exact resolved provider/model pairs before offering to customize
-  // them. These include any CLI override, so accepting the default is never a
-  // blind choice.
-  if (!opts?.forceSelect && defaultRunners.size > 0) {
-    console.log(emphasisAccent('identity')('Default skill runners:'));
+  // This is an editable preview. The post-selection summary below is the
+  // committed source/continuity readout.
+  if (defaultRunners.size > 0) {
+    console.log(emphasisAccent('identity')('Runner defaults (editable before execution):'));
+    console.log(emphasisAccent('supporting')('Runner selection happens before execution.'));
     for (const [skillId, runner] of defaultRunners) {
       const parts = [`${skillId}: ${runner.agent} (${runner.model})`];
       parts.push(`effort: ${runner.effort ?? 'provider default'}`);
       parts.push(`session: ${runner.sessionStrategy ?? 'fresh-per-invocation'}`);
+      parts.push(`source: ${preselectionSourceLabel(defaultPreselections.get(skillId)!.source)}`);
+      const preselection = defaultPreselections.get(skillId)!;
+      if (preselection.sessionId) parts.push(`session ${sessionDisplay(preselection.sessionId)}`);
+      if (preselection.fallbackReason) parts.push(`fallback: ${preselection.fallbackReason}`);
+      if (preselection.note) parts.push(`note: ${preselection.note}`);
       console.log(`  ${emphasisAccent('supporting')(parts.join(', '))}`);
     }
   }
-
-  // forceSelect skips the yes/no gate so callers that always want a model list
-  // (e.g. the implement dispatch) bypass the default-and-silently-use path.
-  const customize = opts?.forceSelect || await confirm({
-    message: 'Would you like to customize skill runners?',
-    default: false
-  });
 
   for (const skillId of skills) {
     const skill = config.manifest.skills[skillId];
     if (!skill) continue;
 
     const resolved = defaultRunners.get(skillId)!;
+    const preselection = defaultPreselections.get(skillId)!;
     let defaultAgent = resolved.agent;
     let defaultModel = resolved.model;
 
-    if (!customize) {
-      runners[skillId] = {
-        agent: defaultAgent,
-        model: defaultModel,
-        ...(resolved.effort ? { effort: resolved.effort } : {}),
-        ...(resolved.sessionStrategy ? { sessionStrategy: resolved.sessionStrategy } : {}),
-      };
+    let selection: string = 'customize';
+    if (!opts.forceSelect) {
+      const sessionText = preselection.sessionId
+        ? ` (resumes session ${sessionDisplay(preselection.sessionId)})`
+        : '';
+      const firstLabel = preselection.source === 'chain'
+        ? `Use chain runner${sessionText}`
+        : `Use configured runner (configured profile${preselection.fallbackReason ? ` — no compatible chain runner: ${preselection.fallbackReason}` : ''})`;
+      selection = await select({
+        message: `Choose runner configuration for skill '${skillId}':`,
+        choices: [
+          formatMenuChoice({ label: firstLabel, recommended: true }, 'use-default'),
+          formatMenuChoice({ label: 'Change effort only' }, 'effort-only'),
+          formatMenuChoice({ label: 'Customize provider, model, effort, and session' }, 'customize'),
+        ],
+        default: 'use-default',
+      });
+    }
+
+    if (selection === 'use-default') {
+      const predicted = applyPredictedContinuity(resolved, skillId, config, agentRegistry, globalOverrides, opts);
+      runners[skillId] = predicted.runner;
+      continue;
+    }
+
+    if (selection === 'effort-only') {
+      const levels = effortChoices(resolved.agent, resolved.model, config, agentRegistry);
+      const currentEffort = resolved.effort ?? 'default';
+      const pickedEffort = await select({
+        message: `Select effort for agent '${resolved.agent}' (skill '${skillId}') — provider/model unchanged:`,
+        choices: levels,
+        default: currentEffort,
+      });
+      if (pickedEffort === 'unsupported-effort') {
+        runners[skillId] = applyPredictedContinuity(resolved, skillId, config, agentRegistry, globalOverrides, opts).runner;
+      } else {
+        const selectedEffort = pickedEffort === 'default' ? undefined : pickedEffort;
+        const modelIsListed = config.registry.providers[resolved.agent]?.models.includes(resolved.model) ?? false;
+        if (selectedEffort && modelIsListed && !isValidEffortForModel(resolved.agent, resolved.model, selectedEffort, config.registry)) {
+          throw new Error(`Invalid effort '${selectedEffort}' for model '${resolved.model}' (skill '${skillId}')`);
+        }
+        const selected = withEffort(resolved, selectedEffort);
+        const predicted = applyPredictedContinuity(selected, skillId, config, agentRegistry, globalOverrides, opts);
+        runners[skillId] = predicted.runner;
+      }
       continue;
     }
 
@@ -285,31 +461,11 @@ export async function promptRunners(
     }
 
     const adapter = agentRegistry.adapters.get(agent);
-    const catalogue = config.registry.providers[agent];
-    const isCustomModel = catalogue ? !catalogue.models.includes(selectedModel) : true;
-    const effortLevels = isCustomModel
-      ? []
-      : (catalogue?.modelEfforts?.[selectedModel] ?? catalogue?.efforts ?? []);
     let selectedEffort: string | undefined;
-    const effortChoices = [
-      formatMenuChoice({ label: 'Provider default' }, 'default'),
-    ];
-    if (adapter && !adapter.capabilities.effort) {
-      effortChoices.push(
-        formatMenuChoice({ label: 'Configure effort', disabledReason: `${agent} does not support effort`, availability: 'unavailable' }, 'unsupported-effort')
-      );
-    } else if (effortLevels.length > 0) {
-      for (const level of effortLevels) {
-        effortChoices.push(formatMenuChoice({ label: level }, level));
-      }
-    } else {
-      effortChoices.push(
-        formatMenuChoice({ label: 'Configure effort', disabledReason: `no effort levels for model '${selectedModel}'`, availability: 'unavailable' }, 'unsupported-effort')
-      );
-    }
+    const selectedEffortChoices = effortChoices(agent, selectedModel, config, agentRegistry);
     const pickedEffort = await select({
       message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
-      choices: effortChoices,
+      choices: selectedEffortChoices,
       default: 'default',
     });
     if (pickedEffort !== 'default' && pickedEffort !== 'unsupported-effort') {
@@ -338,12 +494,51 @@ export async function promptRunners(
       selectedSessionStrategy = pickedSession;
     }
 
-    runners[skillId] = {
+    const interactiveResolved = resolveRunner(skillId, config, globalOverrides, {
       agent,
       model: selectedModel,
       ...(selectedEffort ? { effort: selectedEffort } : {}),
       ...(selectedSessionStrategy ? { sessionStrategy: selectedSessionStrategy } : {}),
-    };
+    });
+    // resolveRunner includes a provider default effort when configured. The
+    // explicit Provider default menu choice must remove it structurally.
+    if (!selectedEffort) {
+      delete interactiveResolved.effort;
+      delete interactiveResolved.effortSource;
+    }
+    const predicted = applyPredictedContinuity(interactiveResolved, skillId, config, agentRegistry, globalOverrides, opts);
+    runners[skillId] = predicted.runner;
+  }
+
+  console.log(emphasisAccent('identity')('Resolved runner selections (before execution):'));
+  for (const skillId of skills) {
+    const runner = runners[skillId];
+    if (!runner) continue;
+    const preselection = defaultPreselections.get(skillId);
+    const continuity = resolveContinuity(
+      undefined,
+      runner,
+      agentRegistry,
+      runner.sessionStrategy ?? globalOverrides.sessionStrategy ?? 'fresh-per-invocation',
+      skillId,
+      historyForContinuity(opts.continuitySteps),
+      opts.continuationChainId ?? '',
+    );
+    const parts = [
+      `${skillId} (${config.manifest.skills[skillId]?.role ?? 'unknown'}): ${runner.agent} · ${runner.model}`,
+      runner.effort ? `effort: ${runner.effort}` : 'effort: provider default',
+      `source: ${sourceLabel(runner)}`,
+    ];
+    if (runner.agentSource === 'session' && preselection?.fromStep) {
+      parts.push(`from chain ${preselection.fromStep.phase} v${preselection.fromStep.version}`);
+    }
+    if (preselection?.fallbackReason) parts.push(`fallback: ${preselection.fallbackReason}`);
+    if (preselection?.note) parts.push(`note: ${preselection.note}`);
+    parts.push(`continuity: ${runner.sessionStrategy ?? 'fresh-per-invocation'}`);
+    parts.push(continuity.mode === 'resumed'
+      ? `resumes session ${sessionDisplay(continuity.sessionId!)}`
+      : `fresh session (${continuity.freshReason ?? 'no-compatible-session'})`);
+    console.log(`  ${emphasisAccent('supporting')(parts.join(', '))}`);
   }
 
   return runners;
@@ -362,7 +557,7 @@ export async function promptCandidateSelection(
   choices.push({ name: 'Cancel (Go back)', value: 'cancel' });
 
   const picked = await select({
-    message: 'Select a pipeline stage to advance:',
+    message: 'Select a pipeline stage to advance (runner selection happens before execution):',
     choices,
   });
   if (picked === 'cancel') return null;

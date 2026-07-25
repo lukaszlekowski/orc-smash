@@ -17,6 +17,8 @@ export function resetFakeAdapterState(): void {
   fakeAdapterState.auditError = undefined;
   fakeAdapterState.followUpError = undefined;
   fakeAdapterState.stderr = undefined;
+  fakeAdapterState.effectiveModel = undefined;
+  fakeAdapterState.effectiveEffort = undefined;
   fakeAdapterState.delayMs = undefined;
   fakeAdapterState.lifecycleMessages = [];
   fakeAdapterState.failAfterMs = undefined;

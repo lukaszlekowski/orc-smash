@@ -16,10 +16,11 @@ import type {
 import { priorArtifactNone, resolvePriorArtifact, type PriorArtifactResolution } from '../binding-inputs.js';
 import { computeArtifactIdentity, computeInputFingerprint, mintRunContext, type RunContext } from '../pipeline-state.js';
 import { captureFileDigests, captureTargetFingerprint } from '../target-snapshot.js';
-import { getAdapter, type AgentRegistry } from '../adapters/registry.js';
+import type { AgentRegistry } from '../adapters/registry.js';
 import type { RunResult } from '../adapters/types.js';
+import { resolveEffortConfirmation } from '../adapters/completion.js';
 import { structuredMessage } from '../adapters/errors.js';
-import { resolveRunner, validateRunnerCapabilities } from '../runner.js';
+import { resolveRunner, validateRunnerCapabilities, type ResolvedRunner } from '../runner.js';
 import type { Runner, LoopReturn, RunOutcome } from './runtime.js';
 import { executeLoopStep } from './execution.js';
 import type { OwnershipContext } from '../run-ownership.js';
@@ -31,6 +32,8 @@ import { promptRunners, promptIterationExtension } from '../interactive.js';
 import { makeRunEvent } from '../run-event.js';
 import { scanGlobalSnapshot } from '../artifact-index.js';
 import { reduceApprovalChain, approvalNextPhase, type ApprovalChainStep } from '../approval-loop-state.js';
+import { resolveContinuity } from '../continuation-runners.js';
+import type { RunnerPreselection } from '../continuation-runners.js';
 
 export type Binding = LoopBinding | TaskBinding;
 export type BindingKind = 'loop' | 'task';
@@ -45,6 +48,9 @@ export interface BindingEngineOptions {
   runnerOverrides?: RunnerOverrideMap;
   runContext?: RunContext;
   emitTerminal?: boolean;
+  continuationDefaults?: Map<string, RunnerPreselection>;
+  continuationSteps?: Step[];
+  continuationChainId?: string;
 }
 
 interface StepRequest {
@@ -321,6 +327,7 @@ export async function runBinding(
     const resultFingerprint = captureTargetFingerprint(projectRoot, binding.target, config.manifest);
     const sessionMode = continuity.mode;
     const sessionId = result.sessionId ?? 'none';
+    const effortStatus = resolveEffortConfirmation(runner, result);
     const parentArtifactIdentity = lastArtifact?.meta.artifactIdentity ?? request.parentArtifactIdentity ?? null;
     const artifactIdentity = computeArtifactIdentity({
       schemaVersion: 1,
@@ -362,6 +369,8 @@ export async function runBinding(
       targetPath: binding.target.kind === 'worktree'
         ? '.'
         : relative(projectRoot, resolve(projectRoot, binding.target.path)),
+      effortStatus,
+      effectiveEffort: result.effectiveEffort,
     });
     writeArtifactWithMeta(outputPath, body, meta);
     const persistedArtifact: PersistedArtifact = {
@@ -477,21 +486,31 @@ async function resolveBindingRunners(
 ): Promise<void> {
   const missing = [...new Set(skillIds)].filter((skillId) => !runners[skillId]);
   if (missing.length > 0 && options.interactive) {
-    const selected = await promptRunners(missing, config, options.registry, options.globalOverrides);
+    const selected = await promptRunners(missing, config, options.registry, options.globalOverrides, {
+      preselections: options.continuationDefaults,
+      continuitySteps: options.continuationSteps,
+      continuationChainId: options.continuationChainId,
+    });
     Object.assign(runners, selected);
   }
+  const emitted = new Set<string>();
   for (const skillId of [...new Set(skillIds)]) {
-    if (runners[skillId]) continue;
-    const runner = resolveRunner(
-      skillId,
-      config,
-      options.globalOverrides,
-      undefined,
-      options.runnerOverrides?.[skillId],
-      options.globalOverrides?.effort,
-    );
-    runners[skillId] = runner;
+    let runner = runners[skillId];
+    if (!runner) {
+      runner = resolveRunner(
+        skillId,
+        config,
+        options.globalOverrides,
+        undefined,
+        options.runnerOverrides?.[skillId],
+        options.globalOverrides?.effort,
+      );
+      runners[skillId] = runner;
+    }
     validateRunnerCapabilities(runner, options.registry);
+    if (emitted.has(skillId)) continue;
+    emitted.add(skillId);
+    const attributed = runner as Partial<ResolvedRunner>;
     options.output.emit(makeRunEvent({
       type: 'runner.resolved',
       atMs: Date.now(),
@@ -499,9 +518,10 @@ async function resolveBindingRunners(
       agent: runner.agent,
       model: runner.model,
       effort: runner.effort,
-      effortSource: runner.effortSource,
-      agentSource: runner.agentSource,
-      modelSource: runner.modelSource,
+      effortSource: attributed.effortSource,
+      agentSource: attributed.agentSource ?? 'profile',
+      modelSource: attributed.modelSource ?? 'profile',
+      inheritedSession: attributed.inheritedSession,
     }));
   }
 }
@@ -558,6 +578,8 @@ function buildMeta(params: {
   sessionMode: 'fresh' | 'resumed' | 'none';
   sessionId: string;
   sessionStrategy?: string;
+  effortStatus: 'requested' | 'confirmed' | 'mismatch' | 'reported';
+  effectiveEffort?: string;
   parentArtifactIdentity: string | null;
   artifactIdentity: string;
   inputFingerprint: string;
@@ -585,6 +607,8 @@ function buildMeta(params: {
     sessionMode: params.sessionMode,
     sessionId: params.sessionId,
     sessionStrategy: params.sessionStrategy ?? 'fresh-per-invocation',
+    effortStatus: params.effortStatus,
+    effectiveEffort: params.effectiveEffort,
     schemaVersion: 1,
     bindingKind: params.bindingKind,
     bindingId: params.bindingId,
@@ -763,68 +787,6 @@ function initialRequest(
   };
 }
 
-/** Minimal artifact record for session-resume search. */
-interface ResumeRecord {
-  meta: { chainId?: string; skill: string; sessionId: string; agent: string; model: string; effort?: string };
-  decision?: string;
-  completion?: string;
-}
-
-function resolveContinuity(
-  predecessor: PersistedArtifact | undefined,
-  runner: Runner,
-  registry: AgentRegistry,
-  sessionStrategy: string,
-  skillId: string,
-  allHistory: ResumeRecord[],
-  chainId: string,
-): { mode: 'fresh' | 'resumed'; sessionId?: string; freshReason?: 'policy' | 'no-compatible-session' | 'provider-unsupported' } {
-  if (sessionStrategy === 'fresh-per-invocation') {
-    return { mode: 'fresh', freshReason: 'policy' };
-  }
-
-  // Scope the search to the current chain only (same chainId).  Walk
-  // backwards through chain-scoped history and stop at an acceptance or
-  // second-opinion boundary so we never resume a session from a different
-  // run or across an approved/independent-review boundary.
-  const chainHistory = allHistory.filter(item => item.meta.chainId === chainId);
-  let candidate: ResumeRecord | undefined;
-  for (let i = chainHistory.length - 1; i >= 0; i--) {
-    const item = chainHistory[i]!;
-    if (item.meta.skill === skillId) {
-      candidate = item;
-      break;
-    }
-    // Stop walking at acceptance or second-opinion boundaries. A
-    // completion artifact (repair completed) is not a boundary — it is
-    // part of the normal loop cycle and should not stop the search.
-    if (item.decision === 'accepted') break;
-  }
-
-  if (!candidate || candidate.meta.skill !== skillId) {
-    return { mode: 'fresh', freshReason: 'no-compatible-session' };
-  }
-
-  const sessionId = candidate.meta.sessionId;
-  if (!sessionId || sessionId === 'none') {
-    return { mode: 'fresh', freshReason: 'no-compatible-session' };
-  }
-  if (candidate.meta.agent !== runner.agent
-    || candidate.meta.model !== runner.model
-    || (candidate.meta.effort ?? undefined) !== (runner.effort ?? undefined)) {
-    return { mode: 'fresh', freshReason: 'no-compatible-session' };
-  }
-  let adapter;
-  try {
-    adapter = getAdapter(registry, runner.agent);
-  } catch {
-    return { mode: 'fresh', freshReason: 'provider-unsupported' };
-  }
-  return adapter.capabilities.resumeSession
-    ? { mode: 'resumed', sessionId }
-    : { mode: 'fresh', freshReason: 'provider-unsupported' };
-}
-
 function nextEvaluationRequest(
   binding: LoopBinding,
   config: Config,
@@ -953,6 +915,8 @@ function stepFromArtifact(item: PersistedArtifact, request: StepRequest): Step {
     parentArtifactIdentity: item.meta.parentArtifactIdentity,
     provider: item.meta.provider,
     effort: item.meta.effort,
+    effortStatus: item.meta.effortStatus,
+    effectiveEffort: item.meta.effectiveEffort,
     sessionStrategy: item.meta.sessionStrategy,
   };
 }

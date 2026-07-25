@@ -39,6 +39,7 @@ import { buildProjectSnapshotView } from '../project-snapshot-view.js';
 import { renderCompactSnapshot } from '../project-snapshot-renderer.js';
 import type { BindingKind } from '../loops/binding-engine.js';
 import type { LoopReturn, RunOutcome } from '../loops/runtime.js';
+import { continuationRunnerDefaults, type RunnerPreselection } from '../continuation-runners.js';
 
 type SelectedBinding =
   | { kind: 'loop'; id: string; binding: LoopBinding }
@@ -78,6 +79,9 @@ interface SmashRunSetup {
   runnerOverrides: RunnerOverrideMap;
   runContext?: RunContext;
   selectedCandidate?: SuggestedStageAction;
+  continuationDefaults?: Map<string, RunnerPreselection>;
+  continuationSteps?: Step[];
+  continuationChainId?: string;
 }
 
 type ResolveResult =
@@ -212,6 +216,9 @@ async function resolveSmashRunSetup(
   let pipelineStageId: string | undefined;
   let runContext: RunContext | undefined;
   let selectedCandidate: SuggestedStageAction | undefined;
+  let continuationDefaults: Map<string, RunnerPreselection> | undefined;
+  let continuationSteps: Step[] | undefined;
+  let continuationChainId: string | undefined;
   const explicit = selectedFromOptions(config.manifest, options);
   if (explicit && 'error' in explicit) {
     const msg = `Error: ${explicit.error}`;
@@ -243,6 +250,9 @@ async function resolveSmashRunSetup(
     runContext = selection.runContext;
     pipelineStageId = selection.pipelineStageId;
     selectedCandidate = selection.candidate;
+    continuationDefaults = selection.continuationDefaults;
+    continuationSteps = selection.continuationSteps;
+    continuationChainId = selection.continuationChainId;
   }
 
   debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'binding-selected', detail: `${selected.kind}/${selected.id}`, result: 'pass' });
@@ -295,8 +305,12 @@ async function resolveSmashRunSetup(
   }
 
   const deferInteractiveRunnerSelection = isInteractive && !globalOverrides.agent && !globalOverrides.model;
-  if (deferInteractiveRunnerSelection && selectedCandidate) {
-    const interactiveRunners = await promptRunners(skills, config, registry, globalOverrides);
+  if (deferInteractiveRunnerSelection && !runContext?.continue) {
+    const interactiveRunners = await promptRunners(skills, config, registry, globalOverrides, {
+      preselections: continuationDefaults,
+      continuitySteps: continuationSteps,
+      continuationChainId,
+    });
     for (const skillId of [...new Set(skills)]) {
       const picked = interactiveRunners[skillId];
       if (!picked) {
@@ -305,21 +319,8 @@ async function resolveSmashRunSetup(
         return { errorResult: { exitCode: 1, message: msg } };
       }
       try {
-        const resolved = resolveRunner(skillId, config, globalOverrides, picked, runnerOverrides[skillId], options.effort);
-        validateRunnerCapabilities(resolved, registry);
-        runners[skillId] = resolved;
-        options.output.emit(makeRunEvent({
-          type: 'runner.resolved',
-          atMs: Date.now(),
-          skillId,
-          agent: resolved.agent,
-          model: resolved.model,
-          effort: resolved.effort,
-          effortSource: resolved.effortSource,
-          agentSource: resolved.agentSource,
-          modelSource: resolved.modelSource,
-          inheritedSession: resolved.inheritedSession,
-        }));
+        validateRunnerCapabilities(picked, registry);
+        runners[skillId] = picked;
       } catch (err: any) {
         const msg = `Error: ${err.message}`;
         options.output.emit(makeRunEvent({ type: 'runner.rejected', atMs: Date.now(), skillId, message: msg }));
@@ -333,18 +334,6 @@ async function resolveSmashRunSetup(
         const resolved = resolveRunner(skillId, config, globalOverrides, undefined, runnerOverrides[skillId], options.effort);
         validateRunnerCapabilities(resolved, registry);
         runners[skillId] = resolved;
-        options.output.emit(makeRunEvent({
-          type: 'runner.resolved',
-          atMs: Date.now(),
-          skillId,
-          agent: resolved.agent,
-          model: resolved.model,
-          effort: resolved.effort,
-          effortSource: resolved.effortSource,
-          agentSource: resolved.agentSource,
-          modelSource: resolved.modelSource,
-          inheritedSession: resolved.inheritedSession,
-        }));
         debugHarnessEvent({ cwd: projectRoot, category: 'decision', event: 'runner-resolved', detail: `${skillId} → ${resolved.agent} (${resolved.model})`, result: 'pass' });
       } catch (err: any) {
         const msg = `Error: ${err.message}`;
@@ -382,6 +371,9 @@ async function resolveSmashRunSetup(
       runnerOverrides,
       runContext: resolvedRunContext,
       selectedCandidate,
+      continuationDefaults,
+      continuationSteps,
+      continuationChainId,
     },
   };
 }
@@ -393,7 +385,16 @@ function buildSuggestedStageActions(projectRoot: string, manifest: V1Manifest): 
     const relArtifact = relative(projectRoot, c.predecessorArtifactPath);
     const decisionText = c.evidence.decision ?? c.evidence.completionOutcome ?? c.evidence.normalizedResult;
     const matchText = c.reason === 'eligible' ? 'matched' : c.reason;
-    const label = `Pipeline: ${c.pipelineId} | Run: ${c.pipelineRunId} | Successor: ${c.successorStageId} | Predecessor: ${c.predecessorStageId} | Artifact: ${relArtifact} | Identity: ${c.artifactIdentity.slice(0, 8)}... | Binding/Phase: ${c.evidence.bindingKind}/${c.evidence.bindingId}/${c.evidence.phase} | Chain: ${c.evidence.chainId} | Decision/Outcome: ${decisionText} | Fingerprint: ${matchText}`;
+    const successor = manifest.pipelines[c.pipelineId]?.stages.find(stage => stage.stageId === c.successorStageId);
+    const successorBinding = successor?.loop
+      ? manifest.loops[successor.loop]
+      : successor?.task
+        ? manifest.tasks?.[successor.task]
+        : undefined;
+    const runnerTiming = successorBinding && 'evaluate' in successorBinding
+      ? 'next: choose or confirm the complete evaluate/repair runner pair before the first provider invocation'
+      : 'next: choose or confirm provider, model, effort, and session before execution';
+    const label = `Pipeline: ${c.pipelineId} | Run: ${c.pipelineRunId} | Successor: ${c.successorStageId} | Predecessor: ${c.predecessorStageId} | Artifact: ${relArtifact} | Identity: ${c.artifactIdentity.slice(0, 8)}... | Binding/Phase: ${c.evidence.bindingKind}/${c.evidence.bindingId}/${c.evidence.phase} | Chain: ${c.evidence.chainId} | Decision/Outcome: ${decisionText} | Fingerprint: ${matchText} | ${runnerTiming}`;
     return {
       pipelineId: c.pipelineId,
       pipelineRunId: c.pipelineRunId,
@@ -440,7 +441,7 @@ export function resolveBindingForSuggested(
 }
 
 type InteractiveSelectionResult =
-  | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string; candidate?: SuggestedStageAction }
+  | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string; candidate?: SuggestedStageAction; continuationDefaults?: Map<string, RunnerPreselection>; continuationSteps?: Step[]; continuationChainId?: string }
   | { kind: 'exit'; reason: string }
   | { kind: 'retry' }
   | { kind: 'display' };
@@ -610,38 +611,54 @@ async function runInteractiveBindingSelection(
       const hasAccepted = bindingHasCompletedAcceptance(projectRoot, manifest, loopId);
       const loopMissing = snapshot.missingInputs.get(loopId);
 
-      // Compute continueDetail from the reducer's resumable state. The
-      // manifest's next skill resolves the correct runner for the next phase.
-      let continueDetail: { phase: string; version: number; skillId: string; agent: string; model: string; effort?: string; sessionStrategy?: string } | undefined;
+      // Compute the continuation defaults once from the recovered chain. The
+      // same map drives both the submenu label and the later runner prompt.
+      let continueDetail: {
+        phase: string;
+        version: number;
+        skillId: string;
+        agent: string;
+        model: string;
+        effort?: string;
+        sessionStrategy?: string;
+        source?: string;
+        sessionId?: string;
+        fallbackReason?: string;
+      } | undefined;
+      let continueDefaults: Map<string, RunnerPreselection> | undefined;
+      let continueSteps: Step[] | undefined;
+      let continueChainId: string | undefined;
       if (hasInProgressChain) {
         const recovered = recoverResumableLoopChain(bindingSteps);
         if (recovered) {
+          continueSteps = bindingSteps;
+          continueChainId = recovered.chainId;
+          continueDefaults = continuationRunnerDefaults({
+            steps: bindingSteps,
+            chainId: recovered.chainId,
+            skillIds: [loopBinding.evaluate.skill, loopBinding.repair.skill],
+            config,
+            registry,
+          });
           const next = approvalNextPhase(recovered.state);
-          if (next?.phase === 'repair') {
-            const repairSkillId = loopBinding.repair.skill;
-            const repairSkill = config.manifest.skills[repairSkillId];
-            const repairRunner = repairSkill ? resolveRunner(repairSkillId, config) : null;
+          const nextSkillId = next?.phase === 'repair'
+            ? loopBinding.repair.skill
+            : next?.phase === 'evaluate'
+              ? loopBinding.evaluate.skill
+              : undefined;
+          if (next && nextSkillId) {
+            const preselection = continueDefaults.get(nextSkillId);
             continueDetail = {
-              phase: 'repair',
+              phase: next.phase,
               version: next.version,
-              skillId: repairSkillId,
-              agent: repairRunner?.agent ?? '',
-              model: repairRunner?.model ?? '',
-              effort: repairRunner?.effort,
-              sessionStrategy: repairRunner?.sessionStrategy,
-            };
-          } else if (next?.phase === 'evaluate') {
-            const evalSkillId = loopBinding.evaluate.skill;
-            const evalSkill = config.manifest.skills[evalSkillId];
-            const evalRunner = evalSkill ? resolveRunner(evalSkillId, config) : null;
-            continueDetail = {
-              phase: 'evaluate',
-              version: next.version,
-              skillId: evalSkillId,
-              agent: evalRunner?.agent ?? '',
-              model: evalRunner?.model ?? '',
-              effort: evalRunner?.effort,
-              sessionStrategy: evalRunner?.sessionStrategy,
+              skillId: nextSkillId,
+              agent: preselection?.agent ?? '',
+              model: preselection?.model ?? '',
+              effort: preselection?.effort,
+              sessionStrategy: preselection?.sessionStrategy,
+              source: preselection?.source === 'chain' ? 'chain metadata' : 'configured profile',
+              sessionId: preselection?.sessionId,
+              fallbackReason: preselection?.fallbackReason,
             };
           }
         }
@@ -671,6 +688,9 @@ async function runInteractiveBindingSelection(
               stageId: recovered.stageId,
               parentArtifactIdentity: recovered.parentArtifactIdentity,
             }),
+            continuationDefaults: continueDefaults,
+            continuationSteps: continueSteps,
+            continuationChainId: continueChainId,
           };
         }
       }
@@ -861,6 +881,9 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
           ownership,
           runnerOverrides: setup.runnerOverrides,
           runContext: setup.runContext,
+          continuationDefaults: setup.continuationDefaults,
+          continuationSteps: setup.continuationSteps,
+          continuationChainId: setup.continuationChainId,
           emitTerminal: false,
         };
         runResult = setup.bindingKind === 'task'

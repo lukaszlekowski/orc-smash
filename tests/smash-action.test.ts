@@ -227,7 +227,7 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptTaskMenu).mockResolvedValueOnce('implement' as any);
       vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        implement: { agent: 'opencode', model: MODEL },
+        implement: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
@@ -597,8 +597,8 @@ describe('generic smash dispatch', () => {
       // profile via resolveWithGlobalOverrides.  Leave runner resolution to
       // profiles (mock promptRunners so the interactive flow can complete).
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        evaluate: { agent: 'opencode', model: MODEL },
-        repair: { agent: 'codex', model: 'codex-model' },
+        evaluate: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
+        repair: { agent: 'codex', model: 'codex-model', agentSource: 'interactive', modelSource: 'interactive' },
       });
 
       const result = await smashAction({
@@ -669,7 +669,7 @@ describe('generic smash dispatch', () => {
         return Promise.resolve(candidates[0]); // Returns the 'default' -> 'implement' candidate
       });
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        implement: { agent: 'opencode', model: MODEL },
+        implement: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
@@ -752,7 +752,7 @@ describe('generic smash dispatch', () => {
         return Promise.resolve(candidates[0] || null);
       });
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        implement: { agent: 'opencode', model: MODEL },
+        implement: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
 
@@ -897,7 +897,7 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => Promise.resolve(candidates[0] || null));
       vi.mocked(promptRunners).mockImplementationOnce(async () => {
         writeFileSync(planPath, '# Plan changed after confirmation\n');
-        return { '30-simple-implement': { agent: 'opencode', model: MODEL } };
+        return { '30-simple-implement': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' } };
       });
       vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
@@ -1025,7 +1025,7 @@ describe('generic smash dispatch', () => {
         return Promise.resolve(candidates[0] || null);
       });
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        task2: { agent: 'opencode', model: MODEL },
+        task2: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
@@ -1120,7 +1120,7 @@ describe('generic smash dispatch', () => {
         return Promise.resolve(candidates.find(c => c.predecessorArtifactIdentity === meta2.artifactIdentity) || null);
       });
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        implement: { agent: 'opencode', model: MODEL },
+        implement: { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');

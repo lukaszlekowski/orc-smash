@@ -115,7 +115,16 @@ export interface ProjectSnapshotView {
 }
 
 function summarizeStep(step: Step): LatestStepSummary {
-  const effortStr = step.effort ?? 'provider default';
+  const effort = step.effort ?? 'provider default';
+  const effortStr = step.effortStatus === 'mismatch' && step.effectiveEffort
+    ? `requested ${effort} → effective ${step.effectiveEffort}`
+    : step.effortStatus === 'confirmed' && step.effort
+      ? `confirmed: ${step.effort}`
+      : step.effortStatus === 'reported' && step.effectiveEffort
+        ? `reported: ${step.effectiveEffort} (no request)`
+        : step.effort
+          ? `requested: ${step.effort}`
+          : 'provider default';
   const sessionStrategyStr = step.sessionStrategy ?? 'fresh-per-invocation';
   const sessionModeIdStr = step.sessionId
     ? `${step.sessionMode ?? 'fresh'} (${step.sessionId})`

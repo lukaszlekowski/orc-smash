@@ -10,10 +10,19 @@ export const fakeAdapterState = {
   auditError: undefined as RunError | undefined,
   followUpError: undefined as RunError | undefined,
   stderr: undefined as string | undefined,
+  effectiveModel: undefined as string | undefined,
+  effectiveEffort: undefined as string | undefined,
   delayMs: undefined as number | undefined,
   lifecycleMessages: [] as Array<{ text: string; toolCalls: number }>,
   failAfterMs: undefined as number | undefined
 };
+
+function fakeTelemetry(): Pick<RunResult, 'effectiveModel' | 'effectiveEffort'> {
+  return {
+    ...(fakeAdapterState.effectiveModel !== undefined ? { effectiveModel: fakeAdapterState.effectiveModel } : {}),
+    ...(fakeAdapterState.effectiveEffort !== undefined ? { effectiveEffort: fakeAdapterState.effectiveEffort } : {}),
+  };
+}
 
 export const fakeAdapter: AgentAdapter = {
   name: 'fake',
@@ -126,7 +135,8 @@ export const fakeAdapter: AgentAdapter = {
         emitEnd();
         return {
           stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake implementation completed`,
-          exitCode: rawRes.exitCode
+          exitCode: rawRes.exitCode,
+          ...fakeTelemetry(),
         };
       }
       if (isTask) {
@@ -136,7 +146,7 @@ export const fakeAdapter: AgentAdapter = {
           writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\nCOMPLETED\n`);
         }
         emitEnd();
-        return { stdout: rawRes.stdout || fakeAdapterState.stdout || 'Fake task completed', exitCode: rawRes.exitCode };
+        return { stdout: rawRes.stdout || fakeAdapterState.stdout || 'Fake task completed', exitCode: rawRes.exitCode, ...fakeTelemetry() };
       }
       if (!isRepair) {
         const verdict = fakeAdapterState.verdicts.shift() || 'APPROVED';
@@ -149,7 +159,8 @@ export const fakeAdapter: AgentAdapter = {
         emitEnd();
         return {
           stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake run completed with verdict ${verdict}`,
-          exitCode: rawRes.exitCode
+          exitCode: rawRes.exitCode,
+          ...fakeTelemetry(),
         };
       }
       if (relativePath && fakeAdapterState.writeVerdictFile) {
@@ -168,7 +179,8 @@ export const fakeAdapter: AgentAdapter = {
       emitEnd();
       return {
         stdout: rawRes.stdout || fakeAdapterState.stdout || `Fake repair completed`,
-        exitCode: rawRes.exitCode
+        exitCode: rawRes.exitCode,
+        ...fakeTelemetry(),
       };
     }
 
@@ -225,7 +237,8 @@ export const fakeAdapter: AgentAdapter = {
       emitEnd();
       return {
         stdout: fakeAdapterState.stdout || `Fake implementation completed`,
-        exitCode: fakeAdapterState.exitCode
+        exitCode: fakeAdapterState.exitCode,
+        ...fakeTelemetry(),
       };
     }
 
@@ -238,7 +251,8 @@ export const fakeAdapter: AgentAdapter = {
       emitEnd();
       return {
         stdout: fakeAdapterState.stdout || 'Fake task completed',
-        exitCode: fakeAdapterState.exitCode
+        exitCode: fakeAdapterState.exitCode,
+        ...fakeTelemetry(),
       };
     }
 
@@ -254,7 +268,8 @@ export const fakeAdapter: AgentAdapter = {
       emitEnd();
       return {
         stdout: fakeAdapterState.stdout || `Fake run completed with verdict ${verdict}`,
-        exitCode: fakeAdapterState.exitCode
+        exitCode: fakeAdapterState.exitCode,
+        ...fakeTelemetry(),
       };
     }
 
@@ -275,7 +290,8 @@ export const fakeAdapter: AgentAdapter = {
     emitEnd();
     return {
       stdout: fakeAdapterState.stdout || `Fake repair completed`,
-      exitCode: fakeAdapterState.exitCode
+      exitCode: fakeAdapterState.exitCode,
+      ...fakeTelemetry(),
     };
   }
 };

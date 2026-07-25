@@ -297,6 +297,8 @@ export function scanGlobalSnapshot(
         resultFingerprint: meta.resultFingerprint,
         parentArtifactIdentity: meta.parentArtifactIdentity,
         effort: meta.effort,
+        effortStatus: meta.effortStatus,
+        effectiveEffort: meta.effectiveEffort,
         sessionStrategy: meta.sessionStrategy,
         provider,
         contract: patternInfo.contract.type as any,

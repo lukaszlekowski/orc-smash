@@ -10,8 +10,8 @@ export interface ResolvedRunner extends Runner {
   agentSource: 'interactive' | 'skill' | 'global' | 'profile' | 'default' | 'session';
   modelSource: 'interactive' | 'skill' | 'agent-default' | 'global' | 'profile' | 'default' | 'session';
   effort?: string;
-  effortSource?: 'interactive' | 'skill' | 'global' | 'profile' | 'default';
-  sessionStrategySource?: 'interactive' | 'skill' | 'profile' | 'default' | 'global';
+  effortSource?: 'interactive' | 'skill' | 'global' | 'profile' | 'default' | 'session';
+  sessionStrategySource?: 'interactive' | 'skill' | 'profile' | 'default' | 'global' | 'session';
   inheritedSession?: { agent: string; model: string; sessionId: string };
 }
 

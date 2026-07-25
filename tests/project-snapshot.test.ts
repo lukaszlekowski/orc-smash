@@ -9,6 +9,7 @@ import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 import { writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
 import fs from 'node:fs';
 import { join, resolve } from 'node:path';
+import { computeArtifactIdentity } from '../src/pipeline-state.js';
 
 describe('Project Snapshot View and Renderer (Slice 3)', () => {
   const testDir = join(process.cwd(), '.test-snapshot-temp');
@@ -93,15 +94,66 @@ describe('Project Snapshot View and Renderer (Slice 3)', () => {
     const view = buildProjectSnapshotView(config, snapshot, '2026-07-22T18:00:00.000Z');
 
     const compactText = renderCompactSnapshot(view);
-    expect(compactText).toContain('evaluate: plan-audit-v1-opencode.md (retry) [opencode / opencode-model, effort: high, session: fresh-per-invocation / fresh (sess-eval-123)]');
-    expect(compactText).toContain('repair: plan-followup-v1-codex.md (completed) [codex / codex-model, effort: provider default, session: resume-per-skill / resumed (sess-rep-456)]');
+    expect(compactText).toContain('evaluate: plan-audit-v1-opencode.md (retry) [opencode / opencode-model, effort: requested: high, session: fresh-per-invocation / fresh (sess-eval-123)]');
+    expect(compactText).toContain('repair: plan-followup-v1-codex.md (completed) [codex / codex-model, effort: requested: provider default, session: resume-per-skill / resumed (sess-rep-456)]');
     expect(compactText).toContain('unclassified count: 0');
 
     const detailedText = renderDetailedSnapshot(view);
     expect(detailedText).toContain('Configured Pipelines:');
     expect(detailedText).toContain("- Pipeline 'default': plan (plan) -> implement (implement) -> review (review)");
-    expect(detailedText).toContain('Latest evaluate: evaluate v1 (retry) [opencode / opencode-model, effort: high, session: fresh-per-invocation / fresh (sess-eval-123)]');
-    expect(detailedText).toContain('Latest repair: repair v1 (completed) [codex / codex-model, effort: provider default, session: resume-per-skill / resumed (sess-rep-456)]');
+    expect(detailedText).toContain('Latest evaluate: evaluate v1 (retry) [opencode / opencode-model, effort: requested: high, session: fresh-per-invocation / fresh (sess-eval-123)]');
+    expect(detailedText).toContain('Latest repair: repair v1 (completed) [codex / codex-model, effort: requested: provider default, session: resume-per-skill / resumed (sess-rep-456)]');
+  });
+
+  it('round-trips requested/effective effort vocabulary through the scanned Step pipeline', () => {
+    const confirmedMeta = makeV1ArtifactMeta({
+      bindingId: 'plan', kind: 'evaluate', effort: 'high',
+      effortStatus: 'confirmed', effectiveEffort: 'high',
+    });
+    writeArtifactWithMeta(join(testDir, 'docs/dev/plan-audit-v1-fake.md'), '# Evaluation\n\n## Verdict\n\nREJECTED\n', confirmedMeta);
+
+    const mismatchMeta = makeV1ArtifactMeta({
+      bindingId: 'review', kind: 'evaluate', effort: 'high',
+      effortStatus: 'mismatch', effectiveEffort: 'max',
+    });
+    writeArtifactWithMeta(join(testDir, 'docs/dev/review-v1-fake.md'), '# Evaluation\n\n## Verdict\n\nREJECTED\n', mismatchMeta);
+
+    const reportedMeta = makeV1ArtifactMeta({ bindingId: 'implement', kind: 'task', effort: 'low' });
+    reportedMeta.effort = undefined;
+    reportedMeta.effortStatus = 'reported';
+    reportedMeta.effectiveEffort = 'medium';
+    reportedMeta.artifactIdentity = computeArtifactIdentity({
+      schemaVersion: reportedMeta.schemaVersion!,
+      pipelineId: reportedMeta.pipelineId!,
+      pipelineRunId: reportedMeta.pipelineRunId!,
+      stageId: reportedMeta.stageId!,
+      bindingKind: reportedMeta.bindingKind!,
+      bindingId: reportedMeta.bindingId!,
+      chainId: reportedMeta.chainId!,
+      chainMode: reportedMeta.chainMode!,
+      step: reportedMeta.step!,
+      version: reportedMeta.version,
+      provider: reportedMeta.provider!,
+      model: reportedMeta.model,
+      effort: undefined,
+      sessionMode: reportedMeta.sessionMode,
+      sessionId: reportedMeta.sessionId,
+      parentArtifactIdentity: reportedMeta.parentArtifactIdentity ?? null,
+      inputFingerprint: reportedMeta.inputFingerprint!,
+      resultFingerprint: reportedMeta.resultFingerprint!,
+    });
+    writeArtifactWithMeta(
+      join(testDir, 'docs/dev/impl-v1-fake.md'),
+      '# Implementation Evidence Ledger\n\n| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n| --- | --- | --- | --- | --- |\n| D7 | src/provenance.ts | pnpm test | ✅ | none |\n\n## Requirement Coverage\n\n| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n| --- | --- | --- | --- |\n| effort telemetry | src/state.ts | pnpm test | ✅ |\n\nState overall confidence: 0.99\n',
+      reportedMeta,
+    );
+
+    const config = loadConfig(testDir);
+    const snapshot = scanGlobalSnapshot(testDir, config.manifest);
+    const view = buildProjectSnapshotView(config, snapshot);
+    expect(view.bindings.find(binding => binding.bindingId === 'plan')?.latestEvaluate?.effortStr).toBe('confirmed: high');
+    expect(view.bindings.find(binding => binding.bindingId === 'review')?.latestEvaluate?.effortStr).toBe('requested high → effective max');
+    expect(view.bindings.find(binding => binding.bindingId === 'implement')?.latestTask?.effortStr).toBe('reported: medium (no request)');
   });
 
   it('surfaces unclassified steps and their cause-specific unclassifiedReason in detailed view', () => {
