@@ -4,10 +4,11 @@
 > generic binding engine are the current runtime; `skills.yaml`, hardcoded
 > plan/implement/review stages, fixed verdict words, audit-only continuity
 > flags, filename heuristics, and automatic downstream transitions are removed,
-> not deprecated. `docs/dev/plan.md` is the controlling contract for the active
-> planned issue (currently binding-aware pipeline stage state and lineage); it
-> never overrides the provider, ownership, signal-gate, interruption, timeout,
-> event, logging, or supervisor-compatibility safety invariants in this file.
+> not deprecated. Binding-aware pipeline stage state and lineage landed in the
+> current runtime. `docs/dev/plan.md` is the controlling contract for the active
+> planned issue (currently Batch 4 provider progress telemetry); it never
+> overrides the provider, ownership, signal-gate, interruption, timeout, event,
+> logging, or supervisor-compatibility safety invariants in this file.
 
 orc-smash is a **stateless subprocess harness**: it decides what coding-agent CLI to run, when,
 reads the verdict, and loops. The agents do the LLM work; orc-smash never calls a model API

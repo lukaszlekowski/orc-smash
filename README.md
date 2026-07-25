@@ -7,8 +7,10 @@ invokes it over stdio, validates the declared artifact, and reconstructs state
 from project files. It never calls a model API directly and keeps no runtime
 database.
 
-The active contract is [docs/dev/plan.md](./docs/dev/plan.md). The single v1
-manifest is `config/orc-smash.yaml`, optionally overridden by
+Binding-aware pipeline stage state and lineage are part of the current runtime.
+The active planned contract is Batch 4 provider progress telemetry in
+[docs/dev/plan.md](./docs/dev/plan.md). The single v1 manifest is
+`config/orc-smash.yaml`, optionally overridden by
 `<project>/.orc-smash.yaml` or an explicit `--config <path>` (highest
 precedence). `skills.yaml` and the old fixed workflow are not supported.
 
