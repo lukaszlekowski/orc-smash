@@ -34,6 +34,42 @@ describe('implementation ledger outcomes', () => {
     }
     expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Confidence: 0.95')).kind).toBe('valid');
     expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'State overall confidence: 0.95')).kind).toBe('valid');
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Confidence: **0.95**')).kind).toBe('valid');
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Confidence: _0.95_')).kind).toBe('valid');
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence that the implementation matches the specification: **0.97**.')).kind).toBe('valid');
+    expect(validateImplementLedger(ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence: 0.97.')).kind).toBe('valid');
+  });
+
+  it('ignores unrelated confidence prose and rejects duplicate or conflicting confidence declarations', () => {
+    const withUnrelated = validateImplementLedger(
+      ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence: 0.50\nConfidence in unit-test coverage: 1'),
+    );
+    expect(withUnrelated.kind).toBe('blocked');
+    expect(withUnrelated.confidence).toBe(0.5);
+
+    const duplicateEqual = validateImplementLedger(
+      ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence: 0.95\nOverall confidence: 0.95'),
+    );
+    expect(duplicateEqual.kind).toBe('unknown');
+    expect(duplicateEqual.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-confidence' }),
+    ]));
+
+    const conflictOrder1 = validateImplementLedger(
+      ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence: 0.50\nOverall confidence: 0.95'),
+    );
+    expect(conflictOrder1.kind).toBe('unknown');
+    expect(conflictOrder1.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-confidence' }),
+    ]));
+
+    const conflictOrder2 = validateImplementLedger(
+      ledger(EVIDENCE_TABLE, COVERAGE_TABLE, 'Overall confidence: 0.95\nOverall confidence: 0.50'),
+    );
+    expect(conflictOrder2.kind).toBe('unknown');
+    expect(conflictOrder2.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'malformed-confidence' }),
+    ]));
   });
 
   it.each(['❌', 'blocked', 'failed', 'pending', 'not run', 'skip', 'skipped', 'untested'])(

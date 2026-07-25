@@ -11,6 +11,10 @@ import { scanGlobalSnapshot } from '../src/artifact-index.js';
 import { artifactRecordFromStep, completionEvidenceForStage, validateContinuationParent } from '../src/pipeline-stage-state.js';
 import type { RunEvent } from '../src/run-event.js';
 import { parseArtifactMeta } from '../src/provenance.js';
+import * as artifactContract from '../src/artifact-contract.js';
+import * as interruptedArtifact from '../src/interrupted-artifact.js';
+import * as provenance from '../src/provenance.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 describe('generic one-off task execution', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-implement');
@@ -194,7 +198,7 @@ describe('generic one-off task execution', () => {
       if (match?.[1]) {
         const path = resolve(input.cwd, match[1].trim());
         mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
-        writeFileSync(path, '# Plan Audit\n\n## Verdict\n\nREJECTED (narrow)\n\nReason: one caveat\n');
+        writeFileSync(path, '# Plan Audit\n\n## Verdict\n\nReview summary: one caveat\nREJECTED (narrow)\n');
       }
       return { stdout: 'done', exitCode: 0 };
     });
@@ -252,6 +256,137 @@ describe('generic one-off task execution', () => {
     expect(events.find(event => event.type === 'artifact.verified')).toMatchObject({ result: 'accepted' });
   });
 
+  describe('decision correction failure injection', () => {
+    function correctionLoopOptions(output: ReturnType<typeof createMockOutput>, correctionToken = 'APPROVED') {
+      return {
+        maxIterations: 4,
+        registry: createTestAdapterRegistry(),
+        output,
+        interactive: false,
+        globalOverrides: { agent: 'fake', model: 'fake-model' },
+        decisionCorrection: async (request: { acceptedToken: string }) => ({
+          kind: 'correct' as const,
+          token: correctionToken === 'APPROVED' ? request.acceptedToken : correctionToken,
+        }),
+      };
+    }
+
+    function qualifiedDecisionProvider() {
+      return vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+        const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+        if (match?.[1]) {
+          const path = resolve(input.cwd, match[1].trim());
+          mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+          writeFileSync(path, '# Plan Audit\n\n## Verdict\n\nREJECTED (narrow)\n');
+        }
+        return { stdout: 'done', exitCode: 0 };
+      });
+    }
+
+    it('leaves the untouched active artifact when corrected-body revalidation fails', async () => {
+      const config = loadConfig(tempWorkspace);
+      const loop = config.manifest.loops.plan!;
+      const events: RunEvent[] = [];
+      const output = createMockOutput({ emit: (event: RunEvent) => events.push(event) });
+      const provider = qualifiedDecisionProvider();
+      const classifyOriginal = artifactContract.classifyOutputBody;
+      const classify = vi.spyOn(artifactContract, 'classifyOutputBody');
+      classify.mockImplementation((spec, body, validator) => {
+        const result = classifyOriginal(spec, body, validator);
+        if (body.includes('\nAPPROVED\n')) {
+          return {
+            kind: 'unknown',
+            diagnostics: [{ code: 'injected-revalidation-failure', message: 'Injected corrected-body revalidation failure.' }],
+            detail: 'injected corrected-body revalidation failure',
+          };
+        }
+        return result;
+      });
+
+      const result = await runLoop(
+        tempWorkspace,
+        'plan',
+        loop,
+        config,
+        { 'plan-audit': { agent: 'fake', model: 'fake-model' }, 'plan-follow-up': { agent: 'fake', model: 'fake-model' } },
+        correctionLoopOptions(output),
+      );
+
+      const activePath = join(tempWorkspace, 'docs/dev/plan-audit-v1-fake.md');
+      expect(result.success).toBe(false);
+      expect(result.outcome?.kind).toBe('unknown');
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(readFileSync(activePath, 'utf8')).toContain('REJECTED (narrow)');
+      expect(readFileSync(activePath, 'utf8')).not.toContain('schemaVersion: 1');
+      expect(existsSync(join(tempWorkspace, 'docs/dev/archived'))).toBe(false);
+      expect(events.find(event => event.type === 'decision.unknown')).toMatchObject({
+        type: 'decision.unknown',
+        reason: expect.stringContaining('reclassify'),
+      });
+    });
+
+    it('retains archived raw evidence when quarantine fails after rename', async () => {
+      const config = loadConfig(tempWorkspace);
+      const loop = config.manifest.loops.plan!;
+      const output = createMockOutput();
+      const provider = qualifiedDecisionProvider();
+      const quarantineOriginal = interruptedArtifact.quarantineArtifact;
+      vi.spyOn(interruptedArtifact, 'quarantineArtifact').mockImplementation((projectRoot, artifactPath, options) => {
+        const archived = quarantineOriginal(projectRoot, artifactPath, options);
+        throw new Error(`injected archive failure after rename (${archived.archivedPath})`);
+      });
+
+      const result = await runLoop(
+        tempWorkspace,
+        'plan',
+        loop,
+        config,
+        { 'plan-audit': { agent: 'fake', model: 'fake-model' }, 'plan-follow-up': { agent: 'fake', model: 'fake-model' } },
+        correctionLoopOptions(output),
+      );
+
+      const activePath = join(tempWorkspace, 'docs/dev/plan-audit-v1-fake.md');
+      const archivedFiles = readdirSync(join(tempWorkspace, 'docs/dev/archived'))
+        .filter(file => file.includes('decision-correction'));
+      expect(result.success).toBe(false);
+      expect(result.outcome?.kind).toBe('unknown');
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(existsSync(activePath)).toBe(false);
+      expect(archivedFiles).toHaveLength(1);
+      expect(readFileSync(join(tempWorkspace, 'docs/dev/archived', archivedFiles[0]!), 'utf8')).toContain('REJECTED (narrow)');
+    });
+
+    it('retains archived raw evidence when corrected-body persistence fails', async () => {
+      const config = loadConfig(tempWorkspace);
+      const loop = config.manifest.loops.plan!;
+      const output = createMockOutput();
+      const provider = qualifiedDecisionProvider();
+      vi.spyOn(provenance, 'writeArtifactWithMeta').mockImplementation(() => {
+        throw new Error('injected corrected-body write failure');
+      });
+
+      const result = await runLoop(
+        tempWorkspace,
+        'plan',
+        loop,
+        config,
+        { 'plan-audit': { agent: 'fake', model: 'fake-model' }, 'plan-follow-up': { agent: 'fake', model: 'fake-model' } },
+        correctionLoopOptions(output),
+      );
+
+      const activePath = join(tempWorkspace, 'docs/dev/plan-audit-v1-fake.md');
+      const archivedFiles = readdirSync(join(tempWorkspace, 'docs/dev/archived'))
+        .filter(file => file.includes('decision-correction'));
+      expect(result.success).toBe(false);
+      expect(result.outcome?.kind).toBe('unknown');
+      expect(provider).toHaveBeenCalledTimes(1);
+      expect(existsSync(activePath)).toBe(false);
+      expect(archivedFiles).toHaveLength(1);
+      expect(readFileSync(join(tempWorkspace, 'docs/dev/archived', archivedFiles[0]!), 'utf8')).toContain('REJECTED (narrow)');
+      expect(result.message).toContain('Archived evidence');
+    });
+  });
+
   it('archives a declined qualified decision unchanged and stops unknown', async () => {
     const config = loadConfig(tempWorkspace);
     const loop = config.manifest.loops.plan!;
@@ -298,5 +433,39 @@ describe('generic one-off task execution', () => {
       type: 'decision.unknown',
       reason: expect.stringContaining('Archived evidence'),
     });
+  });
+
+  it('persists a real-format implementation ledger and rescans it as valid and completion-capable', async () => {
+    const config = loadConfig(tempWorkspace);
+    const implPath = join(tempWorkspace, 'docs/dev/impl-v1-codex.md');
+    mkdirSync(join(tempWorkspace, 'docs/dev'), { recursive: true });
+
+    const realLedgerBody =
+      '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+      '| --- | --- | --- | --- | --- |\n' +
+      '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
+      '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
+      '| --- | --- | --- | --- |\n' +
+      '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
+      'Overall confidence that the implementation matches the specification: **0.97**.\n';
+
+    provenance.writeArtifactWithMeta(implPath, realLedgerBody, makeV1ArtifactMeta({
+      bindingId: 'implement',
+      bindingKind: 'task',
+      chainMode: 'ad-hoc',
+      kind: 'task',
+      version: 1,
+      skill: '30-simple-implement',
+      agent: 'codex',
+      model: 'codex-gpt-5',
+      effort: 'high',
+      target: 'docs/dev/plan.md',
+    }));
+
+    const snapshot = scanGlobalSnapshot(tempWorkspace, config.manifest);
+    const step = snapshot.steps.find(s => s.artifactPath.endsWith('impl-v1-codex.md'));
+    expect(step).toBeDefined();
+    expect(step?.contractValid).toBe(true);
+    expect(step?.unclassified).toBe(false);
   });
 });
