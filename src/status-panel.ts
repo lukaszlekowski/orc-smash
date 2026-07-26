@@ -3,6 +3,7 @@ import Table from 'cli-table3';
 import chalk from 'chalk';
 import { formatCompactId, formatDurationMs, formatSessionId, type PanelContext, type ResolvedRunnerDisplay } from './status.js';
 import { resolveTerminalWidth } from './plain-render.js';
+import { formatToolCalls } from './run-event.js';
 import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
 import type { TimelineRow } from './timeline-rows.js';
 import type { Step } from './state.js';
@@ -65,7 +66,7 @@ function renderAlignedTable(
     colWidths,
     style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
     chars: tableChars(),
-    wordWrap: true,
+    wordWrap: false,
   });
   for (const row of rows) table.push(row);
 
@@ -80,7 +81,7 @@ function renderAlignedTable(
       colWidths: emergencyWidths,
       style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
       chars: tableChars(),
-      wordWrap: true,
+      wordWrap: false,
     });
     for (const row of rows) emergency.push(row);
     rendered = emergency.toString();
@@ -197,12 +198,16 @@ function renderInFlightSection(context: PanelContext): string | null {
     `Spawn:            ${emphasisAccent('identity')(context.inFlight.spawnLabel)}`
   ];
 
-  if (context.inFlight.toolCallCount > 0) {
-    detailLines.push(`Tool calls:       ${emphasisAccent('identity')(String(context.inFlight.toolCallCount))}`);
-  }
+  if (context.inFlight.progressCapability === 'unavailable') {
+    detailLines.push('Live progress unavailable for this provider');
+  } else {
+    if (context.inFlight.toolCallCount > 0) {
+      detailLines.push(`Tool calls:       ${emphasisAccent('identity')(formatToolCalls(context.inFlight.toolCallCount))}`);
+    }
 
-  if (context.inFlight.progressMessage) {
-    detailLines.push(`Progress:         ${emphasisAccent('identity')(context.inFlight.progressMessage)}`);
+    if (context.inFlight.progressMessage) {
+      detailLines.push(`Progress:         ${emphasisAccent('identity')(context.inFlight.progressMessage)}`);
+    }
   }
 
   return detailLines.join('\n');
@@ -304,7 +309,7 @@ function renderTimelineSection(context: PanelContext): string {
 
   const head = ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status', 'Artifact', 'Parent', 'Input FP', 'Result FP'];
   const preferred = [5, 10, 13, 22, 14, 16, 8, 10, 11, 9, 9, 9, 9];
-  const minimum = [3, 10, 6, 6, 8, 11, 5, 7, 11, 10, 8, 10, 10];
+  const minimum = [3, 10, 6, 6, 8, 14, 5, 7, 11, 10, 8, 10, 10];
   const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
   const minTableWidth = minimum.reduce((sum, width) => sum + width, 0) + head.length - 1;
 
