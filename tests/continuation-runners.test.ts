@@ -53,7 +53,7 @@ describe('continuation runner seam', () => {
     const registry = createTestAdapterRegistry();
     registry.adapters.set('no-resume', {
       name: 'no-resume',
-      capabilities: { resumeSession: false, effort: true },
+      capabilities: { resumeSession: false, effort: true, progress: 'structured' },
       buildRun: () => ({ command: 'no-resume', args: [] }),
       run: async () => ({ stdout: '', exitCode: 0 }),
     });

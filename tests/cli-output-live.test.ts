@@ -29,7 +29,8 @@ function makeInFlight(kind: StepKind, startedAtMs: number, status: StepStatus = 
     status,
     spawnLabel: 'Spawning opencode for audit v1...',
     toolCallCount: 0,
-    progressMessage: null
+    progressMessage: null,
+    progressCapability: 'structured' as const,
   };
 }
 
@@ -188,7 +189,8 @@ describe('createPanelCliOutput — live region seam', () => {
       status: currentStatus,
       spawnLabel: 'Spawning opencode for audit v1...',
       toolCallCount: 0,
-      progressMessage: 'audit v1'
+      progressMessage: 'audit v1',
+      progressCapability: 'structured'
     }));
 
     // Simulate a lifecycle failure transition (loop.onLifecycle flips status to 'failed')

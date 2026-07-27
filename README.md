@@ -107,7 +107,11 @@ already-classified lineage.
 Providers are opaque native binaries behind `AgentAdapter`. Headless writes
 use each provider's autonomy flag. Watchdogs are config-driven: opencode uses
 `OPENCODE_RUN_TIMEOUT_MS` > `timeouts.opencode` > its 10-minute default;
-claude, codex, and agy default to no watchdog unless configured.
+claude, codex, and agy default to no watchdog unless configured. Progress
+telemetry is an optional adapter capability (`structured` for `opencode`,
+`codex`, and `claude`; `unavailable` for `agy`), carried generically through
+live and plain event views without affecting workflow state or watchdog
+deadlines.
 
 AGY fresh invocations bind the canonical target with `cwd` plus `--new-project`.
 Resumption uses the exact `--project`/`--conversation` pair from its opaque

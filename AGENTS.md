@@ -4,9 +4,9 @@
 > generic binding engine are the current runtime; `skills.yaml`, hardcoded
 > plan/implement/review stages, fixed verdict words, audit-only continuity
 > flags, filename heuristics, and automatic downstream transitions are removed,
-> not deprecated. Binding-aware pipeline stage state and lineage landed in the
-> current runtime. `docs/dev/plan.md` is the controlling contract for the active
-> planned issue (currently Batch 4 provider progress telemetry); it never
+> not deprecated. Binding-aware pipeline stage state, lineage, and provider progress telemetry
+> landed in the current runtime. `docs/dev/plan.md` is the controlling contract for the active
+> planned issue; it never
 > overrides the provider, ownership, signal-gate, interruption, timeout, event,
 > logging, or supervisor-compatibility safety invariants in this file.
 
@@ -120,6 +120,11 @@ itself.
   pattern supplies `{version}` and `{provider}`; model and effort belong in
   provenance, not filenames. Do not hardcode audit/review filename families in
   state detection.
+- **Progress support is an explicit adapter capability (`structured` | `unavailable`):**
+  `opencode`, `codex`, and `claude` declare `structured`; `agy` explicitly declares
+  `unavailable`. Progress is optional provider telemetry (not workflow state or a watchdog)
+  and is carried generically through live and plain event views without affecting state
+  resolution, watchdog deadlines, or artifact output.
 - All agents implement `AgentAdapter` (`buildRun` + `run`). Agents are black boxes — opaque
   native binaries invoked over `stdio + args`. orc-smash never imports them or shares a runtime.
 - Headless agents that must write files require the provider's autonomy flag

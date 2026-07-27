@@ -11,6 +11,8 @@ import type { LifecycleEvent } from '../src/adapter-lifecycle.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import type { RunEvent } from '../src/run-event.js';
+import { renderRunEvent } from '../src/plain-event-renderer.js';
+import { renderStatusPanel } from '../src/status-panel.js';
 
 const tempWorkspace = join(process.cwd(), 'temp-loop-live-test');
 
@@ -34,6 +36,7 @@ beforeEach(() => {
   fakeAdapterState.failAfterMs = undefined;
   fakeAdapterState.exitCode = 0;
   fakeAdapterState.stdout = '';
+  fakeAdapterState.progressCapability = undefined;
 });
 
 afterEach(() => {
@@ -356,6 +359,308 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
     for (const snap of followUpSnapshots) {
       expect(snap.inFlightRole).toBe('implementer');
       expect(snap.nextStepMessage).toContain('review-follow-up');
+    }
+  });
+});
+
+describe('Section 6 focused execution matrix (declarative fake adapters)', () => {
+  it('Row 1: structured capability with progress and unique tool calls', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = [
+      { text: 'command execution', toolCalls: 1 },
+      { text: 'file change', toolCalls: 1 },
+    ];
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const startedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.started' }> => e.type === 'provider.started');
+    expect(startedEvent?.progressCapability).toBe('structured');
+    expect(renderRunEvent(startedEvent!)).toContain('progressCapability=structured');
+
+    const inFlightCtx = captured.rawContexts.find(c => c.inFlight !== null);
+    expect(inFlightCtx?.inFlight?.progressCapability).toBe('structured');
+    expect(inFlightCtx?.inFlight?.toolCallCount).toBe(2);
+
+    const completedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.completed' }> => e.type === 'provider.completed');
+    expect(completedEvent?.toolCalls).toBe(2);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Row 2: structured capability with no messages and zero tool calls', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = [];
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const startedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.started' }> => e.type === 'provider.started');
+    expect(startedEvent?.progressCapability).toBe('structured');
+
+    const inFlightCtx = captured.rawContexts.find(c => c.inFlight !== null);
+    expect(inFlightCtx?.inFlight?.progressCapability).toBe('structured');
+    expect(inFlightCtx?.inFlight?.toolCallCount).toBe(0);
+
+    const completedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.completed' }> => e.type === 'provider.completed');
+    expect(completedEvent?.toolCalls).toBe(0);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Row 3: unavailable capability', async () => {
+    fakeAdapterState.progressCapability = 'unavailable';
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = [];
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const startedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.started' }> => e.type === 'provider.started');
+    expect(startedEvent?.progressCapability).toBe('unavailable');
+    expect(renderRunEvent(startedEvent!)).toContain('progressCapability=unavailable');
+
+    const inFlightCtx = captured.rawContexts.find(c => c.inFlight !== null);
+    expect(inFlightCtx?.inFlight?.progressCapability).toBe('unavailable');
+    const panelStr = renderStatusPanel(inFlightCtx!);
+    expect(panelStr).toContain('Live progress unavailable for this provider');
+    expect(panelStr).not.toContain('Tool calls:');
+
+    const completedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.completed' }> => e.type === 'provider.completed');
+    expect(completedEvent?.toolCalls).toBe(0);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('Row 4: zero-exit malformed structured finalization', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.auditError = { kind: 'server', message: 'Malformed JSON output in stream' };
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const failedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.failed' }> => e.type === 'provider.failed');
+    expect(failedEvent?.errorKind).toBe('server');
+    expect(events.some(e => e.type === 'provider.completed')).toBe(false);
+
+    const failedSnapshot = captured.snapshots.find(s => s.inFlightStatus === 'failed');
+    expect(failedSnapshot).toBeDefined();
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Row 5: nonzero exit', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.auditError = { kind: 'nonzero-exit', message: 'process exited with code 1' };
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const output = {
+      ...createMockOutput(),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const failedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.failed' }> => e.type === 'provider.failed');
+    expect(failedEvent?.errorKind).toBe('nonzero-exit');
+    expect(events.some(e => e.type === 'provider.completed')).toBe(false);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('Row 6: transport precedence (timeout failure)', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.auditError = { kind: 'timeout', message: 'watchdog timeout' };
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const output = {
+      ...createMockOutput(),
+      emit: (event: RunEvent) => events.push(event),
+    };
+
+    const result = await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const failedEvent = events.find((e): e is Extract<RunEvent, { type: 'provider.failed' }> => e.type === 'provider.failed');
+    expect(failedEvent?.errorKind).toBe('timeout');
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('Minor 1 — tool call count cap boundary (999 vs 1000) and narrow terminal width agreement', () => {
+  it('feeds exactly 999 tool calls → panel and terminal event agree on "999" at normal and narrow widths', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = [{ text: 'progress', toolCalls: 999 }];
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (e: RunEvent) => events.push(e),
+    };
+
+    await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const completed = events.find((e): e is Extract<RunEvent, { type: 'provider.completed' }> => e.type === 'provider.completed');
+    expect(completed?.toolCalls).toBe(999);
+
+    const inFlightCtx = captured.rawContexts.find(c => c.inFlight !== null)!;
+
+    const prevCol = process.env.COLUMNS;
+    try {
+      process.env.COLUMNS = '120';
+      const normalPanel = renderStatusPanel(inFlightCtx);
+      expect(normalPanel).toContain('Tool calls:       999');
+      expect(normalPanel).not.toContain('999+');
+
+      process.env.COLUMNS = '40';
+      const narrowPanel = renderStatusPanel(inFlightCtx);
+      expect(narrowPanel).toContain('Tool calls:       999');
+      expect(narrowPanel).not.toContain('999+');
+    } finally {
+      if (prevCol === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = prevCol;
+    }
+  });
+
+  it('feeds exactly 1000 tool calls → panel and terminal event agree on "999+" at normal and narrow widths', async () => {
+    fakeAdapterState.progressCapability = 'structured';
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.lifecycleMessages = [{ text: 'progress', toolCalls: 1000 }];
+
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const events: RunEvent[] = [];
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = {
+      ...makeCapturingPanelOutput(captured),
+      emit: (e: RunEvent) => events.push(e),
+    };
+
+    await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+    });
+
+    const completed = events.find((e): e is Extract<RunEvent, { type: 'provider.completed' }> => e.type === 'provider.completed');
+    expect(completed?.toolCalls).toBe('999+');
+
+    const inFlightCtx = captured.rawContexts.find(c => c.inFlight !== null)!;
+
+    const prevCol = process.env.COLUMNS;
+    try {
+      process.env.COLUMNS = '120';
+      const normalPanel = renderStatusPanel(inFlightCtx);
+      expect(normalPanel).toContain('Tool calls:       999+');
+
+      process.env.COLUMNS = '40';
+      const narrowPanel = renderStatusPanel(inFlightCtx);
+      expect(narrowPanel).toContain('Tool calls:       999+');
+    } finally {
+      if (prevCol === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = prevCol;
     }
   });
 });

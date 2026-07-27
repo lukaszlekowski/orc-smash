@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createOpencodeAdapter } from '../src/adapters/opencode.js';
+import { createCodexAdapter } from '../src/adapters/codex.js';
+import { createClaudeAdapter } from '../src/adapters/claude.js';
 import {
   spawnAgentProcess,
   type ProcessRunner,
@@ -146,22 +148,189 @@ describe('spawnAgentProcess (codex/claude generic helper) — shared lifecycle c
   });
 });
 
-describe('codex/claude adapter → spawnAgentProcess → real lifecycle classification (shared contract)', () => {
-  // The deterministic lifecycle classification for codex/claude is proved in
-  // the `spawnAgentProcess` describe block above (the runner-injection seam
-  // there replaces only the inner `runProcess` binding, so the **real**
-  // `spawnAgentProcess` body — the one `codexAdapter.run` and
-  // `claudeAdapter.run` both call — executes). The adapter-level smoke
-  // tests would require real binary paths and add nondeterminism; the
-  // deterministic coverage above is the single sufficient proof.
-  it('codex adapter.run calls through to spawnAgentProcess (skip — covered by deterministic seam test)', () => {
-    // Documented; not run because it would spawn the real `codex` binary.
-    expect(true).toBe(true);
+describe('codex & claude adapters — adapterFinalized terminal ownership & lifecycle (processRunner injection seam)', () => {
+  describe('codex adapter terminal lifecycle', () => {
+    it('valid stream → started → progress message → completed (exactly 1 completed), stdout set, no error', async () => {
+      const events: LifecycleEvent[] = [];
+      const validStream = [
+        '{"type":"thread.started","thread_id":"sess_codex_999"}',
+        '{"type":"item.created","item":{"id":"t-1","type":"command_execution"}}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"APPROVED\\nAll done."}}',
+      ].join('\n');
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(validStream);
+        return { stdout: validStream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createCodexAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'gpt-5.4',
+        cwd: '/tmp',
+        skillId: 'plan-audit',
+        version: 1,
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.stdout).toBe('APPROVED\nAll done.');
+      expect(result.sessionId).toBe('sess_codex_999');
+
+      const types = events.map(e => e.type);
+      expect(types[0]).toBe('started');
+      expect(types.filter(t => t === 'completed')).toHaveLength(1);
+      expect(types.filter(t => t === 'failed')).toHaveLength(0);
+      expect(types[types.length - 1]).toBe('completed');
+    });
+
+    it('zero-exit malformed / incomplete stream → started → failed (errorKind: server), NO completed event emitted', async () => {
+      const events: LifecycleEvent[] = [];
+      // Missing agent_message on finish
+      const malformedStream = '{"type":"thread.started","thread_id":"sess_codex_999"}\n';
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(malformedStream);
+        return { stdout: malformedStream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createCodexAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'gpt-5.4',
+        cwd: '/tmp',
+        skillId: 'plan-audit',
+        version: 1,
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error?.kind).toBe('server');
+      const types = events.map(e => e.type);
+      expect(types[0]).toBe('started');
+      expect(types.filter(t => t === 'completed')).toHaveLength(0);
+      expect(types.filter(t => t === 'failed')).toHaveLength(1);
+      expect(types[types.length - 1]).toBe('failed');
+      const failed = events.find((e): e is Extract<LifecycleEvent, { type: 'failed' }> => e.type === 'failed');
+      expect(failed?.errorKind).toBe('server');
+    });
+
+    it('resumed session ID mismatch → started → failed (errorKind: server), NO completed event emitted', async () => {
+      const events: LifecycleEvent[] = [];
+      const stream = [
+        '{"type":"thread.started","thread_id":"sess_different"}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"APPROVED"}}',
+      ].join('\n');
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(stream);
+        return { stdout: stream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createCodexAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'gpt-5.4',
+        cwd: '/tmp',
+        skillId: 'plan-audit',
+        version: 1,
+        continuity: { mode: 'resumed', sessionId: 'sess_expected' },
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error?.kind).toBe('server');
+      expect(result.error?.message).toContain('Resumed thread ID mismatch');
+      const types = events.map(e => e.type);
+      expect(types.filter(t => t === 'completed')).toHaveLength(0);
+      expect(types.filter(t => t === 'failed')).toHaveLength(1);
+      const failed = events.find((e): e is Extract<LifecycleEvent, { type: 'failed' }> => e.type === 'failed');
+      expect(failed?.errorKind).toBe('server');
+    });
   });
 
-  it('claude adapter.run calls through to spawnAgentProcess (skip — covered by deterministic seam test)', () => {
-    // Documented; not run because it would spawn the real `claude` binary.
-    expect(true).toBe(true);
+  describe('claude adapter terminal lifecycle', () => {
+    it('valid stream → started → progress message → completed (exactly 1 completed), stdout set, no error', async () => {
+      const events: LifecycleEvent[] = [];
+      const validStream = [
+        '{"type":"system","session_id":"sess_claude_111"}',
+        '{"type":"assistant","session_id":"sess_claude_111","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}',
+        '{"type":"result","session_id":"sess_claude_111","result":"COMPLETED"}',
+      ].join('\n') + '\n';
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(validStream);
+        return { stdout: validStream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createClaudeAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'glm-5.2',
+        cwd: '/tmp',
+        skillId: 'plan-follow-up',
+        version: 1,
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.stdout).toBe('COMPLETED');
+      expect(result.sessionId).toBe('sess_claude_111');
+
+      const types = events.map(e => e.type);
+      expect(types[0]).toBe('started');
+      expect(types.filter(t => t === 'completed')).toHaveLength(1);
+      expect(types.filter(t => t === 'failed')).toHaveLength(0);
+      expect(types[types.length - 1]).toBe('completed');
+    });
+
+    it('zero-exit malformed / incomplete stream → started → failed (errorKind: server), NO completed event emitted', async () => {
+      const events: LifecycleEvent[] = [];
+      // Missing result event on finish
+      const malformedStream = '{"type":"system","session_id":"sess_claude_111"}\n';
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(malformedStream);
+        return { stdout: malformedStream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createClaudeAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'glm-5.2',
+        cwd: '/tmp',
+        skillId: 'plan-follow-up',
+        version: 1,
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error?.kind).toBe('server');
+      const types = events.map(e => e.type);
+      expect(types[0]).toBe('started');
+      expect(types.filter(t => t === 'completed')).toHaveLength(0);
+      expect(types.filter(t => t === 'failed')).toHaveLength(1);
+      expect(types[types.length - 1]).toBe('failed');
+      const failed = events.find((e): e is Extract<LifecycleEvent, { type: 'failed' }> => e.type === 'failed');
+      expect(failed?.errorKind).toBe('server');
+    });
+
+    it('resumed session ID mismatch → started → failed (errorKind: server), NO completed event emitted', async () => {
+      const events: LifecycleEvent[] = [];
+      const stream = [
+        '{"type":"system","session_id":"sess_different"}',
+        '{"type":"result","session_id":"sess_different","result":"COMPLETED"}',
+      ].join('\n') + '\n';
+      const runner: ProcessRunner = async (opts) => {
+        opts.onStdoutChunk?.(stream);
+        return { stdout: stream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+      };
+      const adapter = createClaudeAdapter({ processRunner: runner });
+      const result = await adapter.run({
+        prompt: 'do work',
+        model: 'glm-5.2',
+        cwd: '/tmp',
+        skillId: 'plan-follow-up',
+        version: 1,
+        continuity: { mode: 'resumed', sessionId: 'sess_expected' },
+        onLifecycle: (e) => events.push(e),
+      });
+
+      expect(result.error?.kind).toBe('server');
+      expect(result.error?.message).toContain('Resumed thread ID mismatch');
+      const types = events.map(e => e.type);
+      expect(types.filter(t => t === 'completed')).toHaveLength(0);
+      expect(types.filter(t => t === 'failed')).toHaveLength(1);
+      const failed = events.find((e): e is Extract<LifecycleEvent, { type: 'failed' }> => e.type === 'failed');
+      expect(failed?.errorKind).toBe('server');
+    });
   });
 });
 

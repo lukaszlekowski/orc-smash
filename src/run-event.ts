@@ -4,6 +4,13 @@ export const MAX_PROGRESS_EVENTS = 8;
 export const PROGRESS_MAX_LENGTH = 240;
 export const TOOL_CALL_DISPLAY_CAP = 999;
 
+export function formatToolCalls(count: number | '999+'): string {
+  if (typeof count === 'number' && count > TOOL_CALL_DISPLAY_CAP) {
+    return '999+';
+  }
+  return String(count);
+}
+
 import type { ContractDiagnostic } from './artifact-contract.js';
 
 type RunEventBase = { schemaVersion: typeof SCHEMA_VERSION; atMs: number };
@@ -18,7 +25,7 @@ export type RunEvent =
   | (RunEventBase & { type: 'state.scanned'; latestResult: string; version: number })
   | (RunEventBase & { type: 'iteration.started'; iteration: number; maxIterations: number })
   | (RunEventBase & { type: 'step.started'; kind: string; skillId: string; agent: string; model: string; effort?: string; version: number; message: string })
-  | (RunEventBase & { type: 'provider.started'; agent: string })
+  | (RunEventBase & { type: 'provider.started'; agent: string; progressCapability?: 'structured' | 'unavailable' })
   | (RunEventBase & { type: 'provider.progress'; agent: string; message: string })
   | (RunEventBase & { type: 'provider.completed'; agent: string; toolCalls: number | '999+'; progressEmitted: number; progressSuppressed: number })
   | (RunEventBase & { type: 'provider.failed'; agent: string; errorKind?: string; toolCalls: number | '999+'; progressEmitted: number; progressSuppressed: number })

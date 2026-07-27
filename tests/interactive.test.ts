@@ -255,7 +255,7 @@ describe('Interactive registry selection', () => {
     const testRegistry = createTestAdapterRegistry();
     testRegistry.adapters.set('non-resume-agent', {
       name: 'non-resume-agent',
-      capabilities: { resumeSession: false, effort: false },
+      capabilities: { resumeSession: false, effort: false, progress: 'structured' },
       buildRun: () => ({ command: '', args: [] }),
       run: async () => ({ stdout: '', exitCode: 0 }),
     });

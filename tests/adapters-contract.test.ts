@@ -161,11 +161,11 @@ describe('Real-provider contract tests', () => {
       const filePath = join(tempDir, outputPath);
       expect(existsSync(filePath)).toBe(true);
       const content = readFileSync(filePath, 'utf-8');
-      expect(parseVerdict(content)).toBe('APPROVED');
+      expect(parseVerdict(content)).toBe('accepted');
 
       expect(lifecycleEvents[0]?.type).toBe('started');
       expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
-      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
+      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(true);
     }, 60000);
 
     it.runIf(process.env['CODEX_CONTRACT'] === '1')('continuity contract — resumed session preserves id', async () => {
@@ -193,8 +193,8 @@ describe('Real-provider contract tests', () => {
 
       const file1Path = join(tempDir, outputPath1);
       expect(existsSync(file1Path)).toBe(true);
-      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
-      expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
+      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('retry');
+      expect(parseVerdict(null, result1.stdout)).toBe('unknown');
 
       const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
       const result2 = await codexAdapter.run({
@@ -213,8 +213,8 @@ describe('Real-provider contract tests', () => {
 
       const file2Path = join(tempDir, outputPath2);
       expect(existsSync(file2Path)).toBe(true);
-      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
-      expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('accepted');
+      expect(parseVerdict(null, result2.stdout)).toBe('unknown');
       expect(parseVerdict(null, '')).toBe('unknown');
       expect(parseVerdict(null, 'GARBAGE')).toBe('unknown');
     }, 120000);
@@ -244,11 +244,11 @@ describe('Real-provider contract tests', () => {
       const filePath = join(tempDir, outputPath);
       expect(existsSync(filePath)).toBe(true);
       const content = readFileSync(filePath, 'utf-8');
-      expect(parseVerdict(content)).toBe('APPROVED');
+      expect(parseVerdict(content)).toBe('accepted');
 
       expect(lifecycleEvents[0]?.type).toBe('started');
       expect(lifecycleEvents[lifecycleEvents.length - 1]?.type).toBe('completed');
-      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false);
+      expect(lifecycleEvents.some(e => e.type === 'message')).toBe(true);
     }, 60000);
 
     it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('continuity contract — resumed session preserves id', async () => {
@@ -276,8 +276,8 @@ describe('Real-provider contract tests', () => {
 
       const file1Path = join(tempDir, outputPath1);
       expect(existsSync(file1Path)).toBe(true);
-      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('REJECTED');
-      expect(parseVerdict(null, result1.stdout)).toBe('REJECTED');
+      expect(parseVerdict(readFileSync(file1Path, 'utf-8'))).toBe('retry');
+      expect(parseVerdict(null, result1.stdout)).toBe('unknown');
 
       const prompt2 = `Write exactly the following content to the file "${outputPath2}" and nothing else:\n## Verdict\nAPPROVED\n\nAlso respond to me with "APPROVED".`;
       const result2 = await claudeAdapter.run({
@@ -296,8 +296,8 @@ describe('Real-provider contract tests', () => {
 
       const file2Path = join(tempDir, outputPath2);
       expect(existsSync(file2Path)).toBe(true);
-      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('APPROVED');
-      expect(parseVerdict(null, result2.stdout)).toBe('APPROVED');
+      expect(parseVerdict(readFileSync(file2Path, 'utf-8'))).toBe('accepted');
+      expect(parseVerdict(null, result2.stdout)).toBe('unknown');
     }, 120000);
   });
 
@@ -311,6 +311,19 @@ describe('Real-provider contract tests', () => {
   async function runRealProviderImplementLoopTest(agent: string, model: string) {
     const outputPath = `docs/dev/impl-v1-${agent}.md`;
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    mkdirSync(join(tempDir, 'src'), { recursive: true });
+    mkdirSync(join(tempDir, 'tests'), { recursive: true });
+    writeFileSync(join(tempDir, 'src/x.ts'), 'export const x = 1;\n');
+    writeFileSync(
+      join(tempDir, 'tests/x.test.cjs'),
+      'const assert = require("node:assert/strict");\n'
+      + 'const fs = require("node:fs");\n'
+      + 'assert.match(fs.readFileSync("src/x.ts", "utf8"), /x = 2/);\n',
+    );
+    writeFileSync(
+      join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'test-proj', scripts: { test: 'node tests/x.test.cjs' } }),
+    );
 
     // Write a tiny approved plan fixture
     const planContent =
@@ -322,14 +335,15 @@ describe('Real-provider contract tests', () => {
       '# Plan\n\n' +
       '## Step list\n\n' +
       '### Step 1\n' +
-      `Write exactly the following content to the file "${outputPath}" and nothing else:\n` +
+      'Requirement A: change `src/x.ts` so it exports `x = 2`, then run `pnpm test`. ' +
+      `After the test passes, create and write the file "${outputPath}" with exact content:\n` +
       '# Implementation Evidence Ledger\n\n' +
       '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
       '| --- | --- | --- | --- | --- |\n' +
       '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
       '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
       '| --- | --- | --- | --- |\n' +
-      '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n' +
+      '| Req A | src/x.ts | pnpm test | pass |\n\n' +
       'State overall confidence: 0.95\n';
 
     writeFileSync(join(tempDir, 'docs/dev/plan.md'), planContent);
@@ -339,7 +353,7 @@ describe('Real-provider contract tests', () => {
       '---\n' +
       `loop: plan\n` +
       `skill: plan-audit\n` +
-      `kind: audit\n` +
+      `kind: evaluate\n` +
       `role: auditor\n` +
       `version: 1\n` +
       `agent: ${agent}\n` +
@@ -353,7 +367,10 @@ describe('Real-provider contract tests', () => {
       'APPROVED\n';
     writeFileSync(join(tempDir, `docs/dev/plan-audit-v1-${agent}.md`), auditContent);
 
-    execSync(`git add -f docs/dev/plan.md docs/dev/plan-audit-v1-${agent}.md`, { cwd: tempDir, stdio: 'ignore' });
+    execSync(
+      `git add -f docs/dev/plan.md docs/dev/plan-audit-v1-${agent}.md src/x.ts tests/x.test.cjs package.json`,
+      { cwd: tempDir, stdio: 'ignore' },
+    );
     execSync('git commit -m "add plan and audit"', { cwd: tempDir, stdio: 'ignore' });
 
     const config = loadConfig(tempDir);
@@ -376,6 +393,7 @@ describe('Real-provider contract tests', () => {
     }
     expect(result.success).toBe(true);
     expect(result.lastAuditPath).toContain(outputPath);
+    expect(readFileSync(join(tempDir, 'src/x.ts'), 'utf8')).toBe('export const x = 2;\n');
 
     const filePath = join(tempDir, outputPath);
     expect(existsSync(filePath)).toBe(true);
@@ -383,21 +401,24 @@ describe('Real-provider contract tests', () => {
 
     // Verify provenance and ledger verification standards
     expect(content.startsWith('---\nloop:')).toBe(true);
-    expect(content).toContain(`priorAudit: docs/dev/plan-audit-v1-${agent}.md`);
+    expect(content).toContain('priorAudit: none');
     // Pass the actual content past front matter to ledger verification
     const bodyWithoutFrontMatter = content.replace(/^---[\s\S]+?---\r?\n/, '');
     expect(isCompleteImplementLedger(bodyWithoutFrontMatter)).toBe(true);
 
-    // Verify plan status closeout
+    // The generic task contract owns only its declared implementation ledger.
+    // The implement skill explicitly tells the provider not to edit plan
+    // closeout metadata, so this real-provider contract must not require the
+    // provider to perform an undeclared side effect.
     const updatedPlan = readFileSync(join(tempDir, 'docs/dev/plan.md'), 'utf-8');
-    expect(updatedPlan).toMatch(/^status:\s*done\s*$/m);
-    expect(updatedPlan).toMatch(/## Change Log/);
-    expect(updatedPlan).toMatch(new RegExp(`### Implementation v1-${agent}`));
+    expect(updatedPlan).toBe(planContent);
 
-    // Verify implement artifact has been properly created with provenance
+    // Verify implement artifact has been properly created with generic,
+    // ad-hoc task provenance. A separately created plan audit is not an
+    // automatic parent edge in the config-driven engine.
     const implContent2 = readFileSync(filePath, 'utf-8');
     expect(implContent2.startsWith('---\nloop:')).toBe(true);
-    expect(implContent2).toContain(`priorAudit: docs/dev/plan-audit-v1-${agent}.md`);
+    expect(implContent2).toContain('priorAudit: none');
   }
 
   it('keeps a clean ledger valid while recognizing unresolved evidence as blocked', () => {
@@ -417,17 +438,17 @@ describe('Real-provider contract tests', () => {
   });
 
   describe('implement loop', () => {
-    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('opencode — ledger writing and closeout', async () => {
+    it.runIf(process.env['OPENCODE_CONTRACT'] === '1')('opencode — ledger writing without undeclared plan mutation', async () => {
       const model = process.env['OPENCODE_DEFAULT_MODEL'] || 'opencode-go/deepseek-v4-flash';
       await runRealProviderImplementLoopTest('opencode', model);
     }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
 
-    it.runIf(process.env['CODEX_CONTRACT'] === '1')('codex — ledger writing and closeout', async () => {
+    it.runIf(process.env['CODEX_CONTRACT'] === '1')('codex — ledger writing without undeclared plan mutation', async () => {
       const model = process.env['CODEX_DEFAULT_MODEL'] || 'gpt-5.4-mini';
       await runRealProviderImplementLoopTest('codex', model);
     }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);
 
-    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('claude — ledger writing and closeout', async () => {
+    it.runIf(process.env['CLAUDE_CONTRACT'] === '1')('claude — ledger writing without undeclared plan mutation', async () => {
       const model = process.env['CLAUDE_DEFAULT_MODEL'] || 'glm-4.7';
       await runRealProviderImplementLoopTest('claude', model);
     }, REAL_PROVIDER_IMPLEMENT_TIMEOUT_MS);

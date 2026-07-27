@@ -92,11 +92,20 @@ describe('per-adapter owned-mode environment propagation', () => {
 
   it('terminal mode does NOT use the owned spawn runtime (legacy runner, inherited env)', async () => {
     const { calls } = captureRuntime();
-    const legacyRunner: ProcessRunner = async () => okRaw();
+    const validCodexStream = [
+      '{"type":"thread.started","thread_id":"sess_123"}',
+      '{"type":"item.completed","item":{"id":"msg-1","type":"agent_message","text":"APPROVED"}}',
+    ].join('\n');
+    const legacyRunner: ProcessRunner = async (opts) => {
+      opts.onStdoutChunk?.(validCodexStream);
+      return { stdout: validCodexStream, stderr: '', exitCode: 0, timedOut: false, signal: null, durationMs: 1 };
+    };
     // codex with an injected legacy runner; no ownership, no spawnRuntime.
     const codex = createCodexAdapter({ processRunner: legacyRunner });
-    await codex.run({ prompt: 'p', model: 'm', cwd: '/tmp', skillId: 's', version: 1, kind: 'audit' } as RunInput);
+    const result = await codex.run({ prompt: 'p', model: 'm', cwd: '/tmp', skillId: 's', version: 1, kind: 'audit' } as RunInput);
     expect(calls()).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(result.stdout).toBe('APPROVED');
   });
 
   it('opencode terminal mode does NOT use the owned spawn runtime', async () => {

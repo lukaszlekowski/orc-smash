@@ -1,6 +1,6 @@
 import type { AgentAdapter, RunInput, RunResult } from './types.js';
 import { spawnAgentProcess, resolveCodexTimeoutMs, type ProcessRunner } from './utils.js';
-import { parseCodexJsonOutput } from './codex-json.js';
+import { CodexJsonParser } from './codex-json.js';
 import type { SpawnRuntime } from './process-group.js';
 
 export interface CreateCodexAdapterOptions {
@@ -19,10 +19,9 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'codex',
-    capabilities: { resumeSession: true, effort: true },
+    capabilities: { resumeSession: true, effort: true, progress: 'structured' },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
-      const isContinuity = !!input.continuity;
       const isResumed = input.continuity?.mode === 'resumed';
       
       const args: string[] = [];
@@ -43,9 +42,7 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
         args.push('-c', `model_reasoning_effort=${input.effort}`);
       }
 
-      if (isContinuity) {
-        args.push('--json');
-      }
+      args.push('--json');
 
       args.push(input.prompt);
 
@@ -57,6 +54,15 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
 
     async run(input: RunInput): Promise<RunResult> {
       const { command, args } = this.buildRun(input);
+      const parser = new CodexJsonParser({ agent: this.name, version: input.version });
+
+      const onStdoutChunk = (chunk: string) => {
+        const events = parser.push(chunk);
+        for (const event of events) {
+          input.onLifecycle?.(event);
+        }
+      };
+
       // codex is config-only: timeouts.codex > built-in 0; no env var.
       const result = await spawnAgentProcess(command, args, input.cwd, {
         agent: this.name,
@@ -66,35 +72,55 @@ export function createCodexAdapter(opts: CreateCodexAdapterOptions = {}): AgentA
         onLifecycle: input.onLifecycle,
         timeoutMs: resolveCodexTimeoutMs({ defaultTimeoutMs }),
         spawnRuntime: groupRuntime ?? input.spawnRuntime,
-        ownership: input.ownership
+        ownership: input.ownership,
+        onStdoutChunk,
+        adapterFinalized: true,
       }, processRunner);
 
-      if (input.continuity && !result.error && result.exitCode === 0) {
-        try {
-          const parsed = parseCodexJsonOutput(result.stdout);
-          if (input.continuity.mode === 'resumed' && input.continuity.sessionId) {
-            if (parsed.sessionId !== input.continuity.sessionId) {
-              throw new Error(`Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${parsed.sessionId}`);
-            }
-          }
-          return {
-            ...result,
-            stdout: parsed.assistantText,
-            sessionId: parsed.sessionId
-          };
-        } catch (err: any) {
-          return {
-            ...result,
-            error: {
-              kind: 'server',
-              message: err.message,
-              raw: result.stdout
-            }
-          };
-        }
+      if (result.error || result.exitCode !== 0) {
+        return result;
       }
 
-      return result;
+      try {
+        const parsed = parser.finish();
+        if (input.continuity?.mode === 'resumed' && input.continuity.sessionId) {
+          if (parsed.sessionId !== input.continuity.sessionId) {
+            throw new Error(`Resumed thread ID mismatch: expected ${input.continuity.sessionId}, got ${parsed.sessionId}`);
+          }
+        }
+
+        if (input.onLifecycle && input.version !== undefined) {
+          input.onLifecycle({
+            type: 'completed',
+            agent: this.name,
+            version: input.version,
+            atMs: Date.now(),
+          });
+        }
+
+        return {
+          ...result,
+          stdout: parsed.assistantText,
+          sessionId: parsed.sessionId,
+        };
+      } catch (err: any) {
+        if (input.onLifecycle && input.version !== undefined) {
+          input.onLifecycle({
+            type: 'failed',
+            agent: this.name,
+            version: input.version,
+            errorKind: 'server',
+            atMs: Date.now(),
+          });
+        }
+        return {
+          ...result,
+          error: {
+            kind: 'server',
+            message: err.message,
+          },
+        };
+      }
     }
   };
 }

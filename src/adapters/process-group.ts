@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork, type ChildProcess } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import type { RawProcessResult } from './utils.js';
 import type { SpawnRequest } from './types.js';
 import { registerGroup, confirmGroupClosed } from '../run-ownership.js';
@@ -491,12 +492,29 @@ export class OwnedSpawnRuntime implements SpawnRuntime {
     let stderr = '';
     let settled = false;
     let providerExit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-    group.child.stdout?.on('data', (data: Buffer) => {
-      const chunk = data.toString();
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
+    group.child.stdout?.on('data', (data: Buffer | string) => {
+      const chunk = typeof data === 'string' ? data : stdoutDecoder.write(data);
       stdout += chunk;
       req.onStdoutChunk?.(chunk);
     });
-    group.child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+    group.child.stdout?.on('end', () => {
+      const trailing = stdoutDecoder.end();
+      if (trailing) {
+        stdout += trailing;
+        req.onStdoutChunk?.(trailing);
+      }
+    });
+    group.child.stderr?.on('data', (data: Buffer | string) => {
+      stderr += typeof data === 'string' ? data : stderrDecoder.write(data);
+    });
+    group.child.stderr?.on('end', () => {
+      const trailing = stderrDecoder.end();
+      if (trailing) {
+        stderr += trailing;
+      }
+    });
     const finishResult = async (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;

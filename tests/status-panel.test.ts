@@ -26,7 +26,8 @@ function makeInFlight(kind: StepKind, status: StepStatus = 'running', role?: str
     status,
     spawnLabel: `Spawning opencode for ${kind}...`,
     toolCallCount: 0,
-    progressMessage: null
+    progressMessage: null,
+    progressCapability: 'structured' as const,
   };
 }
 
@@ -466,5 +467,22 @@ describe('renderStatusPanel — interrupted steps render the literal "interrupte
     }));
     expect(out).toContain('Session');
     expect(out).toContain('*e_123');
+  });
+});
+
+describe('renderStatusPanel — unavailable progress capability', () => {
+  it('renders "Live progress unavailable for this provider" line and suppresses Tool calls and Progress lines', () => {
+    const out = renderStatusPanel(makeContext({
+      inFlight: {
+        ...makeInFlight('audit'),
+        agent: 'agy',
+        progressCapability: 'unavailable',
+        toolCallCount: 0,
+        progressMessage: null,
+      }
+    }));
+    expect(out).toContain('Live progress unavailable for this provider');
+    expect(out).not.toContain('Tool calls:');
+    expect(out).not.toContain('Progress:');
   });
 });

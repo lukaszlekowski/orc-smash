@@ -115,7 +115,10 @@ exists only in the test registry. Provider-specific model namespaces,
 autonomy flags, stream parsing, auth detection, watchdog behavior, and session
 arguments stay behind adapters. Continuity is capability-driven by
 `resumeSession`; no provider-name allowlist, `--last`, or shell history is
-used. `agy` explicitly binds fresh runs with `--new-project`, resumes only the
+used. Progress support is declared per-adapter (`capabilities.progress`:
+`structured` | `unavailable`); live activity and tool-call telemetry are optional
+observability and never affect state resolution, watchdog timeouts, or artifact
+output. `agy` explicitly binds fresh runs with `--new-project`, resumes only the
 captured `--project`/`--conversation` pair, and strictly accepts configured
 logical model slugs with separate effort choices. Its opaque
 `agy:v1:<project-uuid>:<conversation-uuid>` token is parsed by the purposeful

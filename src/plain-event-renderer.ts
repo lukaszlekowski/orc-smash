@@ -70,7 +70,7 @@ function fmtEvent(event: RunEvent): string {
     case 'step.started':
       return `${ts} ${lvl} step.started kind=${event.kind} skillId=${quote(event.skillId)} agent=${quote(event.agent)} model=${quote(event.model)} effort=${quote(event.effort ?? 'provider default')} version=${event.version} message=${quote(event.message)}`;
     case 'provider.started':
-      return `${ts} ${lvl} provider.started agent=${quote(event.agent)}`;
+      return `${ts} ${lvl} provider.started agent=${quote(event.agent)}${event.progressCapability ? ` progressCapability=${quote(event.progressCapability)}` : ''}`;
     case 'provider.progress':
       return `${ts} ${lvl} provider.progress agent=${quote(event.agent)} message=${quote(event.message)}`;
     case 'provider.completed':

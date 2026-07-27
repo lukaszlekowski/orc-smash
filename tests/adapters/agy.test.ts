@@ -127,7 +127,7 @@ describe('agy adapter — command construction and capabilities', () => {
     const adapter = createAgyAdapter({ captureDirectory });
     const build = adapter.buildRun(baseInput);
     expect(build.args).not.toContain('--effort');
-    expect(adapter.capabilities).toEqual({ resumeSession: true, effort: true });
+    expect(adapter.capabilities).toEqual({ resumeSession: true, effort: true, progress: 'unavailable' });
   });
 });
 

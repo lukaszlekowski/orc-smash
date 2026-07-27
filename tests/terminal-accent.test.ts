@@ -50,7 +50,8 @@ function makeInFlight(kind: StepKind, status: StepStatus = 'running') {
     status,
     spawnLabel: `Spawning opencode for ${kind}...`,
     toolCallCount: 0,
-    progressMessage: null
+    progressMessage: null,
+    progressCapability: 'structured' as const,
   };
 }
 

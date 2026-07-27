@@ -318,7 +318,8 @@ describe('renderPlainPanel — plain mode is non-live (v10 audit Critical closur
         status: 'running',
         spawnLabel: 'Spawning opencode for follow-up...',
         toolCallCount: 0,
-        progressMessage: 'audit v1'
+        progressMessage: 'audit v1',
+        progressCapability: 'structured'
       },
       timeline: [
         makeStep({ kind: 'audit', role: 'auditor', version: 1, verdict: 'REJECTED' })

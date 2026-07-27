@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { RunInput, RunResult, RunError } from "./types.js";
 import type { LifecycleEvent } from "../adapter-lifecycle.js";
 import type { SpawnRuntime, ProcessGroupHandle } from "./process-group.js";
@@ -157,14 +158,30 @@ export function runProcess(
       }, timeoutMs);
     }
 
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+
     proc.stdout.on("data", (data) => {
-      const chunk = data.toString();
+      const chunk = typeof data === "string" ? data : stdoutDecoder.write(data);
       stdout += chunk;
       options.onStdoutChunk?.(chunk);
     });
+    proc.stdout.on("end", () => {
+      const trailing = stdoutDecoder.end();
+      if (trailing) {
+        stdout += trailing;
+        options.onStdoutChunk?.(trailing);
+      }
+    });
 
     proc.stderr.on("data", (data) => {
-      stderr += data.toString();
+      stderr += typeof data === "string" ? data : stderrDecoder.write(data);
+    });
+    proc.stderr.on("end", () => {
+      const trailing = stderrDecoder.end();
+      if (trailing) {
+        stderr += trailing;
+      }
     });
 
     // Track the live child so an interrupt signal can terminate it (§3).
@@ -369,6 +386,8 @@ export function spawnAgentProcess(
     timeoutMs?: number;
     spawnRuntime?: SpawnRuntime;
     ownership?: OwnershipContext;
+    onStdoutChunk?: (chunk: string) => void;
+    adapterFinalized?: boolean;
   },
   processRunner: ProcessRunner = realProcessRunner,
 ): Promise<RunResult> {
@@ -397,6 +416,7 @@ export function spawnAgentProcess(
       args,
       env: lifecycle.ownership?.env,
       cwd,
+      onStdoutChunk: lifecycle.onStdoutChunk,
     });
     // Production owned path: await the bootstrap registration barrier (`ready`)
     // before `result`, so codex/claude/agy cannot treat the run as active before
@@ -404,7 +424,7 @@ export function spawnAgentProcess(
     // awaited `ready`; the real shared path bypassed it.)
     resultPromise = awaitReadyThenResult(spawnRes);
   } else {
-    resultPromise = processRunner({ command, args, cwd, timeoutMs });
+    resultPromise = processRunner({ command, args, cwd, timeoutMs, onStdoutChunk: lifecycle?.onStdoutChunk });
   }
 
   return resultPromise.then((raw) => {
@@ -446,7 +466,7 @@ export function spawnAgentProcess(
           errorKind: failedKind,
           atMs: Date.now(),
         });
-      } else {
+      } else if (!lifecycle.adapterFinalized) {
         lifecycle.onLifecycle({
           type: "completed",
           agent: lifecycle.agent,

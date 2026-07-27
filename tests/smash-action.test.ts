@@ -43,7 +43,7 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
   let evaluation = 0;
   return {
     name: 'opencode',
-    capabilities: { resumeSession: true, effort: true },
+    capabilities: { resumeSession: true, effort: true, progress: 'structured' },
     buildRun(input: RunInput) {
       return { command: 'scripted-opencode', args: [input.prompt] };
     },
@@ -258,7 +258,7 @@ describe('generic smash dispatch', () => {
       // Mock failure adapter
       const adapter: AgentAdapter = {
         name: 'opencode',
-        capabilities: { resumeSession: true, effort: true },
+        capabilities: { resumeSession: true, effort: true, progress: 'structured' },
         buildRun: () => ({ command: 'scripted-opencode', args: [] }),
         run: async () => ({ stdout: 'failed model run', exitCode: 1 }),
       };
@@ -339,7 +339,7 @@ describe('generic smash dispatch', () => {
     it('Non-interactive mode: provider failure does NOT prompt recovery', async () => {
       const adapter: AgentAdapter = {
         name: 'opencode',
-        capabilities: { resumeSession: true, effort: true },
+        capabilities: { resumeSession: true, effort: true, progress: 'structured' },
         buildRun: () => ({ command: 'scripted-opencode', args: [] }),
         run: async () => ({ stdout: 'failed model run', exitCode: 1 }),
       };
@@ -583,7 +583,7 @@ describe('generic smash dispatch', () => {
       const config = loadConfig(continueProject);
       let evalCalls = 0;
       const evalAdapter: AgentAdapter = {
-        name: 'opencode', capabilities: { resumeSession: true, effort: true },
+        name: 'opencode', capabilities: { resumeSession: true, effort: true, progress: 'structured' },
         buildRun: () => ({ command: 'eval', args: [] }),
         run: async (input) => {
           if (input.kind === 'repair') return { stdout: 'done', exitCode: 0, sessionId: 's' };
@@ -597,7 +597,7 @@ describe('generic smash dispatch', () => {
         },
       };
       const repairAdapter: AgentAdapter = {
-        name: 'codex', capabilities: { resumeSession: true, effort: true },
+        name: 'codex', capabilities: { resumeSession: true, effort: true, progress: 'structured' },
         buildRun: () => ({ command: 'repair', args: [] }),
         run: async (input) => {
           const m = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
@@ -1066,7 +1066,7 @@ describe('generic smash dispatch', () => {
       let executedSkill: string | null = null;
       const t2Adapter: AgentAdapter = {
         name: 'opencode',
-        capabilities: { resumeSession: true, effort: true },
+        capabilities: { resumeSession: true, effort: true, progress: 'structured' },
         buildRun: () => ({ command: 't2-command', args: [] }),
         run: async (input) => {
           executedSkill = input.skillId ?? null;
