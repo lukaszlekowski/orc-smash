@@ -115,7 +115,7 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
     // Adapter that never resolves on its own — only the watcher can end the race.
     const hangAdapter: AgentAdapter = {
       name: 'fake',
-      capabilities: { resumeSession: true, effort: true },
+      capabilities: { resumeSession: true, effort: true, progress: 'structured' },
       buildRun: () => ({ command: 'fake', args: [] }),
       run: () => new Promise<RunResult>(() => {})
     };
@@ -141,7 +141,7 @@ describe('executeLoopStep — lease expiry resolves to an ownership outcome', ()
   it('returns ran when the adapter completes while the lease is still valid', async () => {
     const fastAdapter: AgentAdapter = {
       name: 'fake',
-      capabilities: { resumeSession: true, effort: true },
+      capabilities: { resumeSession: true, effort: true, progress: 'structured' },
       buildRun: () => ({ command: 'fake', args: [] }),
       run: async (): Promise<RunResult> => ({ stdout: 'ok', exitCode: 0 })
     };

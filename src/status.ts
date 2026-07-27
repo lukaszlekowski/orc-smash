@@ -70,6 +70,7 @@ export interface PanelContext {
     parentArtifactIdentity?: string | null;
     inputFingerprint?: string;
     resultFingerprint?: string;
+    progressCapability: 'structured' | 'unavailable';
   } | null;
   latestVersion: number;
   readOnly: boolean;

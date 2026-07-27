@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"redacted-claude-session","model":"glm-5.2[1m]","permissionMode":"bypassPermissions","claude_code_version":"2.1.218"}
+{"type":"assistant","session_id":"redacted-claude-session","uuid":"redacted-assistant-event-1","parent_tool_use_id":null,"message":{"id":"redacted-message-1","type":"message","role":"assistant","model":"glm-5.2","content":[{"type":"tool_use","id":"redacted-tool-1","name":"Bash"}],"stop_reason":null,"stop_sequence":null}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"redacted-claude-session","result":"[REDACTED_ASSISTANT_TEXT]","stop_reason":"end_turn","terminal_reason":"completed"}

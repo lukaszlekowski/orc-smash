@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"redacted-codex-thread"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"redacted-tool-2","type":"command_execution","status":"in_progress","exit_code":null}}
+{"type":"item.completed","item":{"id":"redacted-tool-2","type":"command_execution","status":"completed","exit_code":0}}
+{"type":"item.completed","item":{"id":"redacted-message-2","type":"agent_message","text":"[REDACTED_ASSISTANT_TEXT]"}}
+{"type":"turn.completed"}

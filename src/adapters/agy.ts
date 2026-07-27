@@ -199,7 +199,7 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
 
   return {
     name: 'agy',
-    capabilities: { resumeSession: true, effort: true },
+    capabilities: { resumeSession: true, effort: true, progress: 'unavailable' },
 
     buildRun,
 

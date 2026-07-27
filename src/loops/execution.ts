@@ -168,6 +168,7 @@ export async function executeLoopStep(
       }));
     }
   };
+  const adapter = getAdapter(deps.registry, runner.agent);
   let liveInFlight: NonNullable<PanelContext['inFlight']> | null = {
     kind,
     role: deps.config.manifest.skills[skillId]?.role ?? roleForKind(kind),
@@ -186,6 +187,7 @@ export async function executeLoopStep(
     parentArtifactIdentity,
     inputFingerprint: request.inputFingerprint,
     resultFingerprint: undefined,
+    progressCapability: adapter.capabilities.progress,
   };
 
   const onLifecycle = (event: LifecycleEvent) => {
@@ -321,8 +323,7 @@ export async function executeLoopStep(
       version,
       message: spawnLabel,
     });
-    deps.output.emit(makeRunEvent({ type: 'provider.started', atMs: Date.now(), agent: runner.agent }));
-    const adapter = getAdapter(deps.registry, runner.agent);
+    deps.output.emit(makeRunEvent({ type: 'provider.started', atMs: Date.now(), agent: runner.agent, progressCapability: adapter.capabilities.progress }));
     debugLoopSpawn({ loopName: deps.loopName, skillId, kind, agent: runner.agent, model: runner.model, version, cwd: deps.projectRoot, prompt });
     
     setStepCtx({

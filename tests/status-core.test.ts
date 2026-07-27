@@ -15,7 +15,8 @@ describe('buildPanelContext (data model extension)', () => {
       status: 'running' as const,
       spawnLabel: 'Spawning opencode for audit...',
       toolCallCount: 0,
-      progressMessage: null
+      progressMessage: null,
+      progressCapability: 'structured' as const,
     };
     const ctx = buildPanelContext('/p', 'plan', 'loop', 1, 5, null, [], 'next', inFlight, 1, false);
     expect(ctx.inFlight).toEqual(inFlight);

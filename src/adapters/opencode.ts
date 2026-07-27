@@ -29,7 +29,7 @@ export function createOpencodeAdapter(opts: CreateOpencodeAdapterOptions = {}): 
   const groupRuntime = opts.groupRuntime;
   return {
     name: 'opencode',
-    capabilities: { resumeSession: true, effort: true },
+    capabilities: { resumeSession: true, effort: true, progress: 'structured' },
 
     buildRun(input: RunInput): { command: string; args: string[] } {
       const args = [

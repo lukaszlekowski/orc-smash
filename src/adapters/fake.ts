@@ -14,7 +14,8 @@ export const fakeAdapterState = {
   effectiveEffort: undefined as string | undefined,
   delayMs: undefined as number | undefined,
   lifecycleMessages: [] as Array<{ text: string; toolCalls: number }>,
-  failAfterMs: undefined as number | undefined
+  failAfterMs: undefined as number | undefined,
+  progressCapability: undefined as 'structured' | 'unavailable' | undefined,
 };
 
 function fakeTelemetry(): Pick<RunResult, 'effectiveModel' | 'effectiveEffort'> {
@@ -26,7 +27,13 @@ function fakeTelemetry(): Pick<RunResult, 'effectiveModel' | 'effectiveEffort'> 
 
 export const fakeAdapter: AgentAdapter = {
   name: 'fake',
-  capabilities: { resumeSession: true, effort: true },
+  capabilities: {
+    resumeSession: true,
+    effort: true,
+    get progress() {
+      return fakeAdapterState.progressCapability ?? 'structured';
+    },
+  },
 
   buildRun(input: RunInput) {
     return { command: 'fake', args: [] };

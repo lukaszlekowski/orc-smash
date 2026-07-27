@@ -40,7 +40,7 @@ const mockOutput = createMockOutput();
 function makeFakeAgyAdapter(opts: { authFail: boolean }): AgentAdapter {
   return {
     name: 'agy',
-    capabilities: { resumeSession: true, effort: true },
+    capabilities: { resumeSession: true, effort: true, progress: 'unavailable' },
     buildRun(input: RunInput) {
       return { command: 'agy', args: ['-p', input.prompt, '--model', input.model, '--dangerously-skip-permissions'] };
     },

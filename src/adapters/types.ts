@@ -73,6 +73,7 @@ export interface AgentAdapter {
   capabilities: {
     resumeSession: boolean;
     effort: boolean;
+    progress: 'structured' | 'unavailable';
   };
   buildRun(input: RunInput): { command: string; args: string[] };
   run(input: RunInput): Promise<RunResult>;

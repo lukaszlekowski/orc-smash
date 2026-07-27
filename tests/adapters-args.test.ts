@@ -80,9 +80,10 @@ describe('Adapter arguments builders', () => {
       'my-model-123',
       '--skip-git-repo-check',
       '--dangerously-bypass-approvals-and-sandbox',
+      '--json',
       'My test prompt'
     ]);
-    expect(build.args.includes('--json')).toBe(false);
+    expect(build.args.includes('--json')).toBe(true);
     expect(build.args.includes('--last')).toBe(false);
   });
 
@@ -133,7 +134,8 @@ describe('Adapter arguments builders', () => {
       '--model',
       'my-model-123',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--permission-mode',
       'bypassPermissions'
     ]);
@@ -151,7 +153,8 @@ describe('Adapter arguments builders', () => {
       '--model',
       'my-model-123',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--permission-mode',
       'bypassPermissions'
     ]);
@@ -169,7 +172,8 @@ describe('Adapter arguments builders', () => {
       '--model',
       'my-model-123',
       '--output-format',
-      'json',
+      'stream-json',
+      '--verbose',
       '--permission-mode',
       'bypassPermissions',
       '--resume',
