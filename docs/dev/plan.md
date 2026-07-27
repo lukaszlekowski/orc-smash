@@ -1,438 +1,507 @@
 ---
 status: ready
-confidence: 0.97
+confidence: 0.96
 owners: harness-runtime
 ---
 
-# Batch 4 — Provider Progress Telemetry
+# Batch 5 — Configured Operator Tasks and Local Commit Action
 
 ## Goal and release boundary
 
-Show honest live activity and tool-call information beneath the timeline for
-providers that expose a verified structured stream. OpenCode remains the
-reference implementation; Codex gains a provider-owned streaming parser;
-Claude is a static `structured` target gated by accepted real-stream evidence;
-and AGY is explicitly reported as unsupported until its CLI exposes a stable
-structured stream.
+Make the existing generic task surface clear and useful after an approval by:
 
-This release changes observability only. Telemetry must not affect artifact
-content, output-contract classification, pipeline state, provider success,
-timeouts, interruption, ownership, session continuity, or final response
-parsing.
+1. presenting it as **Tasks** in manifest declaration order; and
+2. adding one configured commit task that can create a verified local commit
+   without hardcoding the textual task ID `commit`.
 
-The existing owner-controlled changes in `config/runners.yaml` are not part of
-this release. Do not overwrite them, stage them with Batch 4, or use their
-session-strategy behavior as telemetry evidence. If they are intended to ship,
-verify and commit them independently.
+The operator remains in control. A commit task never pushes, amends, resets,
+cleans, force-updates, or automatically starts a pipeline stage. After it
+finishes, the interactive application returns to the action surface. An
+eligible **Start suggested stage** action remains separate and unchanged.
 
-## 1. Make progress support an explicit adapter capability
+This batch does not add a general shell-task language, background jobs,
+automatic commits, commit-and-push, hunk selection, pipeline auto-advancement,
+or a second execution engine.
 
-### Design
+## Architecture decision
 
-Extend `AgentAdapter.capabilities` with a closed progress capability such as
-`structured | unavailable`. OpenCode, Codex, and the deterministic fake adapter
-declare `structured`; Claude declares `structured` only after the blocking
-evidence gate in Section 4 has passed; AGY declares `unavailable`. The committed
-capability values are static—runtime probes or environment variables never
-change them.
+### A typed action contract, not a special task name
 
-Resolve this capability before attaching the live panel. Carry it through the
-in-flight display model and the provider-started run event so both the rich
-panel and plain event log describe support consistently. The `provider.started`
-payload (`src/run-event.ts:21`) gains a capability field as an **additive**
-change that does not bump `SCHEMA_VERSION = 1` (`src/run-event.ts:1`);
-`renderRunEvent` (`src/plain-event-renderer.ts:72-73`) prints it only when
-present, so older consumers keep working. The in-flight display model carries
-the same capability explicitly so an *unsupported* provider renders the
-unavailable state from its declaration, not from the absence of messages. During
-an unsupported AGY invocation, keep elapsed time and the spawn label visible and
-show a concise `Live progress unavailable for this provider` state. Absence of
-messages from a supported provider is simply “no activity received yet”; it is
-never a completion or stall signal.
+Extend the task output schema with a discriminated `git-commit` action
+contract. Dispatch is based on the declared contract, never on the binding ID
+or skill ID. Renaming the configured task from `commit` to `checkpoint` must
+preserve identical behavior.
 
-Keep `LifecycleEvent.message` as the provider-neutral delivery surface. New
-provider integrations emit only structured, safe activity labels and
-incremental tool-call counts; OpenCode retains its existing verified lifecycle
-translation. Shared execution remains responsible for sanitization,
-deduplication, length limits, event-rate limits, suppression accounting, and
-the displayed cumulative count. Use one shared display formatter so both the
-live panel and terminal provider events render counts above 999 as `999+`.
+The packaged manifest will declare a normal task binding and skill:
 
-### File impact
+```yaml
+skills:
+  commit:
+    file: skills/commit/SKILL.md
+    role: implementer
+    runnerProfile: implement
 
-- `src/adapters/types.ts` — define the progress capability on the adapter
-  contract.
-- `src/loops/execution.ts`, `src/status.ts`, `src/run-event.ts` — propagate the
-  capability into live and plain output without branching on provider names.
-  `PanelContext['inFlight']` (`src/status.ts:55-73`) gains an explicit
-  `progressCapability: 'structured' | 'unavailable'` field, and `provider.started`
-  (`src/run-event.ts:21`) gains the capability as an additive payload (no
-  `SCHEMA_VERSION` bump).
-- `src/status-panel.ts`, `src/plain-event-renderer.ts` — render the supported or
-  unavailable state. `renderInFlightSection` (`src/status-panel.ts:186-209`)
-  renders the `Live progress unavailable for this provider` line when
-  `progressCapability === 'unavailable'`, driven by the declaration rather than
-  by message absence; `renderRunEvent` prints the capability only when present.
-  A shared status formatter applies the same `999+` tool-count cap to live and
-  terminal presentation.
-- Adapter factories and test adapter fixtures — declare the capability
-  explicitly.
-
-### Verification
-
-- Rich and plain output agree on whether live progress is supported.
-- AGY displays the unsupported state throughout an active invocation without
-  changing its eventual success or failure.
-- A supported provider that emits no message remains running with zero tool
-  calls.
-- Capability handling is generic: a renamed or test adapter receives the same
-  behavior from its declaration alone.
-- A dedicated capability-declaration test (`tests/adapter-capabilities.test.ts`)
-  asserts `adapter.capabilities.progress` for opencode/codex/claude/fake
-  (`structured`) and agy (`unavailable`); a renamed or test adapter with the same
-  declaration receives identical behavior.
-- `tests/run-event.test.ts` covers the additive `provider.started` capability
-  field — the event still parses with `SCHEMA_VERSION = 1`, and a plain-rendered
-  line omits the capability when it is absent.
-- Live and terminal tool counts agree at 999 and 1,000 calls, including at a
-  narrow terminal width.
-
-## 2. Add bounded stream framing and terminal lifecycle ownership
-
-### Design
-
-The ordinary process runner and `OwnedSpawnRuntime` already deliver stdout
-chunks. Thread that existing callback through `spawnAgentProcess`; do not
-redesign process-group ownership. Ensure both raw subprocess paths use a
-stateful UTF-8 decoder so a native buffer boundary cannot corrupt a multibyte
-JSON string before it reaches the JSONL layer.
-
-Add one small, purpose-specific JSONL decoder shared by Codex and Claude with an
-explicit `push(chunk)` / `finish()` contract. `push` retains a bounded partial
-line and emits complete JSON values in order. `finish` processes a valid final
-record without a trailing newline, classifies an incomplete final record as
-malformed, and deterministically discards buffered content. Malformed and
-oversized records return bounded, content-free metadata only: diagnostic code,
-byte count, record ordinal, and a non-content identifier. Raw stream records
-must not enter lifecycle events, rendered output, or `RunError.raw`.
-
-The decoder owns framing only. It must not interpret provider events, emit
-lifecycle events, inspect stderr, or decide whether a run succeeded. Each
-adapter owns its native event schema and converts only verified events to the
-shared lifecycle contract.
-
-Structured finalization also owns the successful terminal lifecycle event.
-Add an explicit `adapter-finalized` terminal mode to `spawnAgentProcess`.
-Transport failures—ownership, spawn, timeout, and nonzero exit—retain their
-current precedence and emit one `failed` event in the shared spawn layer. After
-a zero exit in adapter-finalized mode, the shared layer emits no terminal event:
-the Codex or Claude adapter first calls parser `finish()`, validates the final
-response and session identity, then emits exactly one `completed` or `failed`
-event. A parser failure must never be preceded by `completed`.
-
-### File impact
-
-- `src/adapters/utils.ts` — thread the existing chunk callback through
-  `spawnAgentProcess`, preserve UTF-8 boundaries, and add the explicit
-  adapter-finalized terminal mode.
-- `src/adapters/process-group.ts` — no ownership redesign; make only the narrow
-  UTF-8/chunk parity correction if its existing path fails the shared boundary
-  tests.
-- `src/adapters/jsonl-decoder.ts` — own bounded incremental line framing and
-  content-free decoding diagnostics.
-- `tests/jsonl-decoder.test.ts`, `tests/adapters-lifecycle.test.ts`, and
-  `tests/process-group.runtime.test.ts` — cover framing, terminal ordering, and
-  ordinary/owned chunk parity.
-
-### Verification
-
-- One event split across arbitrary chunks is decoded once after completion.
-- Multiple events in one chunk retain order.
-- Blank lines, CRLF, a valid final record without a newline, and multibyte text
-  split at native buffer boundaries are accepted.
-- An incomplete final record and malformed or oversized records fail closed
-  with bounded metadata; unique sensitive sentinels do not appear in
-  lifecycle/run events, panel/plain output, or `RunError.raw`.
-- Normal and owned subprocess paths deliver identical chunks without changing
-  timeout, signal, or ownership behavior.
-- A zero-exit malformed stream emits one `failed` lifecycle event and no
-  `completed`; a valid stream emits exactly one `completed`.
-
-## 3. Stream Codex telemetry without changing its final contract
-
-### Design
-
-Run every Codex invocation with `codex exec --json`, including
-fresh-per-invocation tasks. Production Codex runs already pass `--json`:
-`src/loops/binding-engine.ts` always resolves `continuity` and threads it into
-`src/loops/execution.ts`, and `src/adapters/codex.ts:46` gates `--json` on
-`!!input.continuity`, so every fresh and resumed production invocation already
-emits `--json` and already returns parsed `assistantText` + `sessionId`. The
-`--json`-always change therefore targets only the `continuity === undefined`
-path (the bare spawn-contract probe and any direct `adapter.run()` without
-continuity) and unifies finalization behind a single incremental parser; it
-does not alter the production final-output contract. Refactor
-`src/adapters/codex-json.ts` into one stateful parser used during execution and
-at finalization so session ID and assistant output are never interpreted by
-separate implementations.
-
-Use only documented structured event types. Capture the exact
-`thread.started.thread_id`; reconstruct final assistant output from completed
-agent-message items as today; count each tool-bearing item once by stable item
-identity; and emit concise activity categories such as command execution, file
-change, or tool use. Do not display commands, tool input/output, reasoning,
-assistant text, or unknown event payloads as progress.
-
-Unknown event types are ignored for telemetry. Malformed framing, duplicate or
-mismatched thread identity, or missing final assistant output retains the
-existing fail-closed adapter error. Session strategy continues to decide
-whether a captured session may be reused; enabling JSON output must not imply
-resumption.
-
-### File impact
-
-- `src/adapters/codex.ts` — request JSONL for every binding kind and feed chunks
-  to the parser; use adapter-finalized terminal lifecycle ownership and emit
-  exactly one terminal event after successful process exit.
-- `src/adapters/codex-json.ts` — own incremental Codex state, progress deltas,
-  unique tool counting, session identity, and final response extraction.
-- `tests/fixtures/` and `tests/codex-json.test.ts` — add captured, redacted Codex
-  streams and chunk-boundary cases.
-- `tests/adapters-args.test.ts` and adapter lifecycle tests — lock the invocation
-  and lifecycle contracts. The codex non-continuity assertions (≈ lines 77-85)
-  flip from `--json` absent (`expect(build.args.includes('--json')).toBe(false)`)
-  to `--json` present (`toBe(true)`), mirroring the §4 Claude
-  `--output-format stream-json` note.
-- `tests/adapters-contract.test.ts` — the env-gated `CODEX_CONTRACT=1` codex
-  "spawn contract" probe (≈ line 168) currently asserts
-  `expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false)`, which
-  breaks once Codex streams progress via `message` events. Flip it to expect ≥1
-  safe progress `message`; the spawn and continuity probes additionally assert
-  session capture and ≥1 safe progress event per §6.
-
-### Verification
-
-- The `assistantText` reconstructed by the incremental finalization parser is
-  byte-identical to the `assistantText` reconstructed for a resumed session — the
-  refactor preserves `parseCodexJsonOutput`'s output
-  (`src/adapters/codex-json.ts`). Separately, the on-disk artifact and
-  `result.stdout` independently classify to the same verdict: they are distinct
-  renderings (the artifact is the provider-written file; `result.stdout` is the
-  assistant message) and are not byte-identical. Output-contract classification
-  reads the on-disk file (`src/loops/binding-engine.ts:316`), and the existing
-  `CODEX_CONTRACT=1` continuity probe asserts `parseVerdict` on the file and on
-  `result.stdout` separately — both reaching the same verdict precisely because
-  the two strings differ.
-- The exact thread ID is captured, and a resumed-ID mismatch remains an error.
-- A tool item repeated across started/updated/completed events increments the
-  displayed count once.
-- Text, reasoning, command contents, and tool payloads never appear in progress.
-- Transport, timeout, nonzero-exit, interruption, and ownership outcomes remain
-  unchanged.
-- A zero-exit stream with malformed framing, duplicate thread identity, resumed
-  identity mismatch, or missing final output emits `failed` and never emits
-  `completed`; the failed in-flight state is observable before live-region
-  detachment.
-
-## 4. Prove and add Claude stream telemetry
-
-### Design
-
-Claude `structured` telemetry is a blocking release target, not a runtime
-choice. Before changing adapter arguments or capability declarations, capture
-and redact representative output from the installed Claude CLI for fresh and
-resumed task, evaluate, and repair invocations. Record the tested CLI version,
-commands, terminal/session/tool event shapes, redaction method, and accepted
-result in `docs/dev/evidence/claude-stream-contract-v1.md`, and commit the
-redacted native streams under `tests/fixtures/`. The installed CLI advertises
-`--output-format stream-json`; use it only with the required non-interactive
-flags proven by that evidence. Do not enable partial-message,
-forwarded-subagent, hook, or debug events unless a fixture proves they are
-needed for the minimal contract.
-
-Replace the single-result parser with one Claude stream parser that captures
-the exact session ID and final `result` response while translating verified
-tool-use events into unique tool-call increments and safe activity categories.
-Ignore thinking deltas, assistant prose, hook bodies, tool input/output,
-subagent text, and unknown events. A resumed session must still match the
-requested session ID.
-
-If the evidence gate cannot prove stable final response, session identity, and
-tool identity for every binding kind, stop Batch 4 as blocked and revise the
-plan before implementation continues. Do not silently ship Claude as
-`unavailable` or enable a partial binding-specific implementation under this
-approved plan.
-
-### File impact
-
-- `src/adapters/claude.ts` — select the proven stream invocation uniformly
-  across task, evaluate, and repair steps, declare the static `structured`
-  capability, and own the terminal lifecycle event after parser finalization.
-- Replace `src/adapters/claude-result.ts` with
-  `src/adapters/claude-stream.ts` once the new parser covers both incremental
-  telemetry and finalization; remove the superseded parser. The removed symbol is
-  `parseClaudeResult`; its replacement is `parseClaudeStream`
-  (`src/adapters/claude-stream.ts`), which must still surface the terminal
-  `result` event so `sessionId` and `assistantText` remain available at
-  finalization.
-- Rename `tests/claude-result.test.ts` → `tests/claude-stream.test.ts`. The
-  existing file exercises `parseClaudeResult` exclusively and is fully
-  obsoleted by the parser swap. The renamed suite covers redacted native event
-  shapes, fresh/resumed session identity, and every binding kind (`task`,
-  `evaluate`, `repair`), plus chunk-boundary cases routed through the shared
-  decoder.
-- `tests/adapters-args.test.ts` — the Claude argument assertions flip from
-  `--output-format json` to `--output-format stream-json`.
-- `tests/adapters-contract.test.ts` — the env-gated `CLAUDE_CONTRACT=1` claude
-  "spawn contract" probe (≈ line 251) currently asserts
-  `expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false)` against
-  a single-object `json` result parsed by `parseClaudeResult`. Under the stream,
-  flip it to expect ≥1 safe progress `message`, and move its result-schema
-  assertions from the `parseClaudeResult` object onto the terminal `result` event
-  exposed by `parseClaudeStream`. The spawn and continuity probes additionally
-  assert session capture and ≥1 safe progress event per §6.
-- `tests/fixtures/` — redacted native stream shapes per binding kind.
-- `docs/dev/evidence/claude-stream-contract-v1.md` — accepted, version-recorded
-  real-CLI evidence required before the static capability change.
-
-### Verification
-
-- Task and approval-loop runs preserve the exact final response and artifact
-  behavior.
-- Fresh and resumed runs capture the exact session ID; mismatch is fail-closed.
-- Tool-use events count once even when repeated in multiple stream records.
-- No partial assistant text, thinking, hook payload, subagent text, tool
-  input/output, or debug content reaches the panel or event log.
-- A failed or incomplete evidence gate blocks implementation before capability
-  or argument changes are made.
-- A zero-exit malformed stream, missing terminal result, or session mismatch
-  emits `failed` and never emits `completed`; valid finalization emits one
-  `completed`.
-
-## 5. Preserve OpenCode and keep AGY capture logs private
-
-### Design
-
-Keep OpenCode's current JSON stream, completion signal, error classification,
-session capture, final-text reconstruction, and tool-call behavior unchanged.
-Its existing lifecycle messages continue through the shared sanitization and
-rate-limiting policy. This is an explicit product decision for Batch 4:
-OpenCode's existing assistant-text progress is retained, while Codex and Claude
-must not introduce assistant prose as a new progress source. Unifying OpenCode
-onto activity-only labels would change currently working behavior and is
-separate future privacy-hardening scope.
-
-Do not tail, parse, persist, or display AGY's private `--log-file` as live
-telemetry. It remains restricted to session discovery and diagnostics and is
-cleaned up under the existing lifecycle. AGY may move from `unavailable` only
-in a later change backed by a stable native structured-output contract.
-
-### File impact
-
-- `src/adapters/opencode-stream.ts`, `src/adapters/opencode.ts` — no behavioral
-  redesign; update only capability declarations or shared-seam integration
-  required by this batch.
-- `src/adapters/agy.ts` — declare telemetry unavailable; preserve capture-log
-  handling.
-- Existing OpenCode and AGY adapter tests — add non-regression assertions.
-
-### Verification
-
-- Existing OpenCode parser, completion, error, continuity, and progress tests
-  pass unchanged.
-- AGY capture-log contents cannot appear in lifecycle messages, run events,
-  panel output, or retained artifacts.
-- AGY auth detection, session discovery, cleanup, timeout, and interruption
-  tests remain green.
-
-## 6. End-to-end verification and documentation
-
-### Design
-
-Use deterministic fixtures as the release gate for framing, provider parsing,
-privacy, lifecycle normalization, panel rendering, and tool-count semantics.
-Add env-gated real-provider probes for Codex and Claude. Each probe must run
-through the actual adapter and assert final output and session capture as well
-as at least one safe progress event when the provider produces a known
-structured activity.
-
-Add one focused execution-level matrix using declarative fake adapters rather
-than duplicating every provider test. It covers:
-
-- structured capability with progress and unique tool calls;
-- structured capability with no messages and zero tool calls;
-- unavailable capability;
-- zero-exit malformed structured finalization;
-- nonzero exit; and
-- one representative timeout or ownership failure proving transport precedence
-  remains unchanged.
-
-For each row, assert the declared capability on `provider.started`, the
-in-flight panel state, plain event rendering, terminal lifecycle ordering,
-bounded tool count, final `provider.completed` or `provider.failed` event, and
-unchanged `RunResult`/artifact outcome. Existing timeout, interruption, and
-ownership suites remain the exhaustive safety gates; do not create a
-provider-by-terminal-path cross product.
-
-Update operator documentation to describe progress as optional provider
-telemetry, not workflow state or a watchdog. Document the capability matrix and
-AGY's intentional unsupported state.
-
-### File impact
-
-- `tests/adapters-contract.test.ts` — the home of the env-gated real-provider
-  Codex (`CODEX_CONTRACT=1`) and Claude (`CLAUDE_CONTRACT=1`) probes this section
-  adds. The codex (≈ line 168) and claude (≈ line 251) "spawn contract" blocks
-  both currently assert
-  `expect(lifecycleEvents.some(e => e.type === 'message')).toBe(false)`, which
-  holds only because today each emits `started`/`completed` alone. Once a
-  structured provider streams progress via `message` lifecycle events, flip each
-  to expect ≥1 safe progress `message`; keep the current shape for any provider
-  left at `unavailable`. Extend the codex/claude spawn and continuity probes to
-  assert session capture and ≥1 safe progress event per §6. The Claude probe
-  additionally follows the `json` object → `stream-json` terminal `result` event
-  transition from §4.
-- `tests/adapters-lifecycle.test.ts`, `tests/loop-live.test.ts`,
-  `tests/execution-panel.test.ts`, `tests/plain-render.test.ts`, and relevant
-  adapter contract tests. The loop/panel suites own the focused execution matrix
-  and verify failed structured finalization remains visible before live-region
-  detachment.
-- `AGENTS.md`, `README.md`, and `docs/architecture/overview.md`.
-
-### Verification
-
-Run:
-
-```text
-pnpm typecheck
-pnpm test
-pnpm build
+tasks:
+  commit:
+    skill: commit
+    target: { path: ".", kind: worktree }
+    artifacts:
+      approval:
+        bindingKind: loop
+        phase: evaluate
+        result: accepted
+        select: latest
+    inputs:
+      - { source: approval }
+      - { source: target }
+    output:
+      contract: git-commit
 ```
 
-Then run the existing env-gated Codex and Claude contract probes from an
-authenticated shell. Manually start one invocation per real provider and
-confirm:
+`git-commit` is a reusable action contract in the same sense that
+`decision-artifact` and `required-artifact` are reusable output contracts. It
+does not make `commit` a reserved task or workflow name.
 
-- OpenCode, Codex, and Claude show their declared progress behavior and correct
-  incremental tool counts;
-- AGY clearly reports live progress unavailable;
-- final artifacts and provenance classify exactly as before;
-- resumed session identity remains correct; and
-- timeout, interruption, ownership, and provider failure still terminate
-  through their existing fail-closed paths.
+### The Git commit is the durable result
 
-## Non-goals
+A provider cannot create the final commit and then receive harness-added
+provenance inside that same commit. Batch 5 therefore does not create a
+repository artifact after the commit.
 
-- Inferring activity from human-formatted stdout/stderr, elapsed silence,
-  terminal escape sequences, debug logs, or provider reasoning.
-- Tailing AGY capture logs or claiming parity without a stable native stream.
-- Exposing commands, prompts, chain-of-thought, tool inputs/outputs, hook
-  bodies, or subagent messages as progress, or using Codex/Claude assistant
-  prose as a new progress source.
-- Persisting live progress as workflow evidence or using it to reconstruct
-  state after restart.
-- Treating missing progress as a stall, failure, completion, or timeout.
-- Changing provider success criteria, artifact contracts, pipeline transitions,
-  model/effort selection, session policy, or watchdog configuration.
-- Reimplementing the already-landed binding-aware pipeline state and lineage
-  release, or bundling the independent `config/runners.yaml` changes.
+Instead:
+
+- the skill returns a strict, bounded commit proposal;
+- the harness validates and displays that proposal;
+- the harness creates one local commit;
+- the resulting Git commit ID is verified against `HEAD`; and
+- compact `Orc-Smash-*` commit trailers preserve the action contract,
+  binding, approved-artifact identity, input fingerprint, and proposal digest.
+
+The verified Git commit object is the durable action result. No hidden runtime
+database, shell-history inference, second evidence commit, Git note, or
+post-commit repository artifact is introduced.
+
+The commit subject/body remain concise and are proposed by the skill. The
+machine trailers are provenance, not agent attribution, and must never contain
+AI-authorship boilerplate.
+
+### Two-phase execution
+
+The action has two phases:
+
+1. **Prepare** — the provider may inspect repository and approval state but may
+   not modify the worktree, index, refs, or remotes. It returns a proposal.
+2. **Finalize** — after validation and operator confirmation, the harness
+   creates and verifies the local commit.
+
+The normal provider adapter, ownership, interruption, timeout, session, and
+runner-selection behavior remains in force during preparation. Git
+finalization is local harness work and does not call a model.
+
+## 1. Extend manifest-declared task inputs and output contracts
+
+### Artifact input selectors
+
+Add an optional `artifacts:` map to `TaskBinding`. Each key is a named input
+source and declares a typed selector over the existing validated artifact
+index:
+
+- `bindingKind`: `loop | task`;
+- optional `bindingId`;
+- optional `phase`: `evaluate | repair | task`;
+- `result`: a normalized result such as `accepted`, `completed`, or `valid`;
+- `select`: `latest` for this release.
+
+An artifact selector resolves only classified, contract-valid v1 artifacts.
+The selected artifact path, identity, and content digest participate in prompt
+composition and the task input fingerprint. An unresolved selector makes the
+task unavailable; it never silently resolves to `none`.
+
+The packaged commit task selects the latest valid accepted loop evaluation.
+This makes it visible after a successful approval without embedding `plan`,
+`review`, or `commit` in TypeScript.
+
+Artifact selectors are task dependencies, not pipeline transitions. Selecting
+one must not consume, replace, or mutate an eligible pipeline edge. The
+selected approval identity is recorded in commit provenance, while the
+approval artifact and pipeline run remain unchanged.
+
+### Discriminated task output
+
+Change `TaskOutputSchema` from one artifact-only shape to a discriminated
+union:
+
+- existing `completion-artifact` and `required-artifact` outputs retain
+  `pattern` and optional `validator` exactly as today;
+- `git-commit` has no repository output pattern or artifact validator.
+
+Manifest validation must reject:
+
+- `pattern` or `validator` on `git-commit`;
+- unknown action contracts;
+- artifact input keys that are unused by `inputs:`;
+- input sources absent from built-ins, `files:`, or `artifacts:`;
+- selectors that reference a missing binding or an impossible phase for that
+  binding kind; and
+- pipeline stages using `git-commit` tasks. The first release keeps
+  operator-action tasks explicitly ad hoc so a commit cannot become an
+  automatic stage transition.
+
+Existing manifests and artifact-producing tasks remain source-compatible.
+
+### File impact
+
+- `src/manifest.ts` — typed artifact selectors and discriminated task outputs.
+- `src/patterns.ts` — validate named artifact sources alongside file sources.
+- `src/prompt-composer.ts`, `src/binding-inputs.ts` — render selected artifact
+  inputs and include their identity/digest in the input fingerprint.
+- `src/project-snapshot-view.ts` and renderer tests — describe artifact inputs
+  and action contracts without reading or printing source contents.
+- `config/orc-smash.yaml` — declare the commit skill and task.
+
+### Verification
+
+- Existing task manifests load without changes.
+- A renamed commit binding still resolves `git-commit`.
+- Invalid/unused artifact selectors fail at manifest load.
+- A missing accepted artifact affects task availability, not manifest
+  validity.
+- Declaration order remains the authoritative task presentation order.
+- An action task cannot be placed in a pipeline in this release.
+
+## 2. Resolve task availability from declared inputs and action preflight
+
+Add one task-availability resolver that combines:
+
+1. existing target/file input availability;
+2. declared artifact selector availability; and
+3. output-contract-owned preflight.
+
+The `git-commit` preflight reports typed unavailable reasons:
+
+- `missing approved artifact`;
+- `clean worktree`;
+- `merge conflict`;
+- `Git repository unavailable`;
+- `HEAD unavailable`;
+- `another Git operation is active`; or
+- `commit scope cannot be isolated`.
+
+The renderer receives only the resolved availability state and reason. It must
+not inspect Git or artifact files itself.
+
+Rename the top-level label **Execute one-off task** to **Tasks**. Keep it
+visible whenever tasks are configured. The task submenu continues to render
+every configured task in manifest declaration order, including unavailable
+items with their precise reason.
+
+After an approval, the accepted artifact selector resolves and the commit task
+becomes available when the Git preflight also finds committable changes.
+**Start suggested stage** remains a separate action beside **Tasks**.
+
+### File impact
+
+- `src/task-availability.ts` — own generic declared-input resolution and action
+  preflight composition.
+- `src/git-commit-action.ts` — own Git-specific read-only preflight.
+- `src/stage-menu.ts`, `src/interactive.ts`, `src/commands/smash.ts` — consume
+  resolved task availability and present **Tasks**.
+- `src/project-snapshot-view.ts`, `src/project-snapshot-renderer.ts` — report
+  task availability and reasons consistently in project status.
+
+### Verification
+
+- **Tasks** is always derived from configured tasks, never from an accepted
+  stage name.
+- Clean, conflicted, and missing-approval states remain visible and disabled
+  with the correct reason.
+- Tasks with only file inputs behave exactly as before.
+- Reordering tasks in YAML reorders the menu and status presentation.
+- Renaming `commit` to `checkpoint` changes only the displayed binding name.
+
+## 3. Add a read-only commit proposal skill
+
+Create `config/skills/commit/SKILL.md`. The skill must:
+
+- inspect branch, `HEAD`, staged, unstaged, untracked, and conflict state;
+- read the declared accepted artifact supplied through prompt inputs;
+- identify a coherent whole-file commit scope;
+- exclude unrelated operator changes;
+- propose a concise subject/body without AI attribution;
+- never run `git add`, `git commit`, `git reset`, `git clean`, `git checkout`,
+  `git restore`, `git push`, or another mutating Git command;
+- never edit or create repository files; and
+- return exactly one bounded `ORC_COMMIT_PROPOSAL_V1` JSON object.
+
+The proposal schema is:
+
+```json
+{
+  "message": "Concise imperative commit message",
+  "paths": ["relative/path-a", "relative/path-b"]
+}
+```
+
+The parser accepts no additional keys. Apply explicit size, path-count, and
+message-length limits. Every path must:
+
+- be project-relative and canonical;
+- remain inside `projectRoot`;
+- identify an existing changed or untracked path;
+- not resolve inside `.git`;
+- contain no NUL or pathspec magic; and
+- represent a whole file. Partial-hunk selection is outside Batch 5.
+
+Before provider execution, record a read-only baseline of `HEAD`, refs, index
+state, remote configuration, and porcelain-v2 worktree status. After provider
+execution, compare the same state. Any provider mutation fails the action
+before confirmation. Do not automatically erase or reset an unexpected
+provider change; report it for operator review.
+
+Unknown/malformed output, empty paths, duplicate paths, a scope containing only
+the action metadata, or a message containing attribution/signature boilerplate
+fails closed without invoking Git commit.
+
+### File impact
+
+- `config/skills/commit/SKILL.md` — provider instructions and proposal
+  contract.
+- `src/commit-proposal.ts` — strict bounded parser and canonical path
+  validation.
+- `src/git-commit-action.ts` — capture and compare the read-only Git baseline.
+- `tests/fixtures/` — deterministic valid and invalid proposal fixtures only;
+  no repository-specific sensitive content.
+
+### Verification
+
+- All four real adapters can return the proposal through their existing final
+  response contract; deterministic fake coverage gates harness logic.
+- Provider mutation during preparation prevents finalization.
+- Malformed JSON, code fences with extra prose, duplicate keys, path escapes,
+  `.git` paths, pathspec magic, empty scope, and oversized output fail closed.
+- A proposal cannot push or commit by placing commands in its message or paths.
+
+## 4. Preview, confirm, and create exactly one local commit
+
+### Operator preview
+
+After proposal validation, render:
+
+- current branch and abbreviated baseline `HEAD`;
+- approved artifact identity;
+- proposed commit message;
+- exact selected paths with their staged/unstaged/untracked status; and
+- unrelated dirty paths that will remain.
+
+Interactive execution then asks **Create local commit** or **Back without
+committing**. Declining performs no Git mutation and returns to the Tasks menu
+or main action surface.
+
+The existing initial task-detail confirmation remains useful for runner and
+contract visibility, but it does not replace this scope preview.
+
+For explicit non-interactive `--task` execution, mutating action contracts must
+fail before provider execution with `interactive confirmation required`.
+Batch 5 does not add a bypass flag.
+
+### Scoped Git finalization
+
+After confirmation:
+
+1. re-run preflight and require the same `HEAD`, approval identity, and selected
+   path states used for the preview;
+2. snapshot the real Git index to an OS-managed temporary file;
+3. use argv-based Git spawning—never shell interpolation;
+4. make newly selected untracked paths known to Git with intent-to-add only;
+5. invoke one normal `git commit --only` over exactly the selected whole-file
+   paths, with the validated message and provenance trailers;
+6. allow normal commit hooks to run;
+7. if Git exits nonzero and `HEAD` is unchanged, atomically restore the exact
+   pre-action index snapshot and leave worktree files untouched;
+8. if Git succeeds, verify the new commit before reporting success; and
+9. remove temporary index material on every terminal path.
+
+The finalizer never runs `push`, `amend`, `reset`, `clean`, force operations,
+or recursive repository cleanup.
+
+Pre-existing staged changes outside the proposal must remain staged and
+byte-identical. Unstaged and untracked paths outside the proposal remain
+untouched. Selected paths are committed as whole working-tree files; ambiguous
+or unisolatable index states fail before mutation.
+
+If a hook fails, no successful result is reported. Hook-created worktree
+changes are reported and preserved for manual review rather than silently
+removed.
+
+### Commit provenance and verification
+
+Append machine trailers to the validated message:
+
+- `Orc-Smash-Action: git-commit-v1`;
+- `Orc-Smash-Binding: <configured task ID>`;
+- `Orc-Smash-Approval: <accepted artifact identity>`;
+- `Orc-Smash-Input: <input fingerprint>`; and
+- `Orc-Smash-Proposal: <proposal digest>`.
+
+After Git returns success, require:
+
+- `HEAD` changed exactly once;
+- the new commit has the baseline `HEAD` as its sole parent;
+- `git rev-parse HEAD` equals the reported commit ID;
+- the commit contains exactly the selected paths;
+- all expected trailers match the prepared action;
+- no remote was contacted;
+- the accepted artifact content/identity is unchanged; and
+- unrelated dirty paths retain their pre-action state.
+
+Only then emit task completion. Report the full commit ID and remaining dirty
+paths. A verification mismatch is a terminal blocked/unknown action result and
+must never be described as success.
+
+### File impact
+
+- `src/task-actions.ts` — dispatch typed action contracts independently of task
+  IDs and keep the binding engine thin.
+- `src/git-commit-action.ts` — proposal preflight, preview model, scoped commit,
+  index transaction, and post-commit verification.
+- `src/interactive.ts` — action preview and final confirmation.
+- `src/commands/smash.ts` — route action tasks and return to the existing
+  interactive action loop.
+- `src/run-event.ts`, plain/rich renderers — additive prepared, declined,
+  committed, and failed action events with no raw proposal payloads.
+
+### Verification
+
+- Selecting the task and confirming produces exactly one local commit.
+- Declining after preview produces no commit and no Git/index mutation.
+- Hooks run normally; a failing hook produces no false success.
+- Conflicts and concurrent `HEAD`/index drift stop before commit.
+- Unrelated staged, unstaged, and untracked changes remain unchanged.
+- Selected tracked and untracked whole files can be committed together.
+- Shell metacharacters in paths/messages are data, never executable syntax.
+- The verified commit ID equals `HEAD` and is printed in rich and plain modes.
+- The worktree is not dirty solely because orc-smash recorded action evidence.
+
+## 5. Preserve pipeline and stateless harness behavior
+
+The commit action is deliberately outside pipeline progression:
+
+- it does not mint a pipeline run;
+- it does not create or consume a stage-continuation edge;
+- it does not modify an accepted artifact;
+- it does not change the accepted target fingerprint;
+- it does not start implementation or review; and
+- it returns to the action surface after completion.
+
+The previously eligible pipeline candidate must remain eligible when the
+commit does not alter that candidate's target. In the packaged plan pipeline,
+committing an approved `docs/dev/plan.md` and its audit evidence therefore does
+not invalidate the plan-to-implementation suggestion.
+
+The Git commit and its trailers are sufficient durable evidence for this
+operator action. Artifact indexing and approval/pipeline state reconstruction
+continue to use workflow artifacts exactly as before. Batch 5 does not add
+Git-log-derived pipeline state.
+
+Interruption rules:
+
+- interruption during provider preparation uses the existing provider
+  interruption/ownership path and cannot commit;
+- interruption before final confirmation cannot commit;
+- once `git commit` starts, wait for its process result and verify `HEAD`;
+- on restart, the repository's actual `HEAD` is authoritative—never retry a
+  commit automatically.
+
+### Verification
+
+- Plan-to-implementation eligibility is identical before and after a commit
+  when `docs/dev/plan.md` content is unchanged.
+- Commit execution never creates a downstream stage or second-opinion chain.
+- Restart does not repeat or resume the commit action.
+- Existing approval loops, ordinary tasks, second opinions, and stage
+  continuations remain unchanged.
+
+## 6. Tests, documentation, and release gates
+
+### Deterministic coverage
+
+Add deterministic temporary-repository tests for:
+
+- manifest parsing and invalid action declarations;
+- named accepted-artifact selection and missing-input availability;
+- manifest-order Tasks presentation;
+- clean/conflict/active-operation/unavailable reasons;
+- strict proposal parsing and path containment;
+- provider read-only baseline enforcement;
+- preview decline with zero mutation;
+- tracked, staged, unstaged, and untracked whole-file commits;
+- preservation of unrelated staged/unstaged/untracked changes;
+- hook failure and index restoration;
+- concurrent `HEAD` or index drift;
+- commit ID, parent, diff scope, and trailer verification;
+- dirty-state reporting after success;
+- no `push`, `amend`, `reset`, `clean`, or shell execution;
+- renamed task ID behavior;
+- no post-commit evidence dirtiness; and
+- unchanged pipeline candidate eligibility.
+
+Use isolated temporary Git repositories with local hooks. No test may modify
+the developer's real repository, global Git configuration, remotes, or
+credentials.
+
+### Real-provider boundary
+
+The commit mutation itself is deterministic harness behavior and does not need
+four providers to create real commits. Env-gated provider tests only need to
+prove that each selected real provider can inspect an isolated repository and
+return a valid read-only proposal without mutating it. The fake adapter gates
+proposal/finalizer logic.
+
+Retain the existing real-provider policy:
+
+- Codex and Claude through authenticated env-gated contracts;
+- OpenCode through its existing env-gated contract; and
+- AGY through deterministic seam coverage plus manual authenticated
+  verification.
+
+### Documentation
+
+Update:
+
+- `AGENTS.md` — typed operator-action contract, commit safety boundary, and
+  Git commit as durable result;
+- `README.md` — **Tasks** flow, availability, confirmation, local-only
+  behavior, and CLI limitation;
+- `docs/architecture/overview.md` — artifact selectors, action dispatch, and
+  separation from pipelines; and
+- packaged manifest/skill documentation.
+
+### Release gate
+
+Before Batch 5 is complete:
+
+1. `pnpm typecheck`
+2. `pnpm test`
+3. `pnpm build`
+4. deterministic temporary-repository commit matrix passes;
+5. env-gated read-only proposal probes pass where authenticated;
+6. manual interactive smoke:
+   approval → Tasks → commit preview → confirm → local commit → return to menu;
+7. verify no push occurred and unrelated changes remain;
+8. verify **Start suggested stage** remains eligible; and
+9. run the implementation review loop to `APPROVED`.
+
+## Completion criteria
+
+Batch 5 is complete only when:
+
+- configured tasks are presented as **Tasks** in manifest order;
+- the configured commit task is available from declared approval and Git
+  state, without task-ID branching;
+- the operator sees exact scope before mutation;
+- confirmation creates one verified local commit and never pushes;
+- decline, conflicts, hooks, malformed proposals, or drift fail safely;
+- unrelated changes remain untouched and reported;
+- no post-commit evidence change dirties the repository;
+- pipeline identity and candidate eligibility remain unchanged; and
+- all deterministic, build, provider-boundary, smoke, and review gates pass.
