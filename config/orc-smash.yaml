@@ -45,6 +45,25 @@ skills:
     runnerProfile: follow-up
 
 loops:
+  research:
+    type: approval-loop
+    target: { path: docs/dev/research.md, kind: file }
+    inputs:
+      - { source: target }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    evaluate:
+      skill: research-audit
+      output:
+        pattern: "docs/dev/research-audit-v{version}-{provider}.md"
+        contract: decision-artifact
+        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
+    repair:
+      skill: research-follow-up
+      output:
+        pattern: "docs/dev/research-followup-v{version}-{provider}.md"
+        contract: completion-artifact
   plan:
     type: approval-loop
     target: { path: docs/dev/plan.md, kind: file }
@@ -86,27 +105,22 @@ loops:
       output:
         pattern: "docs/dev/review-followup-v{version}-{provider}.md"
         contract: completion-artifact
-  research:
-    type: approval-loop
-    target: { path: docs/dev/research.md, kind: file }
+
+tasks:
+  create-plan:
+    skill: 23-simple-create-plan
+    target: { path: ".", kind: worktree }
+    files:
+      researchPath: docs/dev/research.md
     inputs:
+      - { source: researchPath }
       - { source: target }
       - { source: version }
       - { source: priorArtifact }
       - { source: outputPath }
-    evaluate:
-      skill: research-audit
-      output:
-        pattern: "docs/dev/research-audit-v{version}-{provider}.md"
-        contract: decision-artifact
-        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
-    repair:
-      skill: research-follow-up
-      output:
-        pattern: "docs/dev/research-followup-v{version}-{provider}.md"
-        contract: completion-artifact
-
-tasks:
+    output:
+      pattern: "docs/dev/create-plan-v{version}-{provider}.md"
+      contract: completion-artifact
   implement:
     skill: 30-simple-implement
     target: { path: ".", kind: worktree }
@@ -130,20 +144,6 @@ tasks:
       - { source: outputPath }
     output:
       pattern: "docs/dev/commit-v{version}-{provider}.md"
-      contract: completion-artifact
-  create-plan:
-    skill: 23-simple-create-plan
-    target: { path: ".", kind: worktree }
-    files:
-      researchPath: docs/dev/research.md
-    inputs:
-      - { source: researchPath }
-      - { source: target }
-      - { source: version }
-      - { source: priorArtifact }
-      - { source: outputPath }
-    output:
-      pattern: "docs/dev/create-plan-v{version}-{provider}.md"
       contract: completion-artifact
 
 pipelines:
