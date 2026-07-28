@@ -109,7 +109,7 @@ export async function promptTaskDetailConfirmation(detail: TaskDetailView): Prom
     for (const candidate of detail.eligiblePipelineCandidates) {
       console.log(`    ${candidate.pipelineId}: ${candidate.predecessorStageId} → ${candidate.successorStageId}`);
     }
-    console.log('  This task does not advance the pipeline and may invalidate that suggestion.');
+    console.log('  This task does not consume the pipeline continuation listed above and may invalidate it.');
     console.log('  If invalidated, the next stage must be run ad hoc.');
   }
   console.log('');
