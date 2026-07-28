@@ -310,6 +310,15 @@ function renderTimelineSection(context: PanelContext): string {
   const head = ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status', 'Artifact', 'Parent', 'Input FP', 'Result FP'];
   const preferred = [5, 10, 13, 22, 14, 16, 8, 10, 11, 9, 9, 9, 9];
   const minimum = [3, 10, 6, 6, 8, 14, 5, 7, 11, 10, 8, 10, 10];
+  const coreHead = head.slice(0, 9);
+  const corePreferred = preferred.slice(0, 9);
+  const coreMinimum = minimum.slice(0, 9);
+  const coreRows = rows.map(row => row.slice(0, 9));
+
+  if (context.showFingerprints !== true) {
+    return renderAlignedTable(coreHead, coreRows, corePreferred, coreMinimum);
+  }
+
   const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
   const minTableWidth = minimum.reduce((sum, width) => sum + width, 0) + head.length - 1;
 
@@ -317,10 +326,6 @@ function renderTimelineSection(context: PanelContext): string {
     return renderAlignedTable(head, rows, preferred, minimum);
   }
 
-  const coreHead = head.slice(0, 9);
-  const corePreferred = preferred.slice(0, 9);
-  const coreMinimum = minimum.slice(0, 9);
-  const coreRows = rows.map(row => row.slice(0, 9));
   const table = renderAlignedTable(coreHead, [], corePreferred, coreMinimum);
   const rowBlocks = coreRows.map((row, index) => {
     const rowText = renderAlignedTable([], [row], corePreferred, coreMinimum);

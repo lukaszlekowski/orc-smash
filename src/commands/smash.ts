@@ -60,6 +60,7 @@ export interface SmashOptions {
   debugSpawnFile?: string;
   output: CliOutput;
   plain?: boolean;
+  showFingerprints?: boolean;
   runner?: string[];
   runnerModel?: string[];
   runnerEffort?: string[];
@@ -478,7 +479,7 @@ async function runInteractiveBindingSelection(
 
     // Display pipeline and project state → render detailed snapshot, wait for acknowledgement, return to menu
     if (topActionId === 'display-status') {
-      renderStatusPanel(projectRoot, config, options.output);
+      renderStatusPanel(projectRoot, config, options.output, { showFingerprints: options.showFingerprints === true });
       await promptStatusAcknowledgement();
       continue;
     }
@@ -889,6 +890,7 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
           interactive: setup.isInteractive,
           registry: setup.registry,
           output: options.output,
+          showFingerprints: options.showFingerprints === true,
           ownership,
           runnerOverrides: setup.runnerOverrides,
           runContext: setup.runContext,

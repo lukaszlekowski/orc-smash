@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import chalk from 'chalk';
 import { renderStatusPanel } from '../src/status-panel.js';
+import { resolveTerminalWidth } from '../src/plain-render.js';
 import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type Step, type StepKind, type StepStatus } from '../src/state.js';
@@ -334,6 +335,7 @@ describe('renderStatusPanel — bounded tables and compact identities', () => {
     process.env.COLUMNS = '160';
     try {
       const out = renderStatusPanel(makeContext({
+        showFingerprints: true,
         timeline: [makeRow({
           artifactIdentity: 'a'.repeat(64),
           parentArtifactIdentity: 'b'.repeat(64),
@@ -350,6 +352,109 @@ describe('renderStatusPanel — bounded tables and compact identities', () => {
       expect(out).toContain('*bbbbb');
       expect(out).toContain('*ccccc');
       expect(out).toContain('*ddddd');
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('hides diagnostic columns and values by default on a wide terminal', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '160';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          artifactIdentity: 'a'.repeat(64),
+          parentArtifactIdentity: 'b'.repeat(64),
+          inputFingerprint: 'c'.repeat(64),
+          resultFingerprint: 'd'.repeat(64),
+          decision: 'accepted',
+        })],
+      }));
+      expect(out).toContain('Ver');
+      expect(out).toContain('Status');
+      expect(out).not.toContain('Artifact');
+      expect(out).not.toContain('Parent');
+      expect(out).not.toContain('Input FP');
+      expect(out).not.toContain('Result FP');
+      expect(out).not.toContain('*aaaaa');
+      expect(out).not.toContain('*bbbbb');
+      expect(out).not.toContain('*ccccc');
+      expect(out).not.toContain('*ddddd');
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('hides diagnostic columns and compact identity lines by default on a narrow terminal without overflow', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '80';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          artifactIdentity: 'a'.repeat(64),
+          parentArtifactIdentity: 'b'.repeat(64),
+          inputFingerprint: 'c'.repeat(64),
+          resultFingerprint: 'd'.repeat(64),
+          decision: 'accepted',
+        })],
+        inFlight: {
+          ...makeInFlight('audit'),
+          artifactIdentity: 'e'.repeat(64),
+          parentArtifactIdentity: 'f'.repeat(64),
+          inputFingerprint: 'g'.repeat(64),
+          resultFingerprint: 'h'.repeat(64),
+        },
+      }));
+      const plain = out.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+      expect(plain).not.toContain('Artifact');
+      expect(plain).not.toContain('Parent');
+      expect(plain).not.toContain('Input FP');
+      expect(plain).not.toContain('Result FP');
+      expect(plain).not.toContain('artifact *aaaaa');
+      expect(plain).not.toContain('artifact *eeeee');
+      expect(Math.max(...plain.split('\n').map(line => line.length))).toBeLessThanOrEqual(resolveTerminalWidth());
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('keeps all four diagnostics in one compact line per row when enabled on a narrow terminal', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '80';
+    try {
+      const out = renderStatusPanel(makeContext({
+        showFingerprints: true,
+        timeline: [makeRow({
+          artifactIdentity: 'a'.repeat(64),
+          parentArtifactIdentity: 'b'.repeat(64),
+          inputFingerprint: 'c'.repeat(64),
+          resultFingerprint: 'd'.repeat(64),
+          decision: 'accepted',
+        })],
+        inFlight: {
+          ...makeInFlight('audit'),
+          artifactIdentity: 'e'.repeat(64),
+          parentArtifactIdentity: 'f'.repeat(64),
+          inputFingerprint: 'g'.repeat(64),
+          resultFingerprint: 'h'.repeat(64),
+        },
+      }));
+      const plain = out.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+      expect(plain).toContain('Ver');
+      expect(plain).toContain('Status');
+      expect(plain.match(/artifact \*\w{5}  parent/g)).toHaveLength(2);
+      expect(plain).toContain('*aaaaa');
+      expect(plain).toContain('*bbbbb');
+      expect(plain).toContain('*ccccc');
+      expect(plain).toContain('*ddddd');
+      expect(plain).toContain('*eeeee');
+      expect(plain).toContain('*fffff');
+      expect(plain).toContain('*ggggg');
+      expect(plain).toContain('*hhhhh');
+      expect(Math.max(...plain.split('\n').map(line => line.length))).toBeLessThanOrEqual(resolveTerminalWidth());
     } finally {
       if (previous === undefined) delete process.env.COLUMNS;
       else process.env.COLUMNS = previous;

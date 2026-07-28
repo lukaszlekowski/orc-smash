@@ -18,6 +18,7 @@ export interface LoopOptions {
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
+  showFingerprints?: boolean;
   ownership?: OwnershipContext | null;
   runnerOverrides?: RunnerOverrideMap;
   runContext?: RunContext;

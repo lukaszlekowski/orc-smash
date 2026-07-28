@@ -13,6 +13,7 @@ export interface StatusOptions {
   output: CliOutput;
   all?: boolean;
   loop?: string;
+  showFingerprints?: boolean;
 }
 
 export async function statusAction(options: StatusOptions): Promise<CommandResult> {
@@ -48,11 +49,11 @@ export function renderStatusPanel(
   projectRoot: string,
   config: Config,
   output: CliOutput,
-  _opts?: { loop?: string; all?: boolean },
+  opts?: { showFingerprints?: boolean },
 ): void {
   const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
   const view = buildProjectSnapshotView(config, snapshot);
-  const text = renderDetailedSnapshot(view);
+  const text = renderDetailedSnapshot(view, { showFingerprints: opts?.showFingerprints === true });
   output.writeStatic(text);
 }
 
@@ -65,6 +66,6 @@ async function renderStatus(projectRoot: string, config: Config, options: Status
     return { exitCode: 1, message: msg };
   }
 
-  renderStatusPanel(projectRoot, config, options.output, { loop: options.loop, all: options.all });
+  renderStatusPanel(projectRoot, config, options.output, { showFingerprints: options.showFingerprints === true });
   return { exitCode: 0 };
 }

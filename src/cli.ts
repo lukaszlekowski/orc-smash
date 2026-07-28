@@ -39,6 +39,7 @@ export function buildProgram(): Command {
     .command('smash')
     .description('Run a configured loop, task, or pipeline stage against a target project')
     .option('-p, --project <path>', 'Path to the target project')
+    .option('--show-fingerprints', 'Show artifact lineage and input/result fingerprints')
     .option('-l, --loop <loop-name>', 'Loop name to run (ad-hoc start)')
     .option('-t, --task <task-id>', 'Task ID to run (ad-hoc start, mutually exclusive with --loop and --pipeline)')
     .option('--pipeline <pipeline-id>', 'Pipeline ID to start at first stage')
@@ -64,6 +65,7 @@ export function buildProgram(): Command {
     .command('status')
     .description('Read-only: detect project state and render status panel')
     .option('-p, --project <path>', 'Path to the target project')
+    .option('--show-fingerprints', 'Show artifact lineage and input/result fingerprints')
     .option('-a, --all', 'Show artifacts across all loops')
     .option('--config <path>', 'Path to config file (orc-smash.yaml)')
     .action(async (options) => {

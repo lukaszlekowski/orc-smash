@@ -28,6 +28,7 @@ export interface LoopExecutionDeps {
   config: Config;
   registry: AgentRegistry;
   output: CliOutput;
+  showFingerprints?: boolean;
   steps: Step[];
   maxIterations: number;
   ownership?: OwnershipContext | null;
@@ -266,7 +267,8 @@ export async function executeLoopStep(
         false,
         resolvedRunnersList,
         deps.providerCallCount?.value,
-        activeInvocation
+        activeInvocation,
+        deps.showFingerprints,
       );
     });
   }

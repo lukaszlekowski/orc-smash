@@ -112,6 +112,16 @@ source for results, availability, emphasis, roles, and lifecycle states.
 and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model
 without performing any filesystem reads or prompt content calls.
 
+`--show-fingerprints` is a run-scoped presentation choice owned by `cli.ts`.
+`commands/smash.ts` carries it through the generic loop/task executor and
+`loops/execution.ts` captures it in the live `PanelContext`; `status-panel.ts`
+projects the complete timeline data into either the nine-column operational
+table or the enabled diagnostic representation. `commands/status.ts` passes
+the same choice as a render option to `project-snapshot-renderer.ts`, while
+`ProjectSnapshotView` remains state-only. Semantic eligibility, drift, and
+missing-evidence reasons are rendered in both modes, and plain events do not
+consume or expose this presentation choice.
+
 Task confirmation consumes the eligible-candidate portion of this view model
 from the same Tasks-boundary scan. It does not poll again during runner
 selection or immediately before provider execution. A task may change the

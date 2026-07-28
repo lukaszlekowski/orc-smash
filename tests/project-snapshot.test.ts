@@ -31,13 +31,13 @@ describe('Project Snapshot View and Renderer (Slice 3)', () => {
 
     expect(view.projectRoot).toBe(config.projectRoot);
     expect(view.configPath).toBe(config.manifestPath);
-    expect(view.suggestedLoop).toBe('plan');
+    expect(view.suggestedLoop).toBe('research');
     expect(view.suggestedLoopReason).toContain('no valid in-progress loop');
 
     const compactText = renderCompactSnapshot(view);
     expect(compactText).toContain('Project:');
     expect(compactText).toContain('Config:');
-    expect(compactText).toContain('Suggested loop: plan');
+    expect(compactText).toContain('Suggested loop: research');
     expect(compactText).toContain('Bindings:');
     expect(compactText).toContain('[loop] plan');
     expect(compactText).toContain('evaluate: (none)');

@@ -11,7 +11,9 @@ describe('CLI contract', () => {
   });
 
   it('exposes generic binding and runner options without legacy continuity flags', () => {
-    const smash = buildProgram().commands.find(command => command.name() === 'smash')!;
+    const program = buildProgram();
+    const smash = program.commands.find(command => command.name() === 'smash')!;
+    const status = program.commands.find(command => command.name() === 'status')!;
     const flags = smash.options.map(option => option.long);
     expect(flags).toEqual(expect.arrayContaining([
       '--loop',
@@ -21,6 +23,18 @@ describe('CLI contract', () => {
       '--effort',
       '--runner-effort',
     ]));
+    for (const command of [smash, status]) {
+      const option = command.options.find(candidate => candidate.long === '--show-fingerprints');
+      expect(option).toBeDefined();
+      expect(option!.flags).toBe('--show-fingerprints');
+      expect(option!.required).toBe(false);
+      expect(option!.optional).toBe(false);
+      expect(option!.attributeName()).toBe('showFingerprints');
+      expect(command.options.find(candidate => candidate.long === '--fingerprints')).toBeUndefined();
+      expect(command.options.find(candidate => candidate.short === '-fp')).toBeUndefined();
+    }
+    expect(smash.options.find(option => option.short === '-p')?.long).toBe('--project');
+    expect(status.options.find(option => option.short === '-p')?.long).toBe('--project');
     expect(flags).not.toContain('--audit-continuity');
     expect(flags).not.toContain('--codex-audit-continuity');
   });
