@@ -31,12 +31,13 @@ describe('F7 top-level menu', () => {
     pipelines: {},
   };
 
-  it('shows start-loop, run-task, change-loop, start-suggested-stage, display-status, stop', () => {
+  it('shows start-loop, Tasks, change-loop, start-suggested-stage, display-status, stop', () => {
     const actions = buildTopLevelMenu(manifestWithEverything, true);
     const ids = actions.map(a => a.id);
     expect(ids).toEqual(['start-loop', 'run-task', 'change-loop', 'start-suggested-stage', 'display-status', 'stop']);
     expect(actions.find(a => a.id === 'start-loop')!.disabledReason).toBeUndefined();
     expect(actions.find(a => a.id === 'run-task')!.disabledReason).toBeUndefined();
+    expect(actions.find(a => a.id === 'run-task')!.label).toBe('Tasks');
     const suggested = actions.find(a => a.id === 'start-suggested-stage')!;
     expect(suggested.disabledReason).toBeUndefined();
     expect(suggested.label).toContain('runner defaults editable before execution');
@@ -48,6 +49,27 @@ describe('F7 top-level menu', () => {
     expect(taskItems[0]!.taskId).toBe('implement');
     expect(taskItems[0]!.skillId).toBe('30-simple-implement');
     expect(taskItems[0]!.role).toBe('implementer');
+  });
+
+  it('follows declaration order, ignores stale IDs, and appends omitted configured tasks once', () => {
+    const manifest: V1Manifest = {
+      ...manifestWithEverything,
+      skills: {
+        ...manifestWithEverything.skills,
+        'other-skill': { file: 'skills/other.md', role: 'implementer', runnerProfile: 'default' },
+      },
+      tasks: {
+        implement: manifestWithEverything.tasks.implement!,
+        second: { skill: 'other-skill', target: { path: '.', kind: 'worktree' }, inputs: [], output: { pattern: 'second-v{version}-{provider}.md', contract: 'completion-artifact' } },
+        third: { skill: 'other-skill', target: { path: '.', kind: 'worktree' }, inputs: [], output: { pattern: 'third-v{version}-{provider}.md', contract: 'completion-artifact' } },
+      },
+    };
+
+    expect(buildTaskMenu(manifest, undefined, ['third', 'stale', 'third'])).toEqual([
+      expect.objectContaining({ taskId: 'third' }),
+      expect.objectContaining({ taskId: 'implement' }),
+      expect.objectContaining({ taskId: 'second' }),
+    ]);
   });
 
   it('formats menu choices with explicit (unavailable: reason) label and boolean disabled state', () => {

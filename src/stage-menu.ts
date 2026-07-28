@@ -76,7 +76,7 @@ export function buildTopLevelMenu(
 
   actions.push({
     id: 'run-task',
-    label: 'Execute one-off task',
+    label: 'Tasks',
     group: 'run-task',
     disabledReason: hasTasks ? undefined : 'no tasks configured in manifest',
     availability: hasTasks ? 'available' : 'unavailable',
@@ -121,9 +121,27 @@ export function buildTopLevelMenu(
 export function buildTaskMenu(
   manifest: V1Manifest,
   missingInputs?: Map<string, string[]>,
+  declarationOrder?: string[],
 ): TaskMenuItem[] {
   const items: TaskMenuItem[] = [];
-  for (const [taskId, taskSpec] of Object.entries(manifest.tasks ?? {})) {
+  const configuredTasks = manifest.tasks ?? {};
+  const orderedTaskIds: string[] = [];
+  const seen = new Set<string>();
+  for (const taskId of declarationOrder ?? Object.keys(configuredTasks)) {
+    if (configuredTasks[taskId] && !seen.has(taskId)) {
+      orderedTaskIds.push(taskId);
+      seen.add(taskId);
+    }
+  }
+  for (const taskId of Object.keys(configuredTasks)) {
+    if (!seen.has(taskId)) {
+      orderedTaskIds.push(taskId);
+      seen.add(taskId);
+    }
+  }
+
+  for (const taskId of orderedTaskIds) {
+    const taskSpec = configuredTasks[taskId]!;
     const missing = missingInputs?.get(taskId);
     const skillDef = manifest.skills[taskSpec.skill];
     const role = skillDef?.role ?? 'unknown';

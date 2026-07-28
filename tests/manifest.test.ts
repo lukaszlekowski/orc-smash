@@ -14,12 +14,18 @@ describe('v1 manifest contract', () => {
     expect(manifest.loops.plan).toBeDefined();
     expect(manifest.loops.review).toBeDefined();
     expect(manifest.tasks?.implement).toBeDefined();
+    expect(manifest.tasks?.commit).toBeDefined();
+    expect(manifest.skills['50-simple-commit']).toEqual({
+      file: 'skills/50-simple-commit/SKILL.md',
+      role: 'committer',
+      runnerProfile: 'implement',
+    });
     expect(manifest.loops.implement).toBeUndefined();
     expect(manifest.pipelines.default?.stages.map(stage => stage.stageId)).toEqual(['plan', 'implement', 'review']);
     expect(manifest.pipelines.default?.stages[1]).toEqual({ stageId: 'implement', task: 'implement' });
     expect((manifest as any).manifestDeclarationOrder).toBeUndefined();
     expect(declarationOrder.loops).toEqual(['plan', 'review']);
-    expect(declarationOrder.tasks).toEqual(['implement']);
+    expect(declarationOrder.tasks).toEqual(['implement', 'commit']);
   });
 
   it('rejects unsupported schema versions and malformed output patterns', () => {

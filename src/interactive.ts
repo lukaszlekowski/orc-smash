@@ -9,6 +9,7 @@ import { resolveContinuity, type ResumeRecord, type RunnerPreselection } from '.
 import { availabilityAccent, emphasisAccent, type AvailabilityState } from './terminal-accent.js';
 import type { DecisionCorrectionDiagnostic } from './artifact-contract.js';
 import type { DecisionCorrectionChoice } from './loops/binding-engine.js';
+import type { CandidateSnapshotView } from './project-snapshot-view.js';
 
 export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean; availability?: AvailabilityState }>(
   item: T,
@@ -88,10 +89,11 @@ export interface TaskDetailView {
   outputPattern: string;
   contract: string;
   missingInputs?: string[];
+  eligiblePipelineCandidates?: Array<Pick<CandidateSnapshotView, 'pipelineId' | 'predecessorStageId' | 'successorStageId'>>;
 }
 
 /**
- * Show task details and prompt for confirmation (Run task / Back).
+ * Show task details, any advisory pipeline risk, and prompt for confirmation.
  */
 export async function promptTaskDetailConfirmation(detail: TaskDetailView): Promise<'run' | 'back'> {
   console.log(`\n${emphasisAccent('identity')(`Task Details: ${detail.taskId}`)}`);
@@ -102,11 +104,19 @@ export async function promptTaskDetailConfirmation(detail: TaskDetailView): Prom
   if (detail.missingInputs && detail.missingInputs.length > 0) {
     console.log(`  ${availabilityAccent('missing-inputs')(`Missing:      ${detail.missingInputs.join(', ')}`)}`);
   }
+  if (detail.eligiblePipelineCandidates && detail.eligiblePipelineCandidates.length > 0) {
+    console.log(`  ${emphasisAccent('supporting')('Current eligible pipeline continuation:')}`);
+    for (const candidate of detail.eligiblePipelineCandidates) {
+      console.log(`    ${candidate.pipelineId}: ${candidate.predecessorStageId} → ${candidate.successorStageId}`);
+    }
+    console.log('  This task does not advance the pipeline and may invalidate that suggestion.');
+    console.log('  If invalidated, the next stage must be run ad hoc.');
+  }
   console.log('');
 
   const choices = [
-    { name: 'Run task', value: 'run', disabled: Boolean(detail.missingInputs && detail.missingInputs.length > 0) },
-    { name: 'Back to task menu', value: 'back', disabled: false },
+    { name: 'Continue', value: 'run', disabled: Boolean(detail.missingInputs && detail.missingInputs.length > 0) },
+    { name: 'Cancel — back to Tasks', value: 'back', disabled: false },
   ];
 
   return select({
