@@ -176,7 +176,7 @@ One-off task: commit
 Current eligible pipeline continuation:
   default: implement → review
 
-This task does not advance the pipeline and may invalidate that suggestion.
+This task does not consume the pipeline continuation listed above and may invalidate it.
 If invalidated, the next stage must be run ad hoc.
 
 Continue
