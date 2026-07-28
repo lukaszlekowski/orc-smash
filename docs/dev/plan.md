@@ -1,342 +1,429 @@
-# Plan — Optional research-first pipeline and plan-creation task (follow-up batch 6)
+---
+status: draft
+batch: 7
+confidence: 0.98
+---
 
-**Confidence: 0.96**
-
-This plan implements **Batch 6 — Optional research-first pipeline** from
-`docs/dev/archived/follow-up.md`: a standalone research approval loop, a
-configured plan-creation task, and an optional
-`research → create-plan → plan → implement → review` pipeline, while
-retaining the existing `default` pipeline unchanged. Batch 7 (rejected-audit
-scope triage) is out of scope.
-
-## Status
-
-Completed and verified (`pnpm typecheck && pnpm test && pnpm build` green; e2e and unit tests pass).
+# Plan — Optional identity and fingerprint visibility
 
 ## Objective
 
-Let the operator optionally front-load work with a research approval cycle
-whose accepted artifact feeds a configured plan-creation task, without making
-research a universal prerequisite and without adding any research- or
-task-specific branching to TypeScript. The generic binding engine, pipeline
-eligibility, menus, and evidence contracts already shipped must carry the new
-pipeline as pure configuration and skill content.
+Add a single, explicit `--show-fingerprints` presentation flag to both
+`orc smash` and `orc status`.
+
+The normal `orc smash` timeline should show its nine operational columns:
+`Ver`, `Role`, `Agent`, `Model`, `Effort`, `Result`, `Time`, `Session`, and
+`Status`. The four diagnostic columns—`Artifact`, `Parent`, `Input FP`, and
+`Result FP`—should be hidden unless the operator supplies
+`--show-fingerprints`.
+
+The read-only `orc status` report is line-oriented rather than a timeline
+table. Its default view should likewise omit raw artifact-identity and
+fingerprint values from pipeline suggestions; `--show-fingerprints` should
+restore those existing diagnostic lines. Both commands must continue to show
+the semantic result of fingerprint processing, including stale eligibility,
+target drift, and missing-fingerprint reasons, regardless of the flag.
+
+This is a presentation-only batch. It must not alter artifact contents,
+provenance, fingerprint computation, state reconstruction, pipeline
+eligibility, runner selection, provider execution, interruption handling,
+ownership, or supervisor compatibility.
 
 ## Scope
 
-- Packaged manifest additions in `config/orc-smash.yaml`: one approval loop,
-  one task, one pipeline, three skill definitions (no role changes);
-- three new packaged skill files under `skills/` at the tool root;
-- test-only seams in `src/adapters/fake.ts` and deterministic manifest,
-  snapshot, menu, and e2e coverage;
-- documentation synchronization (`AGENTS.md`, `README.md`,
-  `docs/architecture/overview.md`).
+### Included
 
-## Non-goals
+- Declare `--show-fingerprints` on the `smash` and `status` commands.
+- Carry one default-off display choice through interactive, direct loop, task,
+  pipeline, continuation, and second-opinion `orc smash` runs.
+- Apply the choice to every live-panel repaint, including historical and
+  in-flight timeline rows.
+- Preserve the current responsive rendering when diagnostics are enabled:
+  four table columns on sufficiently wide terminals and one compact
+  identity/fingerprint line beneath each row on narrow terminals.
+- Apply the same choice to raw identity/fingerprint diagnostics in
+  `orc status` and in the interactive **Display pipeline and project state**
+  action.
+- Leave `--plain` lifecycle/event output structurally and textually unchanged.
+- Update deterministic tests and operator/architecture documentation.
 
-- No menu or renderer changes, and no hardcoded binding-name branching in TypeScript.
-- No hardcoded `research`, `create-plan`, or pipeline-name branching anywhere
-  in TypeScript (guarded by tests and review).
-- No research-creation automation: `docs/dev/research.md` is authored outside
-  the harness (operator or external agent), exactly like `docs/dev/plan.md`
-  before this batch. Do not add a research-generation task or make research a
-  prerequisite for the `default` pipeline.
-- No plan-creation semantics inside the `plan` approval loop: it keeps
-  auditing and repairing `plan.md`; it is not turned into a generator.
-- No replacement/overwrite workflow for an existing `docs/dev/plan.md` (the
-  follow-up defers that to a separately designed workflow).
-- No automatic downstream transitions: every stage change remains an
-  operator-confirmed action (suggested stage, pipeline start, or ad-hoc run).
-- No new task-availability machinery: availability uses the existing generic
-  missing-inputs contract plus the task's fail-safe `BLOCKED` outcome (D3).
-- Batch 7 scope triage, and any change to the commit task, decision
-  correction, telemetry, or ledger outcomes from earlier batches.
+### Not included
 
-## Current state (verified)
+- No `-fp`, `--fingerprints`, or `--verbose-identity` alias.
+- No persisted preference, project-manifest setting, environment variable,
+  interactive toggle, or automatic terminal-width policy that changes the
+  operator's selection.
+- No independent switches for the four diagnostic fields.
+- No new status table or redesign of the line-oriented `orc status` report.
+- No change to the compact startup project snapshot, which does not currently
+  expose the four raw values.
+- No change to plain events, artifact front matter, event schemas, logs, or
+  provider telemetry.
+- No Batch 8 specification/plan split and no Batch 9 scope-triage task.
 
-- `pipeline-stage-state.ts` is fully generic: task stages produce successor
-  evidence via `completion-artifact: completed` or `required-artifact: valid`;
-  loop stages via an accepted evaluate in their chain; exact predecessor edges
-  are single-use (consumed when any valid, classified stage-continuation root exists
-  for that exact parent); target-fingerprint drift suppresses candidates with typed
-  reasons.
-- `target-snapshot.ts` worktree fingerprints exclude all configured output
-  artifacts, so a task's own evidence artifact never causes self-drift; the
-  created `plan.md` and `HEAD` are covered, so later edits/commits
-  legitimately suppress the continuation (the documented "may invalidate it"
-  behavior).
-- Manifest validation supports any number of pipelines with mixed loop/task
-  stages, per-pipeline unique stage IDs, and load-time skill/role file
-  existence checks (`manifest.ts:479-491`).
-- `binding-engine.ts` already resolves a stage-continuation task's
-  `priorArtifact` from the recorded parent artifact identity — the exact
-  accepted-research predecessor wiring, with zero new code.
-- The pipeline-continuation warning the operator quoted already landed
-  (`interactive.ts:107-114`, commit `027417c`) and is generic over eligible
-  candidates; `create-plan` inherits it with no change.
-- Packaged roles (`auditor`, `planner`, …) and skills live at the tool root;
-  skill IDs are arbitrary strings. No research or create-plan skills exist
-  today.
-- The fake adapter writes valid task completion artifacts generically but has
-  no seam to write additional provider-side files (needed to simulate
-  `plan.md` creation) or to emit a `BLOCKED` task outcome.
+## Current behavior and exact change
 
-## Normative decisions
+### Live `orc smash` timeline
 
-### D1 — Pure-configuration pipeline addition with preserved defaults
+`src/status-panel.ts` currently constructs thirteen cells for every historical
+and in-flight row. `renderTimelineSection` renders all thirteen when the
+minimum widths fit. On a narrow terminal, it renders the first nine columns and
+unconditionally appends `compactIdentityLine(...)` beneath every row.
 
-**Design.** All runtime behavior comes from the shipped generic engine. The
-manifest gains, in YAML key order: `research` appended after `review` in
-`loops:` (so the first configured loop — and therefore the no-activity
-default-loop suggestion — stays `plan`), `create-plan` appended after
-`commit` in `tasks:`, and `research-first` appended after `default` in
-`pipelines:` (both pipelines render in manifest declaration order, `default`
-first). Reference shape:
+Change that decision table to:
 
-```yaml
-loops:
-  research:
-    type: approval-loop
-    target: { path: docs/dev/research.md, kind: file }
-    inputs: [{ source: target }, { source: version }, { source: priorArtifact }, { source: outputPath }]
-    evaluate:
-      skill: research-audit
-      output:
-        pattern: "docs/dev/research-audit-v{version}-{provider}.md"
-        contract: decision-artifact
-        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
-    repair:
-      skill: research-follow-up
-      output:
-        pattern: "docs/dev/research-followup-v{version}-{provider}.md"
-        contract: completion-artifact
+| `showFingerprints` | Wide terminal | Narrow terminal |
+| --- | --- | --- |
+| `false` or omitted | Nine core columns only | Nine core columns only |
+| `true` | All thirteen columns | Nine core columns plus compact diagnostic line |
 
-tasks:
-  create-plan:
-    skill: 23-simple-create-plan
-    target: { path: ".", kind: worktree }
-    files: { researchPath: docs/dev/research.md }
-    inputs: [{ source: researchPath }, { source: target }, { source: version }, { source: priorArtifact }, { source: outputPath }]
-    output:
-      pattern: "docs/dev/create-plan-v{version}-{provider}.md"
-      contract: completion-artifact
+The four values remain available in `Step` and the in-flight context. Hiding
+them must be implemented only at render time.
 
-pipelines:
-  default:      # unchanged: plan → implement → review
-  research-first:
-    stages:
-      - { stageId: research, loop: research }
-      - { stageId: create-plan, task: create-plan }
-      - { stageId: plan, loop: plan }
-      - { stageId: implement, task: implement }
-      - { stageId: review, loop: review }
+### Read-only `orc status`
+
+`src/project-snapshot-renderer.ts` currently prints pipeline-candidate
+diagnostics as individual lines. The relevant raw lines are:
+
+- `Artifact identity: <value>`
+- `Fingerprint: valid (<value>)`
+- `Fingerprint: drift (recorded <value> vs current <value>)`
+
+When the flag is absent, omit the raw `Artifact identity` and `Fingerprint`
+lines. Keep the candidate status, human-readable stale reason, and exact
+`Eligibility reason` line. Those lines already communicate `eligible`,
+`target-fingerprint-drift`, `missing-target-fingerprint`, and other typed
+states without exposing compact or full diagnostic values.
+
+When the flag is present, render the existing raw lines unchanged. Keep
+`Predecessor artifact`, binding/phase, chain, normalized result, and decision
+or outcome visible in both modes; they are normal workflow context rather than
+the optional raw identity/fingerprint display.
+
+## Architecture and ownership
+
+The feature should use the existing seams and should not introduce a new
+generic helper module:
+
+- `src/cli.ts` owns declaration and help text for the operator flag.
+- `SmashOptions`, `StatusOptions`, and the generic binding execution options
+  carry the boolean without interpreting workflow state.
+- `PanelContext` carries the live-panel presentation choice. The live supplier
+  closes over the run-scoped value so every timer-driven repaint uses the same
+  selection.
+- `src/status-panel.ts` alone decides whether the four live timeline fields are
+  rendered.
+- `src/project-snapshot-renderer.ts` alone decides whether raw detailed-snapshot
+  values are rendered.
+- State builders and scanners continue to collect complete data in both modes.
+
+Use the same property name, `showFingerprints`, at each boundary. Treat only
+the exact boolean `true` as enabled so existing direct callers and test
+fixtures that omit the new optional property retain the new default-hidden
+behavior.
+
+Do not make the manifest own this setting. It is a per-invocation operator
+display preference, not workflow configuration or durable state.
+
+## Implementation plan
+
+### 1. Add the CLI contract
+
+**Files:** `src/cli.ts`, `tests/cli.test.ts`
+
+- Add `.option('--show-fingerprints', ...)` to both the `smash` and `status`
+  Commander commands.
+- Describe the option as showing artifact lineage and input/result
+  fingerprints so the help text is accurate even though two fields are
+  identities rather than fingerprints.
+- Do not declare any short or legacy alias.
+- Extend the CLI contract test to require the long option on both commands and
+  to ensure no `--fingerprints` compatibility option is introduced.
+
+**Verification:** Commander exposes the option on exactly the two intended
+commands, parses it as a boolean, and continues to parse `-p` / `--project`
+unchanged.
+
+### 2. Thread the run-scoped choice to the live panel
+
+**Files:** `src/commands/smash.ts`, `src/loop.ts`,
+`src/loops/binding-engine.ts`, `src/loops/execution.ts`, and `src/status.ts`.
+
+> **Role of `src/status.ts` (type-only).** This module owns the
+> `PanelContext`/`buildPanelContext` *types* (and the `buildPanelContext`
+> constructor) only. The per-invocation boolean is **not** propagated *through*
+> `status.ts`; it flows `loop.ts` → `binding-engine.ts` → `execution.ts`. The
+> only change in `src/status.ts` is the optional field on `PanelContext` plus
+> the matching `buildPanelContext` parameter described below. Do not route the
+> runtime boolean through this module.
+
+- Add `showFingerprints?: boolean` to `SmashOptions`, `LoopOptions`,
+  `BindingEngineOptions`, and `LoopExecutionDeps`.
+- Pass `options.showFingerprints === true` from `smashAction` into the shared
+  loop/task executor options — add it to the `executorOptions` object literal
+  in `src/commands/smash.ts` (the single `executorOptions = { ... }` site fed
+  to both `runLoop` and `runTask`). This single route must cover interactive
+  starts, direct loops, tasks, pipelines, continuations, suggested stages, and
+  second opinions.
+- Pass the value from `runBinding` to `executeLoopStep`.
+- Extend `PanelContext` with optional `showFingerprints?: boolean`, added as
+  the **last field of the interface** (immediately after `providerCalls?`).
+- Extend `buildPanelContext` with a **trailing optional positional parameter**
+  `showFingerprints?: boolean = false`, placed after the current final
+  parameter (`activeInvocation?`), and map it into the returned object literal
+  as `showFingerprints`. Commit to the trailing-optional positional form rather
+  than a named options object: every existing call site already omits this
+  parameter, so all stay valid with no rewrite — the single production call site
+  `src/loops/execution.ts:255` (inside the live-region supplier, which reads
+  `deps.showFingerprints`) and the `tests/status-core.test.ts` calls (`:21`,
+  `:28`). The `execution.ts` call is the one that supplies the value: add
+  `deps.showFingerprints` as its trailing argument. A named options object would
+  instead force a rewrite of every call site and risks forgetting to map the
+  field, silently leaving `context.showFingerprints` `undefined` so that
+  diagnostics never render in the enabled case.
+- Do not derive the value from terminal width, output mode, environment, the
+  active provider, or binding kind.
+- Keep the flag stable in the live-region supplier. It must not be reset when
+  lifecycle events update progress, tool-call count, status, or the in-flight
+  row.
+
+**Verification:** captured live contexts have `showFingerprints: true` when the
+command option is enabled and default to disabled when it is absent.
+
+### 3. Make the timeline renderer default to the core table
+
+**File:** `src/status-panel.ts`
+
+> **Name collision — edit the right function.** Two exported functions share
+> the name `renderStatusPanel`. The live-panel one modified here takes a
+> `PanelContext`: `renderStatusPanel(context: PanelContext)` at
+> `src/status-panel.ts:110`. The unrelated detailed-snapshot one takes a project
+> root: `renderStatusPanel(projectRoot, config, output, opts?)` in
+> `src/commands/status.ts:47`, handled in Step 4. They share nothing but the
+> name; do not confuse them.
+
+- Keep the existing thirteen-column header, preferred widths, minimum widths,
+  full row values, and `compactIdentityLine` formatter as the enabled
+  diagnostic representation.
+- In `renderTimelineSection`, branch first on
+  `context.showFingerprints === true`.
+- When disabled, render only `head.slice(0, 9)` and `row.slice(0, 9)` at every
+  terminal width. Do not append compact diagnostic lines. On a wide terminal
+  this nine-column table grows toward its preferred widths (sum 109) to fill the
+  panel — this is expected and harmless (no overflow: `fitColumnWidths` caps
+  growth at the preferred widths and the emergency fallback in
+  `renderAlignedTable` guarantees the panel bound). It is simply the inverse of
+  compacting on a narrow terminal, not a bug, so "the columns got wider after I
+  hid diagnostics" is the correct wide-width behavior.
+- When enabled, retain the current responsive behavior:
+  - render the thirteen-column table when its minimum width fits;
+  - otherwise render the nine-column table and append exactly one compact
+    diagnostic line for each historical or in-flight row.
+- Preserve current row ordering, latest-current-chain marker placement,
+  dimming of unrelated/unclassified rows, per-cell result accents, elapsed
+  duration updates, and panel width bounds.
+- Do not erase diagnostic values from `timelineCells` or `inFlightCells`;
+  render-time projection is what makes this a presentation-only feature.
+
+**Verification:** the four headers and compact values are absent by default,
+present with the flag, and responsive behavior remains bounded at wide and
+narrow widths.
+
+### 4. Apply the option to detailed project status
+
+**Files:** `src/commands/status.ts`,
+`src/project-snapshot-renderer.ts`, `src/commands/smash.ts`
+
+> **Reminder (same collision as Step 3).** `commands/status.renderStatusPanel`
+> is the detailed-snapshot renderer at `src/commands/status.ts:47` — distinct
+> from the live `status-panel.renderStatusPanel` modified in Step 3. Note that
+> `src/commands/smash.ts` imports it via the relative path `'./status.js'`, which
+> resolves to `src/commands/status.ts` — not `src/status.ts` (types) and not
+> `src/status-panel.ts`.
+
+- Add `showFingerprints?: boolean` to `StatusOptions`
+  (`src/commands/status.ts`).
+- Change the 4th parameter of `renderStatusPanel` from the current dead
+  placeholder `_opts?: { loop?: string; all?: boolean }` (the `loop`/`all`
+  fields are passed in but never read by the body — hence the `_opts` underscore)
+  to `opts?: { showFingerprints?: boolean }`.
+- Update the two call sites of that 4th parameter:
+  - `renderStatus` (`src/commands/status.ts:68`) — replace
+    `{ loop: options.loop, all: options.all }` with
+    `{ showFingerprints: options.showFingerprints === true }`.
+  - The interactive **Display pipeline and project state** branch
+    (`src/commands/smash.ts:481`), which today calls
+    `renderStatusPanel(projectRoot, config, options.output)` with no 4th
+    argument — forward the invocation flag:
+    `renderStatusPanel(projectRoot, config, options.output, { showFingerprints: options.showFingerprints === true })`.
+    `SmashOptions` already carries `showFingerprints` from Step 2.
+- Let `renderDetailedSnapshot` (`src/project-snapshot-renderer.ts:77`) accept an
+  optional named render-options object `{ showFingerprints?: boolean }` as a
+  trailing second parameter; do not add the flag to `ProjectSnapshotView`,
+  because the view describes state rather than display policy. Update its single
+  production caller (inside `renderStatusPanel`) to forward
+  `opts?.showFingerprints`.
+- In the pipeline-suggestion block, render the `Artifact identity` line
+  (`project-snapshot-renderer.ts:201`) and the raw `Fingerprint` line (`:210`,
+  fed by `rawFpStr` at `:206-209`) only when the option is exactly `true`.
+- Continue computing `rawFpStr` only for the enabled branch. The default branch
+  must still render:
+  - the candidate's eligible/unavailable status (`:199`);
+  - its human-readable stale or unavailable reason (`:193-198`);
+  - `Eligibility reason` (`:205`), including exact typed fingerprint reasons
+    (`target-fingerprint-drift`, `missing-target-fingerprint`, …).
+  `Predecessor artifact` (`:200`), `Decision/Outcome` (`:202`), `Binding/Phase`
+  (`:203`), and `Chain` / `Normalized result` (`:204`) remain in both modes —
+  they are workflow context, not the optional raw identity/fingerprint display.
+- Pass the option from `statusAction` to the detailed renderer.
+- Returning to the interactive menu after showing project state must not alter
+  the original invocation choice.
+
+**Verification:** standalone and interactive detailed status use identical
+visibility rules without changing candidate counts, ordering, reasons, or
+eligibility.
+
+### 5. Prove plain-output and state invariance
+
+**Files:** `src/plain-render.ts` only if a type adjustment is required;
+`tests/plain-render.test.ts`, `tests/terminal-surfaces.test.ts`, or the narrowest
+existing equivalent tests
+
+- Do not add identity/fingerprint rendering controlled by this flag to
+  `renderPlainPanel`.
+- Do not add the option to `RunEvent` or any event payload.
+- Ensure `createPlainCliOutput` behavior is unchanged whether the flag is
+  present or absent.
+- Compare representative plain output or emitted event arrays for both option
+  values.
+- Build the same project snapshot and pipeline candidates in both display
+  modes and assert that only rendered raw diagnostic text differs.
+
+**Verification:** state resolution and plain event output are byte-for-byte or
+deep-equal equivalent across the two display choices.
+
+### 6. Update deterministic coverage
+
+**Files:** primarily `tests/status-panel.test.ts`,
+`tests/status-action.test.ts`, `tests/project-snapshot.test.ts`,
+`tests/status-core.test.ts`, `tests/loop-live.test.ts`,
+`tests/smash-action.test.ts`, and `tests/cli.test.ts`; touch other test helpers
+only where the `PanelContext` type requires it.
+
+Add or update focused cases for:
+
+1. Wide live panel, default: nine headers; no `Artifact`, `Parent`, `Input FP`,
+   `Result FP`, or compact values.
+2. Narrow live panel, default (e.g. `COLUMNS=80`): no compact identity line and
+   no `Artifact`/`Input FP`/compact values, **and** the rendered max line width
+   is `≤ resolveTerminalWidth()` (no horizontal overflow). At 80 columns the
+   nine-column minimum width sums to 78 (`[3,10,6,6,8,14,5,7,11]` + 8 gaps),
+   which exceeds the 76-column inner panel width, so this case proves
+   `fitColumnWidths` compacts the *default* table — the emergency fallback in
+   `renderAlignedTable` only guarantees safety; assert it directly for the
+   default path, not just the enabled narrow path (item 4).
+3. Wide live panel, enabled: all thirteen headers and all four compact values.
+4. Narrow live panel, enabled: nine headers plus exactly one compact line per
+   historical and in-flight row, with no horizontal overflow.
+5. Repeated live supplier calls: the enabled choice and in-flight row remain
+   visible while elapsed/progress fields update.
+6. Unrelated, unclassified, interrupted, and in-flight rows: visibility
+   changes do not change dimming, status, result, or row count.
+7. Standalone status, default: raw identity/fingerprint lines omitted while
+   stale and missing-fingerprint diagnoses remain.
+8. Standalone status, enabled: the existing raw valid and drift lines render
+   unchanged.
+9. Interactive **Display pipeline and project state** respects the `orc smash`
+   invocation flag.
+10. Direct loop, task, pipeline, and interactive executor setup passes the
+    option into the same live context.
+11. `NO_COLOR` changes only ANSI styling and never visibility.
+12. Plain output and event streams remain unchanged.
+
+Update existing tests that currently assume identity columns are visible by
+default to pass `showFingerprints: true` when that is the behavior under test.
+Do not weaken their assertions merely to accommodate the new default. Scope the
+change set up front rather than discovering each case via `pnpm test`: the tests
+at risk are those that render the panel or detailed snapshot and then assert on
+a diagnostic value (`Artifact`, `Parent`, `Input FP`, `Result FP`, a
+`*<suffix>` compact id, or a raw `Artifact identity:` / `Fingerprint:` line)
+without enabling the flag. To find them, grep the entry points in `tests/` —
+
+- `renderStatusPanel(` — used via `makeContext(` in `status-panel.test.ts`, and
+  via literal or variable contexts in `status.test.ts`,
+  `execution-panel.test.ts`, `loop-live.test.ts`, and
+  `terminal-surfaces.test.ts`; `makeContext` spreads `...overrides` last, so
+  `makeContext({ showFingerprints: true })` threads the flag correctly.
+- `renderDetailedSnapshot(` — in `project-snapshot.test.ts` and
+  `terminal-surfaces.test.ts`.
+
+A confirmed case is `tests/status-panel.test.ts:332` ("shows all compact
+identity columns when a wide table fits"), which asserts
+`Artifact`/`Parent`/`Input FP`/`Result FP` and the `*aaaaa` compact suffix
+without the flag and will fail under the new default-hidden behavior unless
+`showFingerprints: true` is supplied. `pnpm test` remains the backstop, but the
+grep bounds the change set first.
+
+### 7. Synchronize documentation and close the batch
+
+**Files:** `README.md`, `docs/architecture/overview.md`, `AGENTS.md`,
+`docs/dev/archived/follow-up.md`
+
+- Add both command forms to the README examples:
+  - `orc smash --project <path> --show-fingerprints`
+  - `orc status --project <path> --show-fingerprints`
+- Explain the default nine-column live timeline, the opt-in four-field
+  diagnostic group, and the narrow-terminal compact form.
+- Document that semantic drift and missing-evidence warnings remain visible by
+  default and that plain events remain complete and unchanged.
+- Record the run-scoped presentation flow in the architecture overview:
+  CLI option → executor/live `PanelContext` → renderer, with detailed snapshot
+  render options kept outside the state view.
+- Keep `AGENTS.md` synchronized with the landed operator contract without
+  turning display visibility into a state or fingerprinting invariant.
+- After implementation, deterministic verification, and documentation are
+  complete, mark only the Batch 7 checklist item complete. Leave Batches 8 and
+  9 untouched.
+
+## Edge cases and failure handling
+
+- **Empty timeline:** render the existing panel and `Timeline:` label without
+  diagnostic headers or errors in either mode.
+- **Missing values:** when enabled, preserve the existing `—` formatting for
+  absent artifact, parent, input, or result values, including the pre-completion
+  in-flight result fingerprint.
+- **Narrow terminal:** enabled diagnostics move below each row; disabled
+  diagnostics disappear entirely. Neither mode may exceed the resolved panel
+  width.
+- **Terminal width changes during a run:** every repaint re-evaluates layout
+  width but retains the run-scoped visibility choice.
+- **Stale candidate:** default status still says the candidate is unavailable
+  because the target fingerprint changed and retains the typed eligibility
+  reason; enabled status additionally shows recorded/current values.
+- **Missing fingerprint evidence:** default status retains the typed
+  `missing-target-fingerprint` reason without printing a raw placeholder line.
+- **Unclassified or legacy artifact:** timeline relevance, status, reason, and
+  dimming remain unchanged; enabling diagnostics may show `—` where v1 values
+  do not exist.
+- **`--plain --show-fingerprints`:** accept the option but do not change the
+  event stream or add a second human-oriented diagnostic channel.
+- **Interactive menu round trip:** showing project status and returning to the
+  menu must preserve the original invocation choice.
+- **Configuration errors and no-binding status:** error messages and exit codes
+  occur before rendering and remain unchanged.
+
+## Verification commands
+
+Run focused tests while implementing:
+
+```bash
+pnpm test tests/cli.test.ts tests/status-core.test.ts tests/status-panel.test.ts
+pnpm test tests/status-action.test.ts tests/project-snapshot.test.ts
+pnpm test tests/loop-live.test.ts tests/smash-action.test.ts
+pnpm test tests/plain-render.test.ts tests/terminal-surfaces.test.ts
 ```
 
-**File impact.** `config/orc-smash.yaml` only.
-
-**Verification.**
-
-- Packaged config loads; both pipelines validate and display in declaration
-  order (`default`, then `research-first`).
-- The `default` pipeline remains exactly `plan → implement → review`; all
-  existing pipeline tests pass unmodified.
-- Loop/task ID namespace collision rules still hold; stage IDs repeat only
-  across pipelines, never within one.
-
-### D2 — Research approval loop: configured skills, ordinary contracts
-
-**Design.** The research loop is an ordinary approval loop over the declared
-`docs/dev/research.md` target with the existing decision/completion
-contracts. Two new packaged skills, modeled on `21-simple-plans-audit` /
-`22-simple-plans-follow-up` but scoped to research documents:
-
-- `skills/10-simple-research-audit/SKILL.md` (role `auditor`, profile
-  `audit`): audits research.md for feasibility, completeness, scope
-  boundaries, and consistency with the actual codebase; versioned `vN`
-  semantics (second opinions read the prior audit after forming their own
-  verdict); never modifies research.md or source code; ends with exactly one
-  `## Verdict` of `APPROVED` or `REJECTED`.
-- `skills/11-simple-research-follow-up/SKILL.md` (role `planner`, profile
-  `follow-up`): repairs research.md against a rejected audit, modifying only
-  research.md; writes exactly one `## Outcome` of `COMPLETED` or `BLOCKED`.
-
-Skill IDs/names are configuration data (`research-audit`,
-`research-follow-up` in the manifest); the numeric prefixes follow the
-existing series convention and may be adjusted at review without design
-impact. The generic `auditor` role text ("Audit plan documents…") is left
-unchanged — each skill carries its own research-specific instructions, and no
-role edit is worth the churn. An accepted research artifact becomes successor
-evidence only inside a `research-first` pipeline run; an ad-hoc research run
-has null pipeline identity and therefore creates no candidates and never
-starts another stage.
-
-**File impact.** `skills/10-simple-research-audit/SKILL.md`,
-`skills/11-simple-research-follow-up/SKILL.md` (new); `config/orc-smash.yaml`
-(skill entries).
-
-**Verification.**
-
-- The loop runs ad hoc (fake adapter) through evaluate/repair with the
-  configured contracts; accepted, retry, and unknown outcomes behave exactly
-  as the plan loop's.
-- An ad-hoc accepted research artifact produces no pipeline candidates.
-- The research loop starts `research-first` via the generic first-stage
-  launch-context prompt; no TypeScript references the literal binding ID.
-
-### D3 — `create-plan` task: research consumption, no-clobber, fail-safe evidence
-
-**Design.** One new packaged skill, `skills/23-simple-create-plan/SKILL.md`
-(role `planner`, profile `follow-up`), rather than reusing
-`20-simple-plan`: the task needs contract behavior (prior-artifact
-requirement, no-clobber, `## Outcome` evidence) that must not leak into the
-interactive plan skill. The skill instructs the provider to:
-
-- read `researchPath` (`docs/dev/research.md`) and the prior artifact, and
-  require the prior artifact to be present (not `none`) and to record an
-  accepted research verdict; otherwise write the task evidence with
-  `## Outcome: BLOCKED` and the precise reason, creating nothing;
-- create only the initial `docs/dev/plan.md` (following the project's plan
-  quality standard: confidence header, design/file-impact/verification,
-  non-goals) and its task evidence; never modify research.md, the research
-  audit, or any other file;
-- if `docs/dev/plan.md` already exists, write `## Outcome: BLOCKED` with the
-  precise reason instead of overwriting — the separately designed replacement
-  workflow is out of scope.
-
-Availability stays on the two existing generic tiers — no new machinery:
-
-1. **Menu disable:** a missing declared `researchPath` file makes the task
-   unavailable in the Tasks menu with the standard missing-inputs reason.
-2. **Runtime fail-safe:** running without an accepted research predecessor
-   (e.g. ad hoc) or with an existing plan.md ends as a structurally valid
-   `BLOCKED` completion artifact — never `unknown`, never a partial plan. A
-   `BLOCKED` artifact is valid task evidence that consumes its exact predecessor edge
-   and does not provide completion evidence for the successor stage, stopping that
-   pipeline run from unlocking further stages.
-
-**File impact.** `skills/23-simple-create-plan/SKILL.md` (new);
-`config/orc-smash.yaml` (task entry).
-
-**Verification.**
-
-- Missing `researchPath` disables the task with the precise missing-inputs
-  reason.
-- Ad-hoc execution without accepted research evidence and execution with an
-  existing plan.md both end `BLOCKED` with precise reasons, create no plan,
-  and unlock nothing.
-- A completed run writes exactly the plan plus its evidence artifact and
-  preserves the research artifacts byte-for-byte.
-
-### D4 — Stage-transition semantics ride the shipped eligibility contract
-
-**Design.** Generic stage-transition semantics; each edge behaves as follows under
-the generic rules:
-
-- **research → create-plan:** predecessor target is the research.md file;
-  the accepted evaluate's result fingerprint matches an untouched research.md
-  → eligible. Editing research.md after acceptance suppresses the candidate
-  as `target-fingerprint-drift` (correct: the basis changed).
-- **create-plan → plan:** predecessor target is the worktree. The task's
-  evidence artifact is fingerprint-excluded, but the created plan.md and
-  `HEAD` are covered — so committing or editing after the task suppresses
-  the continuation with the documented drift reason, and the operator runs
-  the plan stage ad hoc or via a fresh pipeline start (identical to today's
-  implement → review behavior after a commit). This is accepted, documented
-  behavior, not a defect to engineer around.
-- **plan → implement → review:** identical to the `default` pipeline.
-- Exact edges are single-use: one create-plan run per accepted research
-  artifact, one plan continuation per create-plan artifact; a `BLOCKED`
-  create-plan consumes its exact predecessor edge and unlocks nothing.
-
-**File impact.** `src/pipeline-stage-state.ts` (exact-edge single-use rule restoration in `consumedBySuccessor`), `tests/pipeline-state.test.ts` (unit test updates), and e2e tests.
-
-**Verification.**
-
-- e2e: the full `research → create-plan → plan → implement → review` chain
-  advances through operator-equivalent stage-continuation contexts with
-  correct parent identity at every hop.
-- create-plan's provenance records the exact accepted research artifact as
-  `parentArtifactIdentity`, and the plan stage's evaluate receives the
-  create-plan artifact as its prior artifact.
-- Drift cases (edited research.md; edited plan.md; intervening commit) flip
-  the matching candidate to its typed unavailable reason.
-
-### D5 — Deterministic coverage via two small fake-adapter seams
-
-**Design.** `src/adapters/fake.ts` (test-only adapter) gains:
-
-- `extraWrites: Array<{ path: string; content: string }>` — files written
-  during `run`, letting a simulated create-plan provider create
-  `docs/dev/plan.md` inside the fingerprint window; and
-- `taskOutcome?: string` — overrides the task artifact's `## Outcome` token
-  (default `COMPLETED`) to drive `BLOCKED` paths.
-
-Both follow the existing `fakeAdapterState` pattern; no production adapter or
-engine changes. New e2e coverage lives in a dedicated
-`tests/e2e/research-first-pipeline.test.ts`; manifest/menu/snapshot coverage
-extends `tests/manifest.test.ts`, `tests/config.test.ts`,
-`tests/project-snapshot.test.ts` / `tests/stage-menu.test.ts`.
-
-**File impact.** `src/adapters/fake.ts` (test seams), `src/adapters/testing.ts` (companion reset helper), new e2e spec, the
-listed test files.
-
-**Verification** (maps the follow-up's required list one-to-one).
-
-- Both pipelines displayed in declaration order; `default` unchanged;
-  research-first runs the five-stage chain.
-- Research runs ad hoc with no downstream effect; create-plan receives the
-  exact accepted research predecessor.
-- Missing research evidence (menu disable) and existing plan.md (`BLOCKED`)
-  carry precise reasons.
-- A renamed-manifest fixture (research loop and create-plan task renamed)
-  drives the same chain, proving no literal-name branching.
-- The default pipeline never requires or infers research state.
-
-### D6 — Documentation synchronization
-
-**Design.** `AGENTS.md` §6 currently states research.md "is not a stage in
-the current pipeline" — that becomes false and must be rewritten: research
-remains optional, is the first stage of the packaged `research-first`
-pipeline only, and the `default` pipeline is unchanged. `README.md`'s
-manifest-model section gains the two-pipeline description;
-`docs/architecture/overview.md` notes the packaged research loop/create-plan
-task as ordinary configuration (its generic-engine statements remain true).
-`AGENTS.md` keeps its "no hardcoded research branching" invariant explicitly.
-
-**File impact.** `AGENTS.md`, `README.md`, `docs/architecture/overview.md`.
-
-**Verification.** Docs land in the same release as the manifest change; no
-statement contradicts the shipped configuration.
-
-## Release boundaries
-
-Each release is independently verifiable with `pnpm typecheck && pnpm test`.
-
-### Release 1 — Skills, manifest, and docs (D1–D3, D6) [Satisfied]
-
-- Three packaged skills; research loop, create-plan task, and research-first
-  pipeline in the manifest; AGENTS.md/README/overview sync; manifest, config,
-  snapshot, and menu tests (declaration order, availability, defaults
-  preserved).
-- Gate: packaged config loads; full suite green with no changes to existing
-  behavior; both pipelines and the new task render correctly. (Status: Satisfied)
-
-### Release 2 — Pipeline chain coverage (D4–D5) [Satisfied]
-
-- Fake-adapter seams and the research-first e2e: full five-stage chain,
-  prior-artifact identity, drift cases, ad-hoc research, `BLOCKED` paths,
-  renamed-binding fixture.
-- Gate: all new and existing tests green (`pnpm typecheck && pnpm test && pnpm build` verified). (Status: Satisfied)
-
-### Release 3 — Operator smoke (manual, recommended)
-
-- On this repository: author a small `docs/dev/research.md`, run
-  `research-first` end to end interactively (research accept → suggested
-  create-plan → suggested plan loop), and confirm the menus, fingerprint
-  behavior, and the create-plan → plan hand-off on a real provider. Evidence
-  is operator-visible; no automated gate.
-
-## Verification
+Then run the repository gates:
 
 ```bash
 pnpm typecheck
@@ -344,6 +431,51 @@ pnpm test
 pnpm build
 ```
 
-All automated coverage is deterministic (fake adapter, fixture manifests,
-temp workspaces). No real-provider contract gate is required: the batch adds
-no adapter or engine behavior — only configuration, skill content, and tests.
+After the build, perform read-only manual checks against a fixture or disposable
+project with at least one eligible and one stale candidate:
+
+```bash
+NO_COLOR=1 COLUMNS=160 bin/orc.js status --project <fixture>
+NO_COLOR=1 COLUMNS=160 bin/orc.js status --project <fixture> --show-fingerprints
+NO_COLOR=1 COLUMNS=80 bin/orc.js status --project <fixture> --show-fingerprints
+```
+
+For the live timeline, use deterministic captured-panel tests as the release
+gate. An optional manual real-provider run may confirm visual appearance, but
+this batch does not change adapter construction, provider arguments, sessions,
+timeouts, or artifact contracts and therefore does not require new real-provider
+contract coverage.
+
+## Acceptance gates
+
+Batch 7 is complete only when all of the following are true:
+
+- Both commands advertise and accept only the intended
+  `--show-fingerprints` long option.
+- The normal live timeline contains only the nine core columns at every width.
+- Enabled wide and narrow live layouts expose all four diagnostic values
+  without overflow.
+- The enabled choice survives every live repaint and includes the in-flight
+  row.
+- Default detailed status omits raw identity/fingerprint values while
+  preserving semantic drift, stale, and missing-evidence diagnoses.
+- Enabled detailed status restores the existing raw identity/fingerprint
+  diagnostics.
+- Interactive and direct entry paths share the same behavior.
+- Plain output, events, scanning, fingerprints, candidates, and exit codes are
+  invariant.
+- Typecheck, deterministic tests, and build pass.
+- README, architecture, repository rules, and the Batch 7 checklist reflect the
+  shipped contract.
+
+## Confidence
+
+Confidence: **0.98**.
+
+The current source already has the required raw fields, responsive table
+projection, compact diagnostic formatter, detailed candidate diagnoses, and
+run-scoped live context. The remaining work is bounded option propagation,
+render-time projection, tests, and documentation. The principal regression
+risk is accidentally hiding the semantic reason for a stale or
+missing-fingerprint candidate; the plan addresses that with explicit renderer
+boundaries and acceptance tests.
