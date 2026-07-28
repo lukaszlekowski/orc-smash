@@ -30,6 +30,16 @@ steps; tasks run once; pipelines are linear stage instances referencing loops
 or tasks. The binding, not the skill name, determines the output contract and
 step semantics.
 
+The interactive **Tasks** action is a generic configured-task chooser. Its
+rows follow manifest declaration order and retain missing-input presentation.
+The chooser rescans at each menu boundary. The selected snapshot supplies any
+eligible pipeline continuations to the confirmation screen, where they are
+shown as advisory predecessor/successor context; the task remains runnable and
+does not consume or mutate pipeline state. The packaged `commit` task reuses
+this path and invokes the `50-simple-commit` skill through the selected
+provider. Git staging and commit creation belong to that agent skill, not to
+the harness.
+
 Configuration-owned role and skill definitions resolve from `manifestRoot`.
 Targets, named project inputs, and rendered output paths resolve from
 `projectRoot`. Project inputs may be missing at manifest load; the global
@@ -97,6 +107,12 @@ source for results, availability, emphasis, roles, and lifecycle states.
 `project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
 and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model
 without performing any filesystem reads or prompt content calls.
+
+Task confirmation consumes the eligible-candidate portion of this view model
+from the same Tasks-boundary scan. It does not poll again during runner
+selection or immediately before provider execution. A task may change the
+worktree fingerprint; subsequent state reconstruction, rather than the task
+menu, determines whether a pipeline continuation remains eligible.
 
 Decision parsing remains strict and exact-token-only. `commands/smash.ts` is the
 only owner of the optional correction prompt; `binding-engine.ts` receives a

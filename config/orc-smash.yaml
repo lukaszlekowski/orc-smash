@@ -4,6 +4,7 @@ roles:
   planner: roles/planner.md
   reviewer: roles/reviewer.md
   implementer: roles/implementer.md
+  committer: roles/committer.md
 
 skills:
   plan-audit:
@@ -25,6 +26,10 @@ skills:
   30-simple-implement:
     file: skills/30-simple-implement/SKILL.md
     role: implementer
+    runnerProfile: implement
+  50-simple-commit:
+    file: skills/50-simple-commit/SKILL.md
+    role: committer
     runnerProfile: implement
 
 loops:
@@ -85,6 +90,16 @@ tasks:
       pattern: "docs/dev/impl-v{version}-{provider}.md"
       contract: required-artifact
       validator: implement-ledger
+  commit:
+    skill: 50-simple-commit
+    target: { path: ".", kind: worktree }
+    inputs:
+      - { source: target }
+      - { source: version }
+      - { source: outputPath }
+    output:
+      pattern: "docs/dev/commit-v{version}-{provider}.md"
+      contract: completion-artifact
 
 pipelines:
   default:

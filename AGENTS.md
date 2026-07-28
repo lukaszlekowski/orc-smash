@@ -68,6 +68,11 @@ itself.
   suppress a new candidate but never rewrites valid historical lineage.
 - Keep this file, `README.md`, and `docs/architecture/overview.md` synchronized
   with `docs/dev/plan.md` as releases land.
+- The packaged `commit` task is an ordinary operator-invoked provider task. The
+  `50-simple-commit` skill owns safe Git inspection and one-local-commit
+  behavior; the harness does not run `git add`/`git commit`, verify commit
+  contents, or treat pipeline approval as Git authorization. Its completion
+  artifact is durable task evidence and may remain uncommitted.
 
 ## 1a. Architecture direction matters as much as feature scope
 

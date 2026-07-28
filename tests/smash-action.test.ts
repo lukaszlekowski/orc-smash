@@ -13,6 +13,9 @@ import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 import { loadConfig } from '../src/config.js';
 import { scanGlobalSnapshot } from '../src/artifact-index.js';
+import { writeArtifactWithMeta } from '../src/provenance.js';
+import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 vi.mock('../src/interactive.js', () => {
   return {
@@ -53,16 +56,20 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
         const outputPath = resolve(input.cwd, match[1].trim());
         mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
         if (input.kind === 'task') {
-          writeFileSync(outputPath,
-            '# Implementation Evidence Ledger\n\n' +
-            '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
-            '| --- | --- | --- | --- | --- |\n' +
-            '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
-            '## Requirement Coverage\n\n' +
-            '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
-            '| --- | --- | --- | --- |\n' +
-            '| Requirement | src/x.ts | pnpm test | pass |\n\n' +
-            'State overall confidence: 1.00\n');
+          if (input.prompt.includes('# Skill: 50-simple-commit')) {
+            writeFileSync(outputPath, '# Commit Evidence\n\n## Outcome\n\nCOMPLETED\n');
+          } else {
+            writeFileSync(outputPath,
+              '# Implementation Evidence Ledger\n\n' +
+              '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n' +
+              '| --- | --- | --- | --- | --- |\n' +
+              '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n' +
+              '## Requirement Coverage\n\n' +
+              '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n' +
+              '| --- | --- | --- | --- |\n' +
+              '| Requirement | src/x.ts | pnpm test | pass |\n\n' +
+              'State overall confidence: 1.00\n');
+          }
         } else if (input.kind === 'repair') {
           writeFileSync(outputPath, '# Repair\n\n## Outcome\n\nCOMPLETED\n');
         } else {
@@ -117,6 +124,12 @@ describe('generic smash dispatch', () => {
     const result = await run({ task: 'implement' });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(join(project, 'docs/dev/impl-v1-opencode.md'), 'utf8')).toContain('bindingKind: task');
+  });
+
+  it('dispatches the configured Commit task through the generic task engine', async () => {
+    const result = await run({ task: 'commit' });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(project, 'docs/dev/commit-v1-opencode.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
   });
 
   it('direct task execution never prompts for maximum evaluation rounds', async () => {
@@ -220,6 +233,119 @@ describe('generic smash dispatch', () => {
       expect(promptTaskMenu).toHaveBeenCalledTimes(2);
       expect(promptTaskDetailConfirmation).toHaveBeenCalledTimes(1);
       expect(promptMaxIterations).not.toHaveBeenCalled();
+    });
+
+    it('Interactive Tasks entry rescans inputs at the menu boundary', async () => {
+      vi.clearAllMocks();
+      const planPath = join(project, 'docs/dev/plan.md');
+      vi.mocked(promptTopLevelMenu)
+        .mockImplementationOnce(async () => {
+          unlinkSync(planPath);
+          return 'run-task';
+        })
+        .mockResolvedValueOnce('stop');
+      vi.mocked(promptTaskMenu).mockImplementationOnce(async (items: any[]) => {
+        const implement = items.find(item => item.taskId === 'implement');
+        expect(implement.availability).toBe('missing-inputs');
+        expect(implement.disabledReason).toContain('planPath=docs/dev/plan.md');
+        return 'back';
+      });
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(scriptedAdapter()),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptTaskMenu).toHaveBeenCalledTimes(1);
+      expect(promptTaskDetailConfirmation).not.toHaveBeenCalled();
+    });
+
+    it('Interactive task cancellation re-enters Tasks with a fresh snapshot', async () => {
+      vi.clearAllMocks();
+      let taskMenuCalls = 0;
+      const planPath = join(project, 'docs/dev/plan.md');
+      vi.mocked(promptTopLevelMenu)
+        .mockResolvedValueOnce('run-task')
+        .mockResolvedValueOnce('stop');
+      vi.mocked(promptTaskMenu).mockImplementation(async (items: any[]) => {
+        taskMenuCalls += 1;
+        if (taskMenuCalls === 1) {
+          expect(items.find(item => item.taskId === 'implement').availability).toBe('available');
+          return 'implement';
+        }
+        expect(items.find(item => item.taskId === 'implement').availability).toBe('missing-inputs');
+        return 'back';
+      });
+      vi.mocked(promptTaskDetailConfirmation).mockImplementationOnce(async () => {
+        unlinkSync(planPath);
+        return 'back';
+      });
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(scriptedAdapter()),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptTaskMenu).toHaveBeenCalledTimes(2);
+      expect(promptRunners).not.toHaveBeenCalled();
+    });
+
+    it('passes eligible continuation evidence from the Tasks snapshot to confirmation', async () => {
+      vi.clearAllMocks();
+      const config = loadConfig(project);
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-fake.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        makeV1ArtifactMeta({
+          version: 1,
+          agent: 'fake',
+          provider: 'fake',
+          bindingId: 'plan',
+          bindingKind: 'loop',
+          kind: 'evaluate',
+          pipelineId: 'default',
+          pipelineRunId: 'run-123',
+          stageId: 'plan',
+          chainId: 'chain-123',
+          chainMode: 'pipeline-start',
+          resultFingerprint: fingerprint,
+        }),
+      );
+
+      vi.mocked(promptTopLevelMenu)
+        .mockResolvedValueOnce('run-task')
+        .mockResolvedValueOnce('stop');
+      vi.mocked(promptTaskMenu)
+        .mockResolvedValueOnce('commit' as any)
+        .mockResolvedValueOnce('back' as any);
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('back');
+
+      const result = await smashAction({
+        project,
+        agent: 'opencode',
+        model: MODEL,
+        output,
+        createAdapterRegistry: () => registry(scriptedAdapter()),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      expect(promptTaskDetailConfirmation).toHaveBeenCalledWith(expect.objectContaining({
+        taskId: 'commit',
+        eligiblePipelineCandidates: [expect.objectContaining({
+          pipelineId: 'default',
+          predecessorStageId: 'plan',
+          successorStageId: 'implement',
+        })],
+      }));
     });
 
     it('Interactive mode: task execution to completion never calls the maximum-evaluation-round prompt', async () => {

@@ -8,7 +8,8 @@ from project files. It never calls a model API directly and keeps no runtime
 database.
 
 Binding-aware pipeline stage state and lineage are part of the current runtime.
-The active planned contract is Batch 4 provider progress telemetry in
+The completed Batch 5 contract adds configured Tasks and an agent-run Commit
+task in
 [docs/dev/plan.md](./docs/dev/plan.md). The single v1 manifest is
 `config/orc-smash.yaml`, optionally overridden by
 `<project>/.orc-smash.yaml` or an explicit `--config <path>` (highest
@@ -41,7 +42,16 @@ On launch, interactive `orc smash` renders a compact startup snapshot displaying
 
 Every operator-facing surface consumes one shared semantic terminal styling vocabulary (`terminal-accent.ts`). Statuses, decisions, warnings, availability, and lifecycle states use consistent accents across compact snapshots, interactive menus, the live status panel, detailed project status (`orc status`), and line-oriented plain-mode event output. Output remains 100% complete and understandable when colour is unsupported or disabled (`NO_COLOR=1`, non-TTY, or piped execution emit zero ANSI escape codes).
 
-All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. Unavailable choices, missing input blockers, and recommendations carry explicit, typed availability categories (`available`, `unavailable`, `missing-inputs`). `Execute one-off task` opens a generic task chooser listing all configured tasks, followed by a task detail confirmation. Pressing `Back` on task detail returns to the task chooser, while pressing `Back` on the chooser returns to the main menu without re-scanning or re-printing the startup header.
+All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. Unavailable choices, missing input blockers, and recommendations carry explicit, typed availability categories (`available`, `unavailable`, `missing-inputs`). **Tasks** opens a generic task chooser listing all configured tasks in manifest declaration order, followed by a task detail confirmation. Entering or re-entering Tasks performs one fresh state scan before its rows are rendered. If an eligible pipeline continuation exists, confirmation shows the configured pipeline and predecessor/successor stages and warns that the task may invalidate the suggestion; the warning is advisory and never disables the task. Pressing **Cancel — back to Tasks** returns to the rescanned chooser, while **Back to main menu** returns to the main action surface.
+
+The packaged `commit` task is an ordinary provider-run task using the
+`50-simple-commit` skill. It may create exactly one local commit for a clear
+operator-selected scope, preserves unrelated changes, uses explicit-path
+staging, leaves hooks enabled, never contacts a remote or runs direct tests,
+and writes a normal `docs/dev/commit-vN-provider.md` completion artifact. Git
+commit creation is performed by the selected agent; the harness does not own
+or verify the commit beyond the declared task artifact contract. The artifact
+is expected to remain as uncommitted evidence after a successful task.
 
 Both interactive **Display pipeline and project state** and `orc status --project <path>` include a manifest-derived **Prompt Contracts** section. The contract details how each prompt recipe is assembled (role ID & path, skill ID & path, ordered inputs with typed resolution annotations, output pattern, output contract, decision tokens, and validator) without performing content reads or printing source file contents.
 
@@ -73,6 +83,12 @@ runner profile. Output patterns use `{version}` and `{provider}` and resolve
 under the selected project root. Roles and skill files resolve under the
 manifest root. Missing project inputs are recorded in the global snapshot and
 fail execution preflight without admitting ownership or spawning a provider.
+
+One-off tasks are operator-controlled and remain runnable at every pipeline
+position. A task does not consume a suggested stage or automatically advance
+the pipeline. A task that changes the worktree may make an existing
+predecessor continuation stale; the next stage can then be run ad hoc and
+existing project-state reconstruction reports the resulting target drift.
 
 Decision artifacts normalize configured tokens to `accepted`, `retry`, or
 `unknown`. Completion artifacts require exactly one `## Outcome` section whose
@@ -156,5 +172,5 @@ The AGY command must run from an already-authenticated operator shell; it writes
 only a redacted evidence record, never raw invocation logs or credentials.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the
-architecture, the active audited [docs/dev/plan.md](./docs/dev/plan.md) for
-planned work, and [AGENTS.md](./AGENTS.md) for repository invariants.
+architecture, [docs/dev/plan.md](./docs/dev/plan.md) for the Batch 5 contract
+and closeout, and [AGENTS.md](./AGENTS.md) for repository invariants.

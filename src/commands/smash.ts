@@ -534,7 +534,16 @@ async function runInteractiveBindingSelection(
     if (topActionId === 'run-task') {
       let taskSelectionResult: { selectedTaskId: string; taskBinding: any; runContext: RunContext } | null = null;
       while (true) {
-        const taskMenu = buildTaskMenu(manifest, snapshot.missingInputs);
+        // Tasks owns its own menu-boundary snapshot. The same snapshot supplies
+        // missing-input state and eligible continuation evidence for the
+        // confirmation screen; no additional scan occurs after confirmation.
+        const taskSnapshot = scanGlobalSnapshot(projectRoot, config.manifest);
+        const taskView = buildProjectSnapshotView(config, taskSnapshot);
+        const taskMenu = buildTaskMenu(
+          manifest,
+          taskSnapshot.missingInputs,
+          config.manifestDeclarationOrder.tasks,
+        );
         const selectedTaskId = await promptTaskMenu(taskMenu);
         if (selectedTaskId === 'back') {
           break;
@@ -554,7 +563,8 @@ async function runInteractiveBindingSelection(
           targetPath: taskBinding.target.path,
           outputPattern: taskBinding.output.pattern,
           contract: taskBinding.output.contract,
-          missingInputs: snapshot.missingInputs.get(selectedTaskId),
+          missingInputs: taskSnapshot.missingInputs.get(selectedTaskId),
+          eligiblePipelineCandidates: taskView.eligibleCandidates,
         };
 
         const confirmation = await promptTaskDetailConfirmation(detail);

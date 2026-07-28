@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import {
   promptRunners,
   promptCandidateSelection,
+  promptTaskDetailConfirmation,
   formatMenuChoice,
 } from '../src/interactive.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
@@ -442,5 +443,60 @@ describe('promptCandidateSelection', () => {
         chalk.level = origLevel;
       }
     });
+  });
+});
+
+describe('promptTaskDetailConfirmation', () => {
+  it('renders an advisory for every eligible pipeline continuation and offers Continue/Cancel', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(select).mockResolvedValueOnce('run');
+
+    const result = await promptTaskDetailConfirmation({
+      taskId: 'commit',
+      skillId: '50-simple-commit',
+      role: 'committer',
+      skillPath: 'skills/50-simple-commit/SKILL.md',
+      targetPath: '.',
+      outputPattern: 'docs/dev/commit-v{version}-{provider}.md',
+      contract: 'completion-artifact',
+      eligiblePipelineCandidates: [
+        { pipelineId: 'default', predecessorStageId: 'implement', successorStageId: 'review' },
+        { pipelineId: 'release', predecessorStageId: 'build', successorStageId: 'verify' },
+      ],
+    });
+
+    expect(result).toBe('run');
+    expect(log.mock.calls.map(call => String(call[0])).join('\n')).toContain('Current eligible pipeline continuation:');
+    expect(log.mock.calls.map(call => String(call[0])).join('\n')).toContain('default: implement → review');
+    expect(log.mock.calls.map(call => String(call[0])).join('\n')).toContain('release: build → verify');
+    expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [
+        { name: 'Continue', value: 'run', disabled: false },
+        { name: 'Cancel — back to Tasks', value: 'back', disabled: false },
+      ],
+    }));
+  });
+
+  it('keeps Continue disabled for missing inputs without changing the task blocker', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(select).mockResolvedValueOnce('back');
+
+    await promptTaskDetailConfirmation({
+      taskId: 'commit',
+      skillId: '50-simple-commit',
+      role: 'committer',
+      skillPath: 'skills/50-simple-commit/SKILL.md',
+      targetPath: '.',
+      outputPattern: 'docs/dev/commit-v{version}-{provider}.md',
+      contract: 'completion-artifact',
+      missingInputs: ['file: planPath=docs/dev/plan.md'],
+    });
+
+    expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [
+        { name: 'Continue', value: 'run', disabled: true },
+        { name: 'Cancel — back to Tasks', value: 'back', disabled: false },
+      ],
+    }));
   });
 });
