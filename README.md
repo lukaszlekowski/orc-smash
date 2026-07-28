@@ -9,7 +9,8 @@ database.
 
 Binding-aware pipeline stage state and lineage are part of the current runtime.
 The completed Batch 5 contract adds configured Tasks and an agent-run Commit
-task in
+task, and the optional research-first Batch 6 contract adds a research loop
+and plan-creation task, in
 [docs/dev/plan.md](./docs/dev/plan.md). The single v1 manifest is
 `config/orc-smash.yaml`, optionally overridden by
 `<project>/.orc-smash.yaml` or an explicit `--config <path>` (highest
@@ -89,6 +90,14 @@ position. A task does not consume a suggested stage or automatically advance
 the pipeline. A task that changes the worktree may make an existing
 predecessor continuation stale; the next stage can then be run ad hoc and
 existing project-state reconstruction reports the resulting target drift.
+
+The packaged manifest preserves the `default` pipeline as
+`plan → implement → review`. It also declares an optional
+`research-first` pipeline: `research → create-plan → plan → implement → review`.
+The research approval loop and `create-plan` task are ordinary generic
+bindings. Research is never a prerequisite for the default pipeline, and every
+stage transition remains operator-confirmed; no downstream stage starts
+automatically.
 
 Decision artifacts normalize configured tokens to `accepted`, `retry`, or
 `unknown`. Completion artifacts require exactly one `## Outcome` section whose

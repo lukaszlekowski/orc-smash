@@ -22,4 +22,6 @@ export function resetFakeAdapterState(): void {
   fakeAdapterState.delayMs = undefined;
   fakeAdapterState.lifecycleMessages = [];
   fakeAdapterState.failAfterMs = undefined;
+  fakeAdapterState.extraWrites = [];
+  fakeAdapterState.taskOutcome = undefined;
 }

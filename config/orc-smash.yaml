@@ -31,6 +31,18 @@ skills:
     file: skills/50-simple-commit/SKILL.md
     role: committer
     runnerProfile: implement
+  research-audit:
+    file: skills/10-simple-research-audit/SKILL.md
+    role: auditor
+    runnerProfile: audit
+  research-follow-up:
+    file: skills/11-simple-research-follow-up/SKILL.md
+    role: planner
+    runnerProfile: follow-up
+  23-simple-create-plan:
+    file: skills/23-simple-create-plan/SKILL.md
+    role: planner
+    runnerProfile: follow-up
 
 loops:
   plan:
@@ -74,6 +86,25 @@ loops:
       output:
         pattern: "docs/dev/review-followup-v{version}-{provider}.md"
         contract: completion-artifact
+  research:
+    type: approval-loop
+    target: { path: docs/dev/research.md, kind: file }
+    inputs:
+      - { source: target }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    evaluate:
+      skill: research-audit
+      output:
+        pattern: "docs/dev/research-audit-v{version}-{provider}.md"
+        contract: decision-artifact
+        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
+    repair:
+      skill: research-follow-up
+      output:
+        pattern: "docs/dev/research-followup-v{version}-{provider}.md"
+        contract: completion-artifact
 
 tasks:
   implement:
@@ -100,10 +131,31 @@ tasks:
     output:
       pattern: "docs/dev/commit-v{version}-{provider}.md"
       contract: completion-artifact
+  create-plan:
+    skill: 23-simple-create-plan
+    target: { path: ".", kind: worktree }
+    files:
+      researchPath: docs/dev/research.md
+    inputs:
+      - { source: researchPath }
+      - { source: target }
+      - { source: version }
+      - { source: priorArtifact }
+      - { source: outputPath }
+    output:
+      pattern: "docs/dev/create-plan-v{version}-{provider}.md"
+      contract: completion-artifact
 
 pipelines:
   default:
     stages:
+      - { stageId: plan, loop: plan }
+      - { stageId: implement, task: implement }
+      - { stageId: review, loop: review }
+  research-first:
+    stages:
+      - { stageId: research, loop: research }
+      - { stageId: create-plan, task: create-plan }
       - { stageId: plan, loop: plan }
       - { stageId: implement, task: implement }
       - { stageId: review, loop: review }

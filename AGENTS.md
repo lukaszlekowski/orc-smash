@@ -260,11 +260,13 @@ itself.
 
 - `docs/dev/plan.md` is the design source of truth for active planned work and
   is audited and repaired through the configured `plan` approval loop before
-  implementation. A separate `docs/dev/research.md` is not a universal
-  prerequisite and is not a stage in the current pipeline. Implement the
-  approved plan's release boundaries and acceptance gates even where legacy
-  descriptions differ. Do not use an old audit artifact as an architectural
-  constraint; audit-response bookkeeping remains in versioned artifacts.
+  implementation. A separate `docs/dev/research.md` remains optional: it is
+  the first stage only in the packaged `research-first` pipeline, while the
+  `default` pipeline remains `plan → implement → review` and does not infer or
+  require research state. Implement the approved plan's release boundaries and
+  acceptance gates even where legacy descriptions differ. Do not use an old
+  audit artifact as an architectural constraint; audit-response bookkeeping
+  remains in versioned artifacts.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The
   contract-gated real provider paths are `opencode`, `codex`, and `claude`; `agy` remains a real

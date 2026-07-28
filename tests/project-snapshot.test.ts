@@ -310,9 +310,9 @@ loops:
     const snapshot = scanGlobalSnapshot(process.cwd(), config.manifest);
     const view = buildProjectSnapshotView(config, snapshot);
 
-    expect(view.promptContracts.length).toBe(4); // plan, review, implement, commit
+    expect(view.promptContracts.length).toBe(6); // plan, review, research, implement, commit, create-plan
     const stepCount = view.promptContracts.reduce((sum, b) => sum + b.steps.length, 0);
-    expect(stepCount).toBe(6); // plan eval/repair, review eval/repair, implement/commit tasks
+    expect(stepCount).toBe(9); // three loop pairs plus three tasks
 
     const text = renderDetailedSnapshot(view);
     expect(text).toContain('Prompt Contracts:');
@@ -330,8 +330,11 @@ loops:
 
     expect(text).toContain('[loop] plan');
     expect(text).toContain('[loop] review');
+    expect(text).toContain('[loop] research');
     expect(text).toContain('[task] implement');
     expect(text).toContain('[task] commit');
+    expect(text).toContain('[task] create-plan');
+    expect(text).toContain("- Pipeline 'research-first': research (research) -> create-plan (create-plan) -> plan (plan) -> implement (implement) -> review (review)");
   });
 
   it('renders missing file-kind target on Prompt Contracts binding-level Target line with missing annotation and warning accent', () => {

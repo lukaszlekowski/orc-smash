@@ -100,6 +100,12 @@ function manifest(): V1Manifest {
           { stageId: 'completion-sink-stage', task: 'sink' },
         ],
       },
+      twoLoopDelivery: {
+        stages: [
+          { stageId: 'source-stage', loop: 'source' },
+          { stageId: 'alternate-stage', loop: 'alternate' },
+        ],
+      },
     },
   };
 }
@@ -346,6 +352,70 @@ describe('pipeline run identity and eligibility', () => {
     expect(eligibleNextStages([first, second, successor], config, new Map([['delivery:source-stage', 'source-state']]))).toEqual([
       expect.objectContaining({ artifactIdentity: 'accepted-two' }),
     ]);
+  });
+
+  it('consumes exact predecessor edge when successor is a BLOCKED task root or REJECTED evaluate root', () => {
+    const config = manifest();
+    const predecessor = artifact({ artifactIdentity: 'predecessor-accepted', chainId: 'chain-one' });
+
+    // 1. Task successor with completion-artifact contract but normalizedResult: 'blocked' (e.g. BLOCKED create-plan)
+    const blockedTaskSuccessor = artifact({
+      artifactIdentity: 'blocked-task-successor',
+      bindingKind: 'task',
+      bindingId: 'sink',
+      phase: 'task',
+      contract: 'completion-artifact',
+      normalizedResult: 'blocked',
+      completionOutcome: 'blocked',
+      decision: undefined,
+      contractValid: true,
+      stageId: 'sink-stage',
+      chainId: 'successor-chain-1',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: 'predecessor-accepted',
+    });
+
+    const candidatesWithBlockedTask = pipelineStageCandidates(
+      [predecessor, blockedTaskSuccessor],
+      config,
+      new Map([['delivery:source-stage', 'source-state']]),
+    );
+    expect(candidatesWithBlockedTask).toHaveLength(1);
+    expect(candidatesWithBlockedTask[0].artifactIdentity).toBe('predecessor-accepted');
+    expect(candidatesWithBlockedTask[0].reason).toBe('exact-edge-consumed');
+    expect(candidatesWithBlockedTask[0].evidence.consumedByArtifactIdentity).toBe('blocked-task-successor');
+    expect(eligibleNextStages([predecessor, blockedTaskSuccessor], config, new Map([['delivery:source-stage', 'source-state']]))).toEqual([]);
+    expect(completionEvidenceForStage([predecessor, blockedTaskSuccessor], 'delivery', 'sink-stage', config)).toEqual([]);
+
+    // 2. Loop successor evaluate phase with normalizedResult: 'retry' (REJECTED review)
+    const predecessorLoop = artifact({ artifactIdentity: 'predecessor-accepted-loop', chainId: 'chain-two', pipelineId: 'twoLoopDelivery' });
+    const retryLoopSuccessor = artifact({
+      artifactIdentity: 'retry-loop-successor',
+      bindingKind: 'loop',
+      bindingId: 'alternate',
+      phase: 'evaluate',
+      contract: 'decision-artifact',
+      normalizedResult: 'retry',
+      decision: 'retry',
+      contractValid: true,
+      pipelineId: 'twoLoopDelivery',
+      stageId: 'alternate-stage',
+      chainId: 'successor-chain-2',
+      chainMode: 'stage-continuation',
+      parentArtifactIdentity: 'predecessor-accepted-loop',
+    });
+
+    const candidatesWithRetryLoop = pipelineStageCandidates(
+      [predecessorLoop, retryLoopSuccessor],
+      config,
+      new Map([['twoLoopDelivery:source-stage', 'source-state']]),
+    );
+    expect(candidatesWithRetryLoop).toHaveLength(1);
+    expect(candidatesWithRetryLoop[0].artifactIdentity).toBe('predecessor-accepted-loop');
+    expect(candidatesWithRetryLoop[0].reason).toBe('exact-edge-consumed');
+    expect(candidatesWithRetryLoop[0].evidence.consumedByArtifactIdentity).toBe('retry-loop-successor');
+    expect(eligibleNextStages([predecessorLoop, retryLoopSuccessor], config, new Map([['twoLoopDelivery:source-stage', 'source-state']]))).toEqual([]);
+    expect(completionEvidenceForStage([predecessorLoop, retryLoopSuccessor], 'twoLoopDelivery', 'alternate-stage', config)).toEqual([]);
   });
 
   it('guards against reintroducing generic completion predicates and routes loop completion through the evidence seam', () => {
