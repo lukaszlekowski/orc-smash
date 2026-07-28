@@ -97,6 +97,31 @@ function makeCapturingPanelOutput(captured: { snapshots: PanelContextSnapshot[];
 }
 
 describe('loop-level live region — runLoop with delayed fake adapter', () => {
+  it('keeps the enabled fingerprint choice across repeated live supplier paints', async () => {
+    fakeAdapterState.verdicts = ['APPROVED'];
+    fakeAdapterState.delayMs = 50;
+    fakeAdapterState.lifecycleMessages = [{ text: 'progress update', toolCalls: 1 }];
+    const config = loadConfig(tempWorkspace);
+    const registry = createTestAdapterRegistry();
+    const captured = { snapshots: [] as PanelContextSnapshot[], events: [] as LifecycleEvent[], rawContexts: [] as PanelContext[] };
+    const output = makeCapturingPanelOutput(captured);
+
+    await runLoop(tempWorkspace, 'plan', config.manifest.loops['plan']!, config, {
+      'plan-audit': { agent: 'fake', model: 'fake-model' },
+      'plan-follow-up': { agent: 'fake', model: 'fake-model' },
+    }, {
+      maxIterations: 1,
+      registry,
+      output,
+      interactive: false,
+      showFingerprints: true,
+    });
+
+    expect(captured.rawContexts.length).toBeGreaterThanOrEqual(2);
+    expect(captured.rawContexts.every(context => context.showFingerprints === true)).toBe(true);
+    expect(captured.rawContexts.some(context => context.inFlight !== null)).toBe(true);
+  });
+
   it('emits bounded provider progress and caps rendered tool-call counts', async () => {
     fakeAdapterState.verdicts = ['APPROVED'];
     fakeAdapterState.lifecycleMessages = Array.from({ length: 20 }, (_, index) => ({

@@ -5,6 +5,7 @@ import { scanGlobalSnapshot } from '../src/artifact-index.js';
 import { buildProjectSnapshotView } from '../src/project-snapshot-view.js';
 import { renderCompactSnapshot, renderDetailedSnapshot } from '../src/project-snapshot-renderer.js';
 import { renderStatusPanel } from '../src/status-panel.js';
+import type { PanelContext } from '../src/status.js';
 import { createPanelCliOutput } from '../src/cli-output.js';
 import { renderRunEvent } from '../src/plain-event-renderer.js';
 import { renderPlainPanel } from '../src/plain-render.js';
@@ -126,6 +127,57 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
     const menuChoice = formatMenuChoice({ label: 'Option A', recommended: true }, 'a');
     expect(menuChoice.name).toMatch(/\u001b\[/);
     expect(menuChoice.name.replace(/\u001b\[\d+m/g, '')).toContain('Option A');
+  });
+
+  it('showFingerprints changes neither plain panel text nor event rendering', () => {
+    const baseContext: PanelContext = {
+      projectRoot: process.cwd(),
+      loopName: 'plan',
+      bindingKind: 'loop',
+      currentIteration: 1,
+      maxIterations: 3,
+      activeSkillRunner: null,
+      timeline: [],
+      nextStepMessage: 'Ready',
+      inFlight: null,
+      latestVersion: 1,
+      readOnly: false,
+    };
+    const timelineContext: PanelContext = {
+      ...baseContext,
+      timeline: [{
+        relevance: 'current-chain',
+        step: {
+          kind: 'evaluate',
+          role: 'auditor',
+          agent: 'fake',
+          model: 'fake-model',
+          version: 1,
+          status: 'done',
+          decision: 'accepted',
+          artifactPath: '/tmp/eval.md',
+          artifactIdentity: 'artifact-identity',
+          parentArtifactIdentity: 'parent-identity',
+          inputFingerprint: 'input-fingerprint',
+          resultFingerprint: 'result-fingerprint',
+          mtime: 1,
+        },
+      }],
+    };
+    const plainWithout = renderPlainPanel({ ...timelineContext, showFingerprints: false });
+    const plainWith = renderPlainPanel({ ...timelineContext, showFingerprints: true });
+    expect(plainWith).toBe(plainWithout);
+
+    const eventsWithout = [
+      makeRunEvent({ type: 'note', atMs: 1, message: 'same event stream' }),
+      makeRunEvent({ type: 'run.completed', atMs: 2, result: 'success', outcome: 'completed' }),
+    ];
+    const eventsWith = [
+      makeRunEvent({ type: 'note', atMs: 1, message: 'same event stream' }),
+      makeRunEvent({ type: 'run.completed', atMs: 2, result: 'success', outcome: 'completed' }),
+    ];
+    expect(eventsWith).toEqual(eventsWithout);
+    expect(eventsWith.map(renderRunEvent)).toEqual(eventsWithout.map(renderRunEvent));
   });
 
   describe('State × Surface Parameterized ANSI Matrix', () => {

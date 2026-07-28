@@ -51,6 +51,7 @@ export interface BindingEngineOptions {
   interactive?: boolean;
   registry: AgentRegistry;
   output: CliOutput;
+  showFingerprints?: boolean;
   ownership?: OwnershipContext | null;
   runnerOverrides?: RunnerOverrideMap;
   runContext?: RunContext;
@@ -232,6 +233,7 @@ export async function runBinding(
           config,
           registry: options.registry,
           output: options.output,
+          showFingerprints: options.showFingerprints,
           steps,
           maxIterations: options.maxIterations,
           ownership: options.ownership,

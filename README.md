@@ -36,7 +36,9 @@ orc smash --project <path> --loop <loop-id>        # ad-hoc approval loop
 orc smash --project <path> --task <task-id>        # ad-hoc one-off task
 orc smash --project <path> --pipeline <pipeline>   # explicit pipeline start
 orc smash --project <path> --plain --task <task-id>
+orc smash --project <path> --show-fingerprints
 orc status --project <path> [--all] [--config <path>]
+orc status --project <path> --show-fingerprints
 ```
 
 On launch, interactive `orc smash` renders a compact startup snapshot displaying the project root, config path, configured pipelines, suggested loop & reason, and a compact per-binding state summary (binding kind, target path, latest evaluate/repair/task steps with decision/outcome, provider/model, effort, session strategy/ID, missing inputs, and unclassified count).
@@ -69,8 +71,17 @@ Runner selection is independent per skill. Global overrides are
 `--runner-effort skill=level`. Models are validated in their provider's own
 namespace, and changing provider re-defaults its model.
 
-The default panel uses an alternate screen. `--plain` emits an append-only,
-typed event stream suitable for logs and CI. A direct loop or task is ad hoc
+The default live panel uses nine operational timeline columns: version, role,
+agent, model, effort, result, time, session, and status. Add
+`--show-fingerprints` to either command to show the four diagnostic fields
+(`Artifact`, `Parent`, `Input FP`, and `Result FP`) in their existing wide-table
+form, or as one compact identity/fingerprint line beneath each row on narrow
+terminals. Detailed status keeps semantic stale, drift, and missing-evidence
+reasons visible by default; the flag only restores their raw identity and
+fingerprint values. The choice is per invocation and is not persisted. The
+default panel uses an alternate screen. `--plain` emits an append-only,
+typed event stream suitable for logs and CI; it remains complete and unchanged
+when the flag is supplied. A direct loop or task is ad hoc
 and has no inferred pipeline identity. Only an explicit pipeline start or a
 later operator-confirmed suggested-stage action can carry pipeline identity
 forward; downstream stages never start automatically.

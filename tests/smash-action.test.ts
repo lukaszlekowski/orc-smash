@@ -6,9 +6,10 @@ import { smashAction } from '../src/commands/smash.js';
 import type { AgentAdapter, RunInput, RunResult } from '../src/adapters/types.js';
 import type { AgentRegistry } from '../src/adapters/registry.js';
 import type { RunEvent } from '../src/run-event.js';
+import type { PanelContext } from '../src/status.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation, promptDecisionCorrection } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation, promptDecisionCorrection, promptStatusAcknowledgement } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 import { loadConfig } from '../src/config.js';
@@ -31,6 +32,7 @@ vi.mock('../src/interactive.js', () => {
     promptTaskMenu: vi.fn(),
     promptTaskDetailConfirmation: vi.fn(),
     promptDecisionCorrection: vi.fn(),
+    promptStatusAcknowledgement: vi.fn(),
   };
 });
 
@@ -139,6 +141,30 @@ describe('generic smash dispatch', () => {
     expect(promptMaxIterations).not.toHaveBeenCalled();
   });
 
+  it('threads the display choice through direct loop, task, and pipeline executor entry points', async () => {
+    const captured: PanelContext[] = [];
+    const captureOutput = createMockOutput({
+      attachLiveRegion: (supplier: () => PanelContext) => { captured.push(supplier()); },
+      detachLiveRegion: () => {},
+    });
+
+    const runWithCapture = (options: Record<string, unknown>) => smashAction({
+      project,
+      agent: 'opencode',
+      model: MODEL,
+      output: captureOutput,
+      showFingerprints: true,
+      createAdapterRegistry: () => registry(scriptedAdapter()),
+      ...options,
+    } as any);
+
+    expect((await runWithCapture({ loop: 'plan' })).exitCode).toBe(0);
+    expect((await runWithCapture({ task: 'implement' })).exitCode).toBe(0);
+    expect((await runWithCapture({ pipeline: 'default' })).exitCode).toBe(0);
+    expect(captured.length).toBeGreaterThanOrEqual(3);
+    expect(captured.every(context => context.showFingerprints === true)).toBe(true);
+  });
+
   it('starts a pipeline with pipeline and stage identity', async () => {
     const result = await run({ pipeline: 'default' });
     expect(result.exitCode).toBe(0);
@@ -205,6 +231,47 @@ describe('generic smash dispatch', () => {
       expect(promptLoopSubmenu).toHaveBeenCalledTimes(1);
       expect(promptMaxIterations).toHaveBeenCalledTimes(1);
       expect(promptPostRunRecovery).toHaveBeenCalledTimes(1);
+    });
+
+    it('interactive project status uses the invocation fingerprint visibility choice', async () => {
+      const config = loadConfig(project);
+      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/plan-audit-v1-fake.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        makeV1ArtifactMeta({
+          version: 1,
+          agent: 'fake',
+          provider: 'fake',
+          bindingId: 'plan',
+          bindingKind: 'loop',
+          kind: 'evaluate',
+          pipelineId: 'default',
+          pipelineRunId: 'interactive-status-run',
+          stageId: 'plan',
+          chainId: 'interactive-status-chain',
+          chainMode: 'pipeline-start',
+          resultFingerprint: fingerprint,
+        }),
+      );
+
+      vi.mocked(promptTopLevelMenu)
+        .mockResolvedValueOnce('display-status')
+        .mockResolvedValueOnce('stop');
+      vi.mocked(promptStatusAcknowledgement).mockResolvedValueOnce();
+
+      const result = await smashAction({
+        project,
+        output,
+        showFingerprints: true,
+        createAdapterRegistry: () => registry(scriptedAdapter()),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      const statusText = output.staticTextWrites.find(text => text.includes('Pipeline Suggestions'));
+      expect(statusText).toContain('Artifact identity:');
+      expect(statusText).toContain('Fingerprint: valid (' + fingerprint + ')');
+      expect(promptStatusAcknowledgement).toHaveBeenCalledTimes(1);
     });
 
     it('Interactive mode: task detail Back returns to task chooser menu without re-rendering startup snapshot', async () => {

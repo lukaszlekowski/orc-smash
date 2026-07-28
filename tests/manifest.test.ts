@@ -29,8 +29,8 @@ describe('v1 manifest contract', () => {
       'research', 'create-plan', 'plan', 'implement', 'review',
     ]);
     expect((manifest as any).manifestDeclarationOrder).toBeUndefined();
-    expect(declarationOrder.loops).toEqual(['plan', 'review', 'research']);
-    expect(declarationOrder.tasks).toEqual(['implement', 'commit', 'create-plan']);
+    expect(declarationOrder.loops).toEqual(['research', 'plan', 'review']);
+    expect(declarationOrder.tasks).toEqual(['create-plan', 'implement', 'commit']);
     expect(declarationOrder.pipelines).toEqual(['default', 'research-first']);
   });
 

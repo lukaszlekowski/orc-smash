@@ -36,7 +36,7 @@ describe('generic status snapshot', () => {
     const result = await statusAction({ project, output });
     expect(result.exitCode).toBe(0);
     expect(output.lastStaticText).toContain('Project Snapshot');
-    expect(output.lastStaticText).toContain('Suggested loop: plan');
+    expect(output.lastStaticText).toContain('Suggested loop: research');
   });
 
   it('renders retry evaluation artifact in binding summary', async () => {
@@ -116,6 +116,11 @@ describe('generic status snapshot', () => {
     await statusAction({ project, output });
     expect(output.lastStaticText).toContain('Pipeline Suggestions');
     expect(output.lastStaticText).toContain('plan -> implement');
+    expect(output.lastStaticText).not.toContain('Artifact identity:');
+    expect(output.lastStaticText).not.toContain('Fingerprint:');
+    expect(output.lastStaticText).toContain('Eligibility reason: eligible');
+
+    await statusAction({ project, output, showFingerprints: true });
     expect(output.lastStaticText).toContain('Artifact identity:');
     expect(output.lastStaticText).toContain('Decision/Outcome: accepted');
     expect(output.lastStaticText).toContain('Fingerprint: valid (' + fingerprint + ')');
@@ -156,7 +161,11 @@ describe('generic status snapshot', () => {
 
     await statusAction({ project, output });
     expect(output.lastStaticText).toContain('Pipeline Suggestions (Eligible: 0, Total: 1)');
-    expect(output.lastStaticText).toContain('stale');
+    expect(output.lastStaticText).toContain('unavailable');
+    expect(output.lastStaticText).toContain('target-fingerprint-drift');
+    expect(output.lastStaticText).not.toContain('Fingerprint:');
+
+    await statusAction({ project, output, showFingerprints: true });
     expect(output.lastStaticText).toContain('Fingerprint: drift (recorded some-stale-hash-123 vs current');
 
     const displayedCandidates = allPipelineCandidates(project, loadConfig(project).manifest);

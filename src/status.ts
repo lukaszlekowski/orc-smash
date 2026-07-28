@@ -75,6 +75,7 @@ export interface PanelContext {
   latestVersion: number;
   readOnly: boolean;
   providerCalls?: number;
+  showFingerprints?: boolean;
 }
 
 export interface ResolvedRunnerDisplay {
@@ -102,6 +103,7 @@ export function buildPanelContext(
   resolvedRunners: ResolvedRunnerDisplay[] = [],
   providerCalls?: number,
   activeInvocation?: ActiveInvocationDisplay,
+  showFingerprints?: boolean,
 ): PanelContext {
   return {
     projectRoot,
@@ -117,7 +119,8 @@ export function buildPanelContext(
     inFlight,
     latestVersion,
     readOnly,
-    providerCalls
+    providerCalls,
+    showFingerprints,
   };
 }
 

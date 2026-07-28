@@ -74,6 +74,14 @@ itself.
   contents, or treat pipeline approval as Git authorization. Its completion
   artifact is durable task evidence and may remain uncommitted.
 
+- `orc smash` and `orc status` accept the default-off, run-scoped
+  `--show-fingerprints` presentation flag. Without it, the live timeline shows
+  only its nine operational columns and detailed status omits raw artifact
+  identity/fingerprint values. With it, the existing four diagnostic fields
+  remain available, including the narrow-terminal compact identity line.
+  Semantic stale, drift, and missing-evidence reasons and `--plain` event
+  output are unchanged; this is not workflow state or fingerprinting policy.
+
 ## 1a. Architecture direction matters as much as feature scope
 
 - Refactors must introduce **purposeful module boundaries**, not generic helper buckets.

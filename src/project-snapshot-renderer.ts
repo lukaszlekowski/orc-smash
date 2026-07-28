@@ -74,7 +74,7 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
 }
 
 /** Render the detailed project status report (used by `orc status` and prompt-contract inspection). */
-export function renderDetailedSnapshot(view: ProjectSnapshotView): string {
+export function renderDetailedSnapshot(view: ProjectSnapshotView, opts?: { showFingerprints?: boolean }): string {
   const lines: string[] = [];
 
   lines.push('================================================================================');
@@ -198,16 +198,20 @@ export function renderDetailedSnapshot(view: ProjectSnapshotView): string {
       const statusStr = staleAccent(cand.stale)(rawStatusStr);
       lines.push(`  - [${cand.pipelineId}:${cand.pipelineRunId}] ${cand.predecessorStageId} -> ${cand.successorStageId} (${statusStr})`);
       lines.push(`    Predecessor artifact: ${cand.completionArtifactPath}`);
-      lines.push(`    Artifact identity: ${cand.completionArtifactIdentity}`);
+      if (opts?.showFingerprints === true) {
+        lines.push(`    Artifact identity: ${cand.completionArtifactIdentity}`);
+      }
       lines.push(`    Decision/Outcome: ${cand.decisionOrOutcome}`);
       lines.push(`    Binding/Phase: ${cand.predecessorBindingKind}/${cand.predecessorBindingId}/${cand.predecessorPhase}`);
       lines.push(`    Chain: ${cand.predecessorChainId} | Normalized result: ${cand.normalizedResult}`);
       lines.push(`    Eligibility reason: ${cand.reason}`);
-      const rawFpStr = cand.stale
-        ? `drift (recorded ${cand.resultFingerprint ?? 'none'} vs current ${cand.targetFingerprintNow ?? 'none'})`
-        : `valid (${cand.resultFingerprint ?? 'none'})`;
-      const fpStr = staleAccent(cand.stale)(rawFpStr);
-      lines.push(`    Fingerprint: ${fpStr}`);
+      if (opts?.showFingerprints === true) {
+        const rawFpStr = cand.stale
+          ? `drift (recorded ${cand.resultFingerprint ?? 'none'} vs current ${cand.targetFingerprintNow ?? 'none'})`
+          : `valid (${cand.resultFingerprint ?? 'none'})`;
+        const fpStr = staleAccent(cand.stale)(rawFpStr);
+        lines.push(`    Fingerprint: ${fpStr}`);
+      }
     }
   }
 
