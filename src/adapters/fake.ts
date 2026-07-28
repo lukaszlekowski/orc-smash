@@ -2,6 +2,11 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
 
+export interface FakeExtraWrite {
+  path: string;
+  content: string;
+}
+
 export const fakeAdapterState = {
   verdicts: [] as string[],
   stdout: '',
@@ -16,7 +21,17 @@ export const fakeAdapterState = {
   lifecycleMessages: [] as Array<{ text: string; toolCalls: number }>,
   failAfterMs: undefined as number | undefined,
   progressCapability: undefined as 'structured' | 'unavailable' | undefined,
+  extraWrites: [] as FakeExtraWrite[],
+  taskOutcome: undefined as string | undefined,
 };
+
+function applyExtraWrites(cwd: string): void {
+  for (const extraWrite of fakeAdapterState.extraWrites) {
+    const absolutePath = resolve(cwd, extraWrite.path);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, extraWrite.content);
+  }
+}
 
 function fakeTelemetry(): Pick<RunResult, 'effectiveModel' | 'effectiveEffort'> {
   return {
@@ -44,6 +59,8 @@ export const fakeAdapter: AgentAdapter = {
     const relativePath = match?.[1]?.trim() ?? '';
     const isRepair = input.kind === 'repair' || /followup-v\d+-/.test(relativePath);
     const isTask = input.kind === 'task';
+    // Existing implementation-task compatibility remains intentionally scoped
+    // to the test adapter; the new configurable seams below are generic.
     const isImplement = input.skillId === '30-simple-implement' || /impl-v\d+-/.test(relativePath);
 
 
@@ -150,8 +167,9 @@ export const fakeAdapter: AgentAdapter = {
         if (relativePath && fakeAdapterState.writeVerdictFile) {
           const absolutePath = resolve(input.cwd, relativePath);
           mkdirSync(dirname(absolutePath), { recursive: true });
-          writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\nCOMPLETED\n`);
+          writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\n${fakeAdapterState.taskOutcome ?? 'COMPLETED'}\n`);
         }
+        applyExtraWrites(input.cwd);
         emitEnd();
         return { stdout: rawRes.stdout || fakeAdapterState.stdout || 'Fake task completed', exitCode: rawRes.exitCode, ...fakeTelemetry() };
       }
@@ -253,8 +271,9 @@ export const fakeAdapter: AgentAdapter = {
       if (relativePath && fakeAdapterState.writeVerdictFile) {
         const absolutePath = resolve(input.cwd, relativePath);
         mkdirSync(dirname(absolutePath), { recursive: true });
-        writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\nCOMPLETED\n`);
+        writeFileSync(absolutePath, `# Fake task\n\n## Outcome\n\n${fakeAdapterState.taskOutcome ?? 'COMPLETED'}\n`);
       }
+      applyExtraWrites(input.cwd);
       emitEnd();
       return {
         stdout: fakeAdapterState.stdout || 'Fake task completed',

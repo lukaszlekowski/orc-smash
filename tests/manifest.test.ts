@@ -13,8 +13,10 @@ describe('v1 manifest contract', () => {
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.loops.plan).toBeDefined();
     expect(manifest.loops.review).toBeDefined();
+    expect(manifest.loops.research).toBeDefined();
     expect(manifest.tasks?.implement).toBeDefined();
     expect(manifest.tasks?.commit).toBeDefined();
+    expect(manifest.tasks?.['create-plan']).toBeDefined();
     expect(manifest.skills['50-simple-commit']).toEqual({
       file: 'skills/50-simple-commit/SKILL.md',
       role: 'committer',
@@ -23,9 +25,13 @@ describe('v1 manifest contract', () => {
     expect(manifest.loops.implement).toBeUndefined();
     expect(manifest.pipelines.default?.stages.map(stage => stage.stageId)).toEqual(['plan', 'implement', 'review']);
     expect(manifest.pipelines.default?.stages[1]).toEqual({ stageId: 'implement', task: 'implement' });
+    expect(manifest.pipelines['research-first']?.stages.map(stage => stage.stageId)).toEqual([
+      'research', 'create-plan', 'plan', 'implement', 'review',
+    ]);
     expect((manifest as any).manifestDeclarationOrder).toBeUndefined();
-    expect(declarationOrder.loops).toEqual(['plan', 'review']);
-    expect(declarationOrder.tasks).toEqual(['implement', 'commit']);
+    expect(declarationOrder.loops).toEqual(['plan', 'review', 'research']);
+    expect(declarationOrder.tasks).toEqual(['implement', 'commit', 'create-plan']);
+    expect(declarationOrder.pipelines).toEqual(['default', 'research-first']);
   });
 
   it('rejects unsupported schema versions and malformed output patterns', () => {

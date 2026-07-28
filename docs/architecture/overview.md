@@ -28,7 +28,11 @@ project `.orc-smash.yaml`, or explicit `--config`. Generic skills reference
 roles, files, and runner profiles. Approval loops have `evaluate` and `repair`
 steps; tasks run once; pipelines are linear stage instances referencing loops
 or tasks. The binding, not the skill name, determines the output contract and
-step semantics.
+step semantics. The packaged configuration includes the unchanged `default`
+pipeline (`plan → implement → review`) plus an optional `research-first`
+pipeline (`research → create-plan → plan → implement → review`). Its research
+approval loop and plan-creation task are ordinary configuration; the generic
+engine does not make research a prerequisite and no stage starts automatically.
 
 The interactive **Tasks** action is a generic configured-task chooser. Its
 rows follow manifest declaration order and retain missing-input presentation.

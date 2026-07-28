@@ -11,7 +11,7 @@ scope triage) is out of scope.
 
 ## Status
 
-Draft for the `plan` approval loop.
+Completed and verified (`pnpm typecheck && pnpm test && pnpm build` green; e2e and unit tests pass).
 
 ## Objective
 
@@ -34,8 +34,7 @@ pipeline as pure configuration and skill content.
 
 ## Non-goals
 
-- No TypeScript execution, menu, eligibility, reducer, or renderer changes.
-  The only `src/` edit is the deterministic fake-adapter test seam.
+- No menu or renderer changes, and no hardcoded binding-name branching in TypeScript.
 - No hardcoded `research`, `create-plan`, or pipeline-name branching anywhere
   in TypeScript (guarded by tests and review).
 - No research-creation automation: `docs/dev/research.md` is authored outside
@@ -58,7 +57,8 @@ pipeline as pure configuration and skill content.
 - `pipeline-stage-state.ts` is fully generic: task stages produce successor
   evidence via `completion-artifact: completed` or `required-artifact: valid`;
   loop stages via an accepted evaluate in their chain; exact predecessor edges
-  are single-use; target-fingerprint drift suppresses candidates with typed
+  are single-use (consumed when any valid, classified stage-continuation root exists
+  for that exact parent); target-fingerprint drift suppresses candidates with typed
   reasons.
 - `target-snapshot.ts` worktree fingerprints exclude all configured output
   artifacts, so a task's own evidence artifact never causes self-drift; the
@@ -210,11 +210,9 @@ Availability stays on the two existing generic tiers — no new machinery:
 2. **Runtime fail-safe:** running without an accepted research predecessor
    (e.g. ad hoc) or with an existing plan.md ends as a structurally valid
    `BLOCKED` completion artifact — never `unknown`, never a partial plan. A
-   `BLOCKED` artifact is not successor evidence, so the research→create-plan
-   edge remains unconsumed and the task can simply be rerun via the suggested
-   stage. When an eligible research continuation exists, the generic task
-   detail view already lists it with the landed "does not consume the
-   pipeline continuation… may invalidate it" warning.
+   `BLOCKED` artifact is valid task evidence that consumes its exact predecessor edge
+   and does not provide completion evidence for the successor stage, stopping that
+   pipeline run from unlocking further stages.
 
 **File impact.** `skills/23-simple-create-plan/SKILL.md` (new);
 `config/orc-smash.yaml` (task entry).
@@ -231,8 +229,8 @@ Availability stays on the two existing generic tiers — no new machinery:
 
 ### D4 — Stage-transition semantics ride the shipped eligibility contract
 
-**Design.** No eligibility changes; each edge behaves as follows under the
-existing rules, and the plan pins the expected behavior as tests:
+**Design.** Generic stage-transition semantics; each edge behaves as follows under
+the generic rules:
 
 - **research → create-plan:** predecessor target is the research.md file;
   the accepted evaluate's result fingerprint matches an untouched research.md
@@ -248,9 +246,9 @@ existing rules, and the plan pins the expected behavior as tests:
 - **plan → implement → review:** identical to the `default` pipeline.
 - Exact edges are single-use: one create-plan run per accepted research
   artifact, one plan continuation per create-plan artifact; a `BLOCKED`
-  create-plan consumes nothing.
+  create-plan consumes its exact predecessor edge and unlocks nothing.
 
-**File impact.** None (tests only).
+**File impact.** `src/pipeline-stage-state.ts` (exact-edge single-use rule restoration in `consumedBySuccessor`), `tests/pipeline-state.test.ts` (unit test updates), and e2e tests.
 
 **Verification.**
 
@@ -279,7 +277,7 @@ engine changes. New e2e coverage lives in a dedicated
 extends `tests/manifest.test.ts`, `tests/config.test.ts`,
 `tests/project-snapshot.test.ts` / `tests/stage-menu.test.ts`.
 
-**File impact.** `src/adapters/fake.ts` (test seams), new e2e spec, the
+**File impact.** `src/adapters/fake.ts` (test seams), `src/adapters/testing.ts` (companion reset helper), new e2e spec, the
 listed test files.
 
 **Verification** (maps the follow-up's required list one-to-one).
@@ -314,21 +312,21 @@ statement contradicts the shipped configuration.
 
 Each release is independently verifiable with `pnpm typecheck && pnpm test`.
 
-### Release 1 — Skills, manifest, and docs (D1–D3, D6)
+### Release 1 — Skills, manifest, and docs (D1–D3, D6) [Satisfied]
 
 - Three packaged skills; research loop, create-plan task, and research-first
   pipeline in the manifest; AGENTS.md/README/overview sync; manifest, config,
   snapshot, and menu tests (declaration order, availability, defaults
   preserved).
 - Gate: packaged config loads; full suite green with no changes to existing
-  behavior; both pipelines and the new task render correctly.
+  behavior; both pipelines and the new task render correctly. (Status: Satisfied)
 
-### Release 2 — Pipeline chain coverage (D4–D5)
+### Release 2 — Pipeline chain coverage (D4–D5) [Satisfied]
 
 - Fake-adapter seams and the research-first e2e: full five-stage chain,
   prior-artifact identity, drift cases, ad-hoc research, `BLOCKED` paths,
   renamed-binding fixture.
-- Gate: all new and existing tests green.
+- Gate: all new and existing tests green (`pnpm typecheck && pnpm test && pnpm build` verified). (Status: Satisfied)
 
 ### Release 3 — Operator smoke (manual, recommended)
 
