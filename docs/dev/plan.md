@@ -1,521 +1,351 @@
----
-status: done
-confidence: 0.96
-owners: harness-runtime
----
+# Plan — Optional research-first pipeline and plan-creation task (follow-up batch 6)
 
-# Batch 5 — Configured Tasks and Agent-Run Commit Skill
+**Confidence: 0.96**
 
-## Goal
+This plan implements **Batch 6 — Optional research-first pipeline** from
+`docs/dev/archived/follow-up.md`: a standalone research approval loop, a
+configured plan-creation task, and an optional
+`research → create-plan → plan → implement → review` pipeline, while
+retaining the existing `default` pipeline unchanged. Batch 7 (rejected-audit
+scope triage) is out of scope.
 
-Keep one-off tasks simple and operator-controlled:
+## Status
 
-1. rename **Execute one-off task** to **Tasks**;
-2. show configured tasks in manifest declaration order;
-3. rescan project state whenever the main menu or Tasks menu is entered;
-4. warn, but never block, when running a one-off task may invalidate a
-   currently eligible pipeline continuation; and
-5. add a `commit` task whose selected coding agent safely creates one local
-   commit through the existing task/provider path.
+Draft for the `plan` approval loop.
 
-The harness does not implement Git commit automation. It invokes the configured
-commit skill exactly as it invokes any other task. The operator remains the
-authority for deciding when a one-off task runs.
+## Objective
 
-## Release boundary
+Let the operator optionally front-load work with a research approval cycle
+whose accepted artifact feeds a configured plan-creation task, without making
+research a universal prerequisite and without adding any research- or
+task-specific branching to TypeScript. The generic binding engine, pipeline
+eligibility, menus, and evidence contracts already shipped must carry the new
+pipeline as pure configuration and skill content.
 
-This batch adds:
+## Scope
 
-- `roles/committer.md`;
-- `skills/50-simple-commit/SKILL.md`;
-- one configured `50-simple-commit` skill and `commit` task;
-- the **Tasks** label and submenu navigation;
-- manifest-order task presentation;
-- one advisory confirmation when an eligible pipeline continuation exists;
-- menu-boundary rescanning; and
-- focused configuration, menu, prompt, task, Git-safety, and documentation
-  coverage.
+- Packaged manifest additions in `config/orc-smash.yaml`: one approval loop,
+  one task, one pipeline, three skill definitions (no role changes);
+- three new packaged skill files under `skills/` at the tool root;
+- test-only seams in `src/adapters/fake.ts` and deterministic manifest,
+  snapshot, menu, and e2e coverage;
+- documentation synchronization (`AGENTS.md`, `README.md`,
+  `docs/architecture/overview.md`).
 
-This batch does **not** add:
+## Non-goals
 
-- task availability or pipeline-checkpoint contracts;
-- task disabling based on pipeline position;
-- a `git-commit` output contract;
-- harness-owned `git add` or `git commit`;
-- Git index snapshots, transaction markers, recovery commands, or pipeline
-  repair;
-- fingerprint equivalence for a dirty worktree and the same content after
-  commit;
-- automatic pipeline transitions;
-- a new pipeline stage;
-- push, amend, reset, clean, stash, force operations, or hook bypass;
-- a general action/plugin framework; or
-- a second scan immediately before provider execution.
+- No TypeScript execution, menu, eligibility, reducer, or renderer changes.
+  The only `src/` edit is the deterministic fake-adapter test seam.
+- No hardcoded `research`, `create-plan`, or pipeline-name branching anywhere
+  in TypeScript (guarded by tests and review).
+- No research-creation automation: `docs/dev/research.md` is authored outside
+  the harness (operator or external agent), exactly like `docs/dev/plan.md`
+  before this batch. Do not add a research-generation task or make research a
+  prerequisite for the `default` pipeline.
+- No plan-creation semantics inside the `plan` approval loop: it keeps
+  auditing and repairing `plan.md`; it is not turned into a generator.
+- No replacement/overwrite workflow for an existing `docs/dev/plan.md` (the
+  follow-up defers that to a separately designed workflow).
+- No automatic downstream transitions: every stage change remains an
+  operator-confirmed action (suggested stage, pipeline start, or ad-hoc run).
+- No new task-availability machinery: availability uses the existing generic
+  missing-inputs contract plus the task's fail-safe `BLOCKED` outcome (D3).
+- Batch 7 scope triage, and any change to the commit task, decision
+  correction, telemetry, or ledger outcomes from earlier batches.
 
-Missing declared project inputs retain their existing preflight behavior. No
-task gains a new pipeline-based availability restriction.
+## Current state (verified)
 
-## Architecture
+- `pipeline-stage-state.ts` is fully generic: task stages produce successor
+  evidence via `completion-artifact: completed` or `required-artifact: valid`;
+  loop stages via an accepted evaluate in their chain; exact predecessor edges
+  are single-use; target-fingerprint drift suppresses candidates with typed
+  reasons.
+- `target-snapshot.ts` worktree fingerprints exclude all configured output
+  artifacts, so a task's own evidence artifact never causes self-drift; the
+  created `plan.md` and `HEAD` are covered, so later edits/commits
+  legitimately suppress the continuation (the documented "may invalidate it"
+  behavior).
+- Manifest validation supports any number of pipelines with mixed loop/task
+  stages, per-pipeline unique stage IDs, and load-time skill/role file
+  existence checks (`manifest.ts:479-491`).
+- `binding-engine.ts` already resolves a stage-continuation task's
+  `priorArtifact` from the recorded parent artifact identity — the exact
+  accepted-research predecessor wiring, with zero new code.
+- The pipeline-continuation warning the operator quoted already landed
+  (`interactive.ts:107-114`, commit `027417c`) and is generic over eligible
+  candidates; `create-plan` inherits it with no change.
+- Packaged roles (`auditor`, `planner`, …) and skills live at the tool root;
+  skill IDs are arbitrary strings. No research or create-plan skills exist
+  today.
+- The fake adapter writes valid task completion artifacts generically but has
+  no seam to write additional provider-side files (needed to simulate
+  `plan.md` creation) or to emit a `BLOCKED` task outcome.
 
-### Reuse the normal task engine
+## Normative decisions
 
-Declare Commit as an ordinary manifest task:
+### D1 — Pure-configuration pipeline addition with preserved defaults
+
+**Design.** All runtime behavior comes from the shipped generic engine. The
+manifest gains, in YAML key order: `research` appended after `review` in
+`loops:` (so the first configured loop — and therefore the no-activity
+default-loop suggestion — stays `plan`), `create-plan` appended after
+`commit` in `tasks:`, and `research-first` appended after `default` in
+`pipelines:` (both pipelines render in manifest declaration order, `default`
+first). Reference shape:
 
 ```yaml
-roles:
-  committer: roles/committer.md
-
-skills:
-  50-simple-commit:
-    file: skills/50-simple-commit/SKILL.md
-    role: committer
-    runnerProfile: implement
+loops:
+  research:
+    type: approval-loop
+    target: { path: docs/dev/research.md, kind: file }
+    inputs: [{ source: target }, { source: version }, { source: priorArtifact }, { source: outputPath }]
+    evaluate:
+      skill: research-audit
+      output:
+        pattern: "docs/dev/research-audit-v{version}-{provider}.md"
+        contract: decision-artifact
+        decision: { heading: Verdict, accepted: APPROVED, retry: REJECTED }
+    repair:
+      skill: research-follow-up
+      output:
+        pattern: "docs/dev/research-followup-v{version}-{provider}.md"
+        contract: completion-artifact
 
 tasks:
-  commit:
-    skill: 50-simple-commit
+  create-plan:
+    skill: 23-simple-create-plan
     target: { path: ".", kind: worktree }
-    inputs:
-      - { source: target }
-      - { source: version }
-      - { source: outputPath }
+    files: { researchPath: docs/dev/research.md }
+    inputs: [{ source: researchPath }, { source: target }, { source: version }, { source: priorArtifact }, { source: outputPath }]
     output:
-      pattern: "docs/dev/commit-v{version}-{provider}.md"
+      pattern: "docs/dev/create-plan-v{version}-{provider}.md"
       contract: completion-artifact
+
+pipelines:
+  default:      # unchanged: plan → implement → review
+  research-first:
+    stages:
+      - { stageId: research, loop: research }
+      - { stageId: create-plan, task: create-plan }
+      - { stageId: plan, loop: plan }
+      - { stageId: implement, task: implement }
+      - { stageId: review, loop: review }
 ```
 
-The execution path remains:
-
-```text
-Tasks
-  → select task
-    → advisory confirmation
-      → runner/model/effort/session selection
-        → runTask
-          → runBinding
-            → executeLoopStep
-              → selected provider adapter
-```
-
-There is no commit-specific engine branch. Existing ownership, interruption,
-timeout, session, logging, provider, prompt-composition, and artifact contracts
-apply unchanged.
-
-The task is not part of `pipelines.default`. Running it is always ad hoc: it
-does not consume a suggested stage, acquire pipeline identity, repair a
-pipeline, or unlock a successor.
-
-## Menu behavior
-
-### Main action and Tasks submenu
-
-Rename the top-level label from **Execute one-off task** to **Tasks** while
-retaining action ID `run-task`.
-
-Selecting **Tasks** opens the generic configured-task chooser:
-
-```text
-Tasks
-├── implement — 30-simple-implement · implementer
-├── commit — 50-simple-commit · committer
-└── Back to main menu
-```
-
-The submenu must not hardcode `implement` or `commit`. It shows all configured
-tasks. Selecting a task opens its confirmation screen; it does not start a
-provider. **Cancel** returns to Tasks, and **Back to main menu** returns to the
-main action surface.
-
-### Manifest declaration order
-
-Task rows follow `config.manifestDeclarationOrder.tasks`, which is derived from
-the authoritative YAML AST declaration order.
-
-When constructing the menu:
-
-- include configured task IDs in recorded declaration order;
-- ignore stale IDs absent from the loaded manifest;
-- append any manifest task omitted from the supplied list exactly once in
-  manifest object order; and
-- retain the existing missing-input presentation.
-
-Thread the existing declaration-order data only through the task-menu call
-sites. Do not add a generic menu registry.
-
-### Menu-boundary rescanning
-
-The main interactive loop already scans before rendering the main menu. Preserve
-that behavior.
-
-Entering or returning to the Tasks chooser performs one fresh
-`scanGlobalSnapshot(projectRoot, manifest)` before rendering its rows. This
-means:
-
-- entering Tasks from the main menu rescans;
-- cancelling a task confirmation and returning to Tasks rescans; and
-- returning to the main menu uses the main loop's normal rescan.
-
-The selected Tasks snapshot remains authoritative for that confirmation. Do not
-scan again after confirmation, during runner selection, or immediately before
-provider execution. The harness does not poll while an interactive prompt is
-open.
-
-### Advisory pipeline-risk confirmation
-
-One-off tasks remain runnable at every pipeline position. Pipeline state is
-information, not authorization.
-
-After the operator selects a task and before runner selection, inspect the
-already-scanned Tasks snapshot for currently eligible pipeline candidates. If
-one or more candidates exist, display them on the task confirmation screen and
-show an advisory equivalent to:
-
-```text
-One-off task: commit
-
-Current eligible pipeline continuation:
-  default: implement → review
-
-This task does not consume the pipeline continuation listed above and may invalidate it.
-If invalidated, the next stage must be run ad hoc.
-
-Continue
-Cancel — back to Tasks
-```
-
-If several eligible candidates exist, list each candidate using its configured
-pipeline ID and predecessor/successor stage IDs. Do not predict whether the
-selected provider will modify the target and do not introduce task-name or
-workflow-name branches.
-
-The choices are:
-
-- **Continue** — proceed to the existing runner/model/effort/session selection;
-- **Cancel — back to Tasks** — make no provider call and return to the Tasks
-  chooser, which rescans before rendering again.
-
-If there is no eligible pipeline continuation, retain the same confirmation
-screen and choices without the warning block.
-
-The warning is deliberately advisory:
-
-- it never disables a task;
-- it does not consume or mutate pipeline state;
-- it does not promise that the candidate will become stale; and
-- it does not attempt to repair a candidate after the task.
-
-After the task, ordinary state reconstruction remains authoritative. If the
-task changed a predecessor target fingerprint, project status shows the
-candidate as unavailable with `target-fingerprint-drift`. For the current
-worktree fingerprint, a commit after pipeline implementation changes `HEAD`
-and the staged/unstaged representation, so the existing `implement → review`
-candidate will normally become stale even when committed file bytes are
-unchanged. The operator accepted this consequence before execution and may run
-Review ad hoc.
-
-## Committer role
-
-Add `roles/committer.md` with one responsibility: safely package clear existing
-working-tree changes into one local commit.
-
-The role must:
-
-- follow applicable `AGENTS.md` instructions;
-- treat explicit operator invocation as authority to attempt the task;
-- avoid implementing, repairing, formatting, or otherwise changing source
-  merely to make it easier to commit;
-- prefer `BLOCKED` over guessing an ambiguous commit scope;
-- preserve unrelated operator changes;
-- never claim the harness verified or created the commit; and
-- never add AI-authorship or agent-attribution text to a commit message.
-
-The role does not inspect or enforce pipeline approval state. Pipeline position
-is not a commit authorization rule.
-
-## Commit skill contract
-
-Add `skills/50-simple-commit/SKILL.md`.
-
-### Required inspection
-
-Before staging or committing, the skill must:
-
-1. read the repository instructions and directly applicable nested
-   instructions;
-2. inspect `git status --short`, the staged diff, and the unstaged diff;
-3. check for conflicts or an active merge, rebase, cherry-pick, or revert;
-4. confirm that there are changes worth committing; and
-5. determine whether the intended commit scope is clear from the working tree,
-   repository context, and operator invocation.
-
-The skill must not require an approved plan/review artifact and must not infer a
-pipeline-safe execution window. Those checks would recreate the pipeline gate
-that this plan explicitly rejects.
-
-If unrelated staged changes or ambiguous files cannot be separated safely,
-write `BLOCKED` rather than unstaging or rewriting operator state. A path with
-both staged and unstaged changes is blocked unless it is clear that the complete
-current file belongs in the commit.
-
-### Commit behavior
-
-When scope is clear, the skill must:
-
-- stage explicit intended paths rather than `git add -A` or `git add .`;
-- preserve unrelated staged, unstaged, and untracked changes;
-- create exactly one local commit;
-- allow configured Git hooks to run normally;
-- use a concise commit message describing the changes;
-- exclude AI/agent attribution and signature boilerplate;
-- verify the commit with read-only Git commands;
-- record the full commit ID and committed paths; and
-- report remaining staged, modified, and untracked paths without changing them.
-
-The skill must never:
-
-- push, fetch, pull, or otherwise contact remotes;
-- amend or force-update a commit;
-- run reset, clean, checkout/restore, stash, rebase, merge, cherry-pick, or
-  destructive recovery commands;
-- bypass hooks with `--no-verify`;
-- change Git configuration or author identity;
-- delete or rewrite unrelated files;
-- expose credentials, tokens, secrets, or sensitive file contents; or
-- create a second commit solely for its evidence artifact.
-
-If `git commit` or a hook fails, the skill performs no speculative cleanup. It
-writes `BLOCKED`, records the failure concisely, and reports the resulting
-repository state for operator review.
-
-### No-test policy
-
-Commit is a packaging task, not a verification or repair task. The skill must
-not run tests, builds, typechecks, linters, formatters, or the orc-smash
-application recursively. Normal Git hooks remain enabled and may run their own
-checks.
-
-The artifact states:
-
-```text
-Direct verification commands run by commit skill: none (by contract)
-Git hooks: allowed; configured hooks may have run their own checks
-```
-
-The operator is responsible for choosing when verification is sufficient.
-
-## Completion artifact
-
-The skill writes the normal `completion-artifact` to the exact supplied
-`outputPath` with one exact outcome:
-
-```markdown
-## Outcome
-
-COMPLETED
-```
-
-or:
-
-```markdown
-## Outcome
-
-BLOCKED
-```
-
-The artifact records:
-
-- repository state inspected;
-- committed paths;
-- commit subject and full commit ID when successful;
-- remaining staged, modified, and untracked paths;
-- the direct-verification and Git-hook statements above; and
-- a concise blocker or failure description when blocked.
-
-It must not claim approval, implementation completion, test execution, push
-success, or a clean worktree unless directly observed.
-
-The provider creates the artifact after attempting the commit, and the harness
-then adds provenance. Consequently,
-`docs/dev/commit-vN-provider.md` normally remains as uncommitted evidence after
-a successful task. Batch 5 does not create a second commit for this artifact.
-
-## File impact
-
-### Add
-
-- `roles/committer.md`
-- `skills/50-simple-commit/SKILL.md`
-
-### Modify
-
-- `config/orc-smash.yaml`
-  - add the committer role, `50-simple-commit` skill, and ordinary `commit`
-    task after `implement`;
-  - use the existing `implement` runner profile and `completion-artifact`;
-  - leave `pipelines.default` unchanged.
-- `src/stage-menu.ts`
-  - rename the top-level action to **Tasks**;
-  - accept task declaration order and preserve the missing-input behavior.
-- `src/commands/smash.ts`
-  - pass `config.manifestDeclarationOrder.tasks` into task-menu construction;
-  - rescan once whenever Tasks is entered or re-entered;
-  - carry the eligible candidates from that snapshot into the task
-    confirmation;
-  - handle **Continue** and **Cancel — back to Tasks** without a second
-    execution-time scan.
-- `src/interactive.ts`
-  - render the task confirmation, optional advisory candidate list, and the two
-    choices without workflow-name branches.
-- configuration, stage-menu, interactive-command, prompt, and task execution
-  tests
-  - cover the behavior listed under Verification.
-- `README.md`
-  - document Tasks, one-off execution, the advisory warning, possible pipeline
-    invalidation, ad-hoc fallback, agent-run Commit, output residue, Git
-    restrictions, and the no-test policy.
-- `AGENTS.md`
-  - describe Commit as an ordinary operator-invoked provider task rather than
-    harness-owned Git automation.
-- `docs/architecture/overview.md`
-  - document reuse of the task engine and the advisory-only relationship
-    between one-off tasks and pipeline state.
-
-No changes are planned for:
-
-- `src/manifest.ts`;
-- `src/pipeline-state.ts`;
-- `src/pipeline-stage-state.ts`;
-- `src/next-step.ts`;
-- `src/loops/binding-engine.ts`;
-- task output contracts or artifact classification;
-- interrupted-run, ownership, supervisor, process-group, or kill-gate modules;
-- provider adapters; or
-- pipeline state mutation, eligibility, continuation, or repair semantics.
-
-If implementation requires changing those modules, stop and reopen planning
-rather than expanding this batch silently.
+**File impact.** `config/orc-smash.yaml` only.
+
+**Verification.**
+
+- Packaged config loads; both pipelines validate and display in declaration
+  order (`default`, then `research-first`).
+- The `default` pipeline remains exactly `plan → implement → review`; all
+  existing pipeline tests pass unmodified.
+- Loop/task ID namespace collision rules still hold; stage IDs repeat only
+  across pipelines, never within one.
+
+### D2 — Research approval loop: configured skills, ordinary contracts
+
+**Design.** The research loop is an ordinary approval loop over the declared
+`docs/dev/research.md` target with the existing decision/completion
+contracts. Two new packaged skills, modeled on `21-simple-plans-audit` /
+`22-simple-plans-follow-up` but scoped to research documents:
+
+- `skills/10-simple-research-audit/SKILL.md` (role `auditor`, profile
+  `audit`): audits research.md for feasibility, completeness, scope
+  boundaries, and consistency with the actual codebase; versioned `vN`
+  semantics (second opinions read the prior audit after forming their own
+  verdict); never modifies research.md or source code; ends with exactly one
+  `## Verdict` of `APPROVED` or `REJECTED`.
+- `skills/11-simple-research-follow-up/SKILL.md` (role `planner`, profile
+  `follow-up`): repairs research.md against a rejected audit, modifying only
+  research.md; writes exactly one `## Outcome` of `COMPLETED` or `BLOCKED`.
+
+Skill IDs/names are configuration data (`research-audit`,
+`research-follow-up` in the manifest); the numeric prefixes follow the
+existing series convention and may be adjusted at review without design
+impact. The generic `auditor` role text ("Audit plan documents…") is left
+unchanged — each skill carries its own research-specific instructions, and no
+role edit is worth the churn. An accepted research artifact becomes successor
+evidence only inside a `research-first` pipeline run; an ad-hoc research run
+has null pipeline identity and therefore creates no candidates and never
+starts another stage.
+
+**File impact.** `skills/10-simple-research-audit/SKILL.md`,
+`skills/11-simple-research-follow-up/SKILL.md` (new); `config/orc-smash.yaml`
+(skill entries).
+
+**Verification.**
+
+- The loop runs ad hoc (fake adapter) through evaluate/repair with the
+  configured contracts; accepted, retry, and unknown outcomes behave exactly
+  as the plan loop's.
+- An ad-hoc accepted research artifact produces no pipeline candidates.
+- The research loop starts `research-first` via the generic first-stage
+  launch-context prompt; no TypeScript references the literal binding ID.
+
+### D3 — `create-plan` task: research consumption, no-clobber, fail-safe evidence
+
+**Design.** One new packaged skill, `skills/23-simple-create-plan/SKILL.md`
+(role `planner`, profile `follow-up`), rather than reusing
+`20-simple-plan`: the task needs contract behavior (prior-artifact
+requirement, no-clobber, `## Outcome` evidence) that must not leak into the
+interactive plan skill. The skill instructs the provider to:
+
+- read `researchPath` (`docs/dev/research.md`) and the prior artifact, and
+  require the prior artifact to be present (not `none`) and to record an
+  accepted research verdict; otherwise write the task evidence with
+  `## Outcome: BLOCKED` and the precise reason, creating nothing;
+- create only the initial `docs/dev/plan.md` (following the project's plan
+  quality standard: confidence header, design/file-impact/verification,
+  non-goals) and its task evidence; never modify research.md, the research
+  audit, or any other file;
+- if `docs/dev/plan.md` already exists, write `## Outcome: BLOCKED` with the
+  precise reason instead of overwriting — the separately designed replacement
+  workflow is out of scope.
+
+Availability stays on the two existing generic tiers — no new machinery:
+
+1. **Menu disable:** a missing declared `researchPath` file makes the task
+   unavailable in the Tasks menu with the standard missing-inputs reason.
+2. **Runtime fail-safe:** running without an accepted research predecessor
+   (e.g. ad hoc) or with an existing plan.md ends as a structurally valid
+   `BLOCKED` completion artifact — never `unknown`, never a partial plan. A
+   `BLOCKED` artifact is not successor evidence, so the research→create-plan
+   edge remains unconsumed and the task can simply be rerun via the suggested
+   stage. When an eligible research continuation exists, the generic task
+   detail view already lists it with the landed "does not consume the
+   pipeline continuation… may invalidate it" warning.
+
+**File impact.** `skills/23-simple-create-plan/SKILL.md` (new);
+`config/orc-smash.yaml` (task entry).
+
+**Verification.**
+
+- Missing `researchPath` disables the task with the precise missing-inputs
+  reason.
+- Ad-hoc execution without accepted research evidence and execution with an
+  existing plan.md both end `BLOCKED` with precise reasons, create no plan,
+  and unlock nothing.
+- A completed run writes exactly the plan plus its evidence artifact and
+  preserves the research artifacts byte-for-byte.
+
+### D4 — Stage-transition semantics ride the shipped eligibility contract
+
+**Design.** No eligibility changes; each edge behaves as follows under the
+existing rules, and the plan pins the expected behavior as tests:
+
+- **research → create-plan:** predecessor target is the research.md file;
+  the accepted evaluate's result fingerprint matches an untouched research.md
+  → eligible. Editing research.md after acceptance suppresses the candidate
+  as `target-fingerprint-drift` (correct: the basis changed).
+- **create-plan → plan:** predecessor target is the worktree. The task's
+  evidence artifact is fingerprint-excluded, but the created plan.md and
+  `HEAD` are covered — so committing or editing after the task suppresses
+  the continuation with the documented drift reason, and the operator runs
+  the plan stage ad hoc or via a fresh pipeline start (identical to today's
+  implement → review behavior after a commit). This is accepted, documented
+  behavior, not a defect to engineer around.
+- **plan → implement → review:** identical to the `default` pipeline.
+- Exact edges are single-use: one create-plan run per accepted research
+  artifact, one plan continuation per create-plan artifact; a `BLOCKED`
+  create-plan consumes nothing.
+
+**File impact.** None (tests only).
+
+**Verification.**
+
+- e2e: the full `research → create-plan → plan → implement → review` chain
+  advances through operator-equivalent stage-continuation contexts with
+  correct parent identity at every hop.
+- create-plan's provenance records the exact accepted research artifact as
+  `parentArtifactIdentity`, and the plan stage's evaluate receives the
+  create-plan artifact as its prior artifact.
+- Drift cases (edited research.md; edited plan.md; intervening commit) flip
+  the matching candidate to its typed unavailable reason.
+
+### D5 — Deterministic coverage via two small fake-adapter seams
+
+**Design.** `src/adapters/fake.ts` (test-only adapter) gains:
+
+- `extraWrites: Array<{ path: string; content: string }>` — files written
+  during `run`, letting a simulated create-plan provider create
+  `docs/dev/plan.md` inside the fingerprint window; and
+- `taskOutcome?: string` — overrides the task artifact's `## Outcome` token
+  (default `COMPLETED`) to drive `BLOCKED` paths.
+
+Both follow the existing `fakeAdapterState` pattern; no production adapter or
+engine changes. New e2e coverage lives in a dedicated
+`tests/e2e/research-first-pipeline.test.ts`; manifest/menu/snapshot coverage
+extends `tests/manifest.test.ts`, `tests/config.test.ts`,
+`tests/project-snapshot.test.ts` / `tests/stage-menu.test.ts`.
+
+**File impact.** `src/adapters/fake.ts` (test seams), new e2e spec, the
+listed test files.
+
+**Verification** (maps the follow-up's required list one-to-one).
+
+- Both pipelines displayed in declaration order; `default` unchanged;
+  research-first runs the five-stage chain.
+- Research runs ad hoc with no downstream effect; create-plan receives the
+  exact accepted research predecessor.
+- Missing research evidence (menu disable) and existing plan.md (`BLOCKED`)
+  carry precise reasons.
+- A renamed-manifest fixture (research loop and create-plan task renamed)
+  drives the same chain, proving no literal-name branching.
+- The default pipeline never requires or infers research state.
+
+### D6 — Documentation synchronization
+
+**Design.** `AGENTS.md` §6 currently states research.md "is not a stage in
+the current pipeline" — that becomes false and must be rewritten: research
+remains optional, is the first stage of the packaged `research-first`
+pipeline only, and the `default` pipeline is unchanged. `README.md`'s
+manifest-model section gains the two-pipeline description;
+`docs/architecture/overview.md` notes the packaged research loop/create-plan
+task as ordinary configuration (its generic-engine statements remain true).
+`AGENTS.md` keeps its "no hardcoded research branching" invariant explicitly.
+
+**File impact.** `AGENTS.md`, `README.md`, `docs/architecture/overview.md`.
+
+**Verification.** Docs land in the same release as the manifest change; no
+statement contradicts the shipped configuration.
+
+## Release boundaries
+
+Each release is independently verifiable with `pnpm typecheck && pnpm test`.
+
+### Release 1 — Skills, manifest, and docs (D1–D3, D6)
+
+- Three packaged skills; research loop, create-plan task, and research-first
+  pipeline in the manifest; AGENTS.md/README/overview sync; manifest, config,
+  snapshot, and menu tests (declaration order, availability, defaults
+  preserved).
+- Gate: packaged config loads; full suite green with no changes to existing
+  behavior; both pipelines and the new task render correctly.
+
+### Release 2 — Pipeline chain coverage (D4–D5)
+
+- Fake-adapter seams and the research-first e2e: full five-stage chain,
+  prior-artifact identity, drift cases, ad-hoc research, `BLOCKED` paths,
+  renamed-binding fixture.
+- Gate: all new and existing tests green.
+
+### Release 3 — Operator smoke (manual, recommended)
+
+- On this repository: author a small `docs/dev/research.md`, run
+  `research-first` end to end interactively (research accept → suggested
+  create-plan → suggested plan loop), and confirm the menus, fingerprint
+  behavior, and the create-plan → plan hand-off on a real provider. Evidence
+  is operator-visible; no automated gate.
 
 ## Verification
 
-### Deterministic
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+```
 
-1. The packaged manifest loads the new committer role, skill, and task.
-2. Existing tasks load and execute unchanged.
-3. The top-level action reads **Tasks** and retains ID `run-task`.
-4. Tasks contains every configured task plus **Back to main menu** without
-   starting a provider.
-5. Tasks follow `manifestDeclarationOrder.tasks`; stale IDs are ignored and
-   omitted configured tasks are appended once.
-6. Entering Tasks performs one fresh global scan rather than reusing the main
-   menu snapshot.
-7. Cancelling confirmation returns to Tasks, causes one new menu-boundary scan,
-   and makes no runner selection or provider call.
-8. Continuing from confirmation does not perform another scan before runner
-   selection or provider execution.
-9. With no eligible pipeline candidate, confirmation shows no pipeline warning.
-10. With one eligible candidate, confirmation shows its configured pipeline and
-    predecessor/successor stage IDs and both Continue/Cancel choices.
-11. With multiple eligible candidates, confirmation lists each once in stable
-    existing candidate order.
-12. The warning never disables the selected task and contains no literal
-    workflow/task-name branch.
-13. Missing-input task behavior remains unchanged.
-14. Commit prompt composition resolves target, version, and exact output path.
-15. A fake-provider Commit task executes end-to-end through
-    `runTask → runBinding → executeLoopStep` and produces a valid normal
-    completion artifact.
-16. Commit-skill fixtures prove:
-    - clear intended changes can produce `COMPLETED`;
-    - no changes, conflicts, active Git operations, or ambiguous scope produce
-      `BLOCKED`;
-    - explicit-path staging preserves unrelated changes;
-    - approval/review artifacts are not required;
-    - no direct tests or forbidden Git commands are run; and
-    - no AI attribution is added.
-17. Existing plan, implement, review, continuation, second-opinion, task, and
-    pipeline tests remain green.
-
-### Manual smoke
-
-Use a disposable temporary Git repository or clone:
-
-1. create a committed baseline and one clear intended source change;
-2. run Commit without pipeline artifacts and verify it is not blocked merely
-   because approval evidence is absent;
-3. verify exactly one local commit contains only intended paths;
-4. verify no remote operation, destructive command, hook bypass, direct test,
-   build, lint, formatting, or second evidence-only commit occurred;
-5. verify the completion artifact records the commit and remains as expected
-   uncommitted evidence;
-6. create an eligible pipeline continuation, select a one-off task, verify the
-   advisory names that continuation, then cancel and confirm no provider ran;
-7. repeat and continue, verifying the task remains allowed;
-8. after a Commit that changes the worktree fingerprint, verify project status
-   explains the lost candidate as `target-fingerprint-drift` and Review remains
-   runnable ad hoc; and
-9. smoke an ambiguous/conflicted Git state and verify `BLOCKED` creates no
-   commit and performs no cleanup.
-
-## Release gate
-
-Before Batch 5 is complete:
-
-1. `pnpm typecheck`
-2. `pnpm test`
-3. `pnpm build`
-4. focused configuration, menu-boundary scan, advisory-confirmation, prompt,
-   task-artifact, and Git-safety tests pass;
-5. disposable-repository successful, warning/cancel, warning/continue, and
-   blocked smokes pass;
-6. documentation clearly distinguishes agent-run Git from harness-owned Git and
-   explicitly describes possible pipeline invalidation; and
-7. implementation review reaches `APPROVED`.
-
-## Completion criteria
-
-Batch 5 is complete when:
-
-- the top-level menu displays **Tasks**;
-- configured tasks appear in manifest declaration order;
-- entering or returning to Tasks performs one fresh scan;
-- task confirmation shows any currently eligible pipeline continuation and
-  warns that the one-off task may invalidate it;
-- the operator can Continue or Cancel back to Tasks;
-- no second pre-execution scan or pipeline-based task blocking exists;
-- Commit runs through the ordinary provider task path at any pipeline position;
-- Commit blocks only for genuine Git/task safety failures, not missing approval
-  or pipeline position;
-- the committer role and skill enforce explicit-path staging, one local commit,
-  no direct verification commands, no remotes, no destructive Git operations,
-  no hook bypass, and no AI attribution;
-- the completion artifact truthfully records the result and remains expected
-  uncommitted evidence;
-- pipeline state is neither consumed nor repaired, and any resulting candidate
-  drift is reported by existing project-state reconstruction; and
-- all deterministic, build, smoke, documentation, and review gates pass.
-
-## Implementation Closeout
-
-### Phase checklist
-
-- [x] Added the committer role, `50-simple-commit` skill, and configured
-  `commit` task.
-- [x] Renamed the top-level action to **Tasks** and preserved the `run-task`
-  action ID.
-- [x] Preserved manifest declaration order and missing-input presentation.
-- [x] Added Tasks-boundary rescanning and advisory eligible-continuation
-  confirmation without task blocking or pipeline mutation.
-- [x] Added fake-provider task execution, prompt, menu, configuration, and
-  Commit-safety coverage.
-- [x] Synchronized `README.md`, `AGENTS.md`, and
-  `docs/architecture/overview.md`.
-- [x] Passed `pnpm typecheck`, `pnpm test`, `pnpm build`, and `git diff --check`.
-
-### Change log
-
-- 2026-07-28: Batch 5 implemented. Evidence is recorded in
-  `docs/dev/impl-v2-codex.md`.
-- 2026-07-28 deviation: no non-archived v1+ approved plans audit was present.
-  The user supplied independent verification and explicitly authorized
-  implementation; no approval artifact was fabricated. The real-provider
-  disposable Git smoke remains an environment-gated operator check.
+All automated coverage is deterministic (fake adapter, fixture manifests,
+temp workspaces). No real-provider contract gate is required: the batch adds
+no adapter or engine behavior — only configuration, skill content, and tests.
