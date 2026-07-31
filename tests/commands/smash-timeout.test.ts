@@ -53,6 +53,7 @@ describe('smashAction forwards the loaded ModelRegistry to the production adapte
     createTempDir('temp-smash-timeout');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
     writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(tempDir, 'docs/dev/spec.md'), '# Specification\n');
     mockedRunLoop.mockResolvedValue({ success: true, verdict: 'APPROVED', message: 'mocked', lastAuditPath: null });
     mockTimeouts = undefined;
     vi.spyOn(console, 'log').mockImplementation(() => {});

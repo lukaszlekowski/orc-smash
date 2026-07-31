@@ -23,7 +23,7 @@ import type {
 } from '../manifest.js';
 import { priorArtifactNone, resolvePriorArtifact, type PriorArtifactResolution } from '../binding-inputs.js';
 import { computeArtifactIdentity, computeInputFingerprint, mintRunContext, type RunContext } from '../pipeline-state.js';
-import { captureFileDigests, captureTargetFingerprint } from '../target-snapshot.js';
+import { captureBindingResultFingerprint, captureFileDigests, captureTargetFingerprint } from '../target-snapshot.js';
 import type { AgentRegistry } from '../adapters/registry.js';
 import type { RunResult } from '../adapters/types.js';
 import { resolveEffortConfirmation } from '../adapters/completion.js';
@@ -418,7 +418,17 @@ export async function runBinding(
       emit(makeRunEvent({ type: 'completion.parsed', atMs: Date.now(), outcome: contract.kind }));
     }
 
-    const resultFingerprint = captureTargetFingerprint(projectRoot, binding.target, config.manifest);
+    // The result-time snapshot covers the binding target plus every declared
+    // project-file dependency. If the provider removed a declared file, the
+    // composite capture fails and the step stops as `unknown` without
+    // classified successor evidence.
+    let resultFingerprint: string;
+    try {
+      resultFingerprint = captureBindingResultFingerprint(projectRoot, binding.target, binding.files, config.manifest);
+    } catch (error: any) {
+      const message = `Binding result snapshot failed after ${request.phase} v${request.version}: ${error?.message ?? String(error)}`;
+      return stopUnknown(message, contract.diagnostics);
+    }
     const sessionMode = continuity.mode;
     const sessionId = result.sessionId ?? 'none';
     const effortStatus = resolveEffortConfirmation(runner, result);

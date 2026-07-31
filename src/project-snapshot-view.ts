@@ -3,7 +3,7 @@ import type { GlobalSnapshot, Step } from './state.js';
 import type { InterruptedMarker } from './interrupted-artifact.js';
 import { pipelineStageCandidates, artifactRecordFromStep, type Candidate } from './pipeline-stage-state.js';
 import { approvalNextPhase, resumableApprovalChain } from './approval-loop-state.js';
-import { buildTargetSnapshots } from './next-step.js';
+import { buildBindingSnapshots } from './next-step.js';
 import { selectDefaultLoop } from './loop-selector.js';
 import type { V1Manifest, ManifestDeclarationOrder } from './manifest.js';
 
@@ -449,8 +449,8 @@ export function buildProjectSnapshotView(
   }
 
   const artifactsForCandidates = snapshot.steps.map(artifactRecordFromStep);
-  const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
-  const rawCandidates = pipelineStageCandidates(artifactsForCandidates, manifest, targetSnapshots);
+  const bindingSnapshots = buildBindingSnapshots(projectRoot, manifest);
+  const rawCandidates = pipelineStageCandidates(artifactsForCandidates, manifest, bindingSnapshots);
 
   const candidateToView = (c: Candidate): CandidateSnapshotView => ({
     pipelineId: c.pipelineId,

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runLoop, runTask, type LoopOptions } from '../../src/loop.js';
+import type { LoopReturn } from '../../src/loops/runtime.js';
 import { loadConfig, type Config } from '../../src/config.js';
 import { fakeAdapterState } from '../../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../../src/adapters/testing.js';
@@ -15,7 +16,7 @@ import { buildTaskMenu } from '../../src/stage-menu.js';
 const project = resolve(process.cwd(), 'temp-research-first-pipeline');
 const output = createMockOutput();
 
-function makeProject(options: { research?: string; plan?: string } = {}): void {
+function makeProject(options: { research?: string; plan?: string; spec?: string } = {}): void {
   rmSync(project, { recursive: true, force: true });
   mkdirSync(join(project, 'docs/dev'), { recursive: true });
   if (options.research !== undefined) {
@@ -23,6 +24,9 @@ function makeProject(options: { research?: string; plan?: string } = {}): void {
   }
   if (options.plan !== undefined) {
     writeFileSync(join(project, 'docs/dev/plan.md'), options.plan);
+  }
+  if (options.spec !== undefined) {
+    writeFileSync(join(project, 'docs/dev/spec.md'), options.spec);
   }
 }
 
@@ -90,10 +94,6 @@ describe('optional research-first pipeline', () => {
     expect(pipelineSuggestions(project, config.manifest)).toHaveLength(1);
     const createPlanCandidate = candidateFor(config, 'research');
 
-    fakeAdapterState.extraWrites = [{
-      path: 'docs/dev/plan.md',
-      content: '# Generated plan\n\n**Confidence: 0.96**\n',
-    }];
     const createPlan = await runTask(
       project,
       'create-plan',
@@ -104,6 +104,13 @@ describe('optional research-first pipeline', () => {
     );
     expect(createPlan.success).toBe(true);
     expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(true);
+    const planContent = readFileSync(join(project, 'docs/dev/plan.md'), 'utf8');
+    const specContent = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    expect(planContent).toContain('creation:');
+    expect(specContent).toContain('creation:');
+    expect(planContent).toContain('sourceKind: accepted-research');
+    expect(specContent).toContain('sourceKind: accepted-research');
     const afterCreatePlan = pipelineSuggestions(project, config.manifest);
     expect(afterCreatePlan).toHaveLength(1);
     expect(afterCreatePlan[0]).toMatchObject({
@@ -247,7 +254,7 @@ describe('optional research-first pipeline', () => {
   });
 
   it('starts the unchanged default pipeline without a research artifact or prerequisite', async () => {
-    makeProject({ research: '# Optional research\n', plan: '# Existing plan\n' });
+    makeProject({ research: '# Optional research\n', plan: '# Existing plan\n', spec: '# Existing spec\n' });
     const config = loadConfig(project);
     fakeAdapterState.verdicts = ['APPROVED'];
     const result = await runLoop(
@@ -293,7 +300,6 @@ describe('optional research-first pipeline', () => {
       { ...options(), runContext: mintRunContext({ mode: 'pipeline-start', pipelineId: 'research-first', stageId: 'research' }) },
     );
     const createCandidate = candidateFor(freshConfig, 'research');
-    fakeAdapterState.extraWrites = [{ path: 'docs/dev/plan.md', content: '# Plan\n' }];
     await runTask(
       project,
       'create-plan',
@@ -401,7 +407,6 @@ pipelines:
       { ...options(), runContext: mintRunContext({ mode: 'pipeline-start', pipelineId: 'research-first', stageId: 'research' }) },
     );
     const candidate = candidateFor(config, 'research');
-    fakeAdapterState.extraWrites = [{ path: 'docs/dev/plan.md', content: '# Plan\n' }];
     await runTask(
       project,
       'create-plan',
@@ -410,9 +415,234 @@ pipelines:
       runners(),
       { ...options(), runContext: continuation(candidate) },
     );
-    execFileSync('git', ['add', 'docs/dev/plan.md'], { cwd: project });
+    execFileSync('git', ['add', 'docs/dev/plan.md', 'docs/dev/spec.md'], { cwd: project });
     execFileSync('git', ['commit', '-qm', 'record generated plan'], { cwd: project });
     expect(allPipelineCandidates(project, config.manifest).find(item => item.predecessorStageId === 'create-plan'))
       .toMatchObject({ reason: 'target-fingerprint-drift' });
+  });
+});
+
+describe('planning-set publication recovery (Batch 8)', () => {
+  beforeEach(() => {
+    makeProject({ research: '# Research\n\nInitial findings.\n' });
+    fakeAdapterState.planningSetInterrupt = 'none';
+  });
+
+  afterEach(() => {
+    fakeAdapterState.planningSetInterrupt = 'none';
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  async function acceptedResearch(): Promise<Candidate> {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      { ...options(), runContext: mintRunContext({ mode: 'pipeline-start', pipelineId: 'research-first', stageId: 'research' }) },
+    );
+    expect(research.success).toBe(true);
+    return candidateFor(config, 'research');
+  }
+
+  async function runCreatePlan(): Promise<LoopReturn> {
+    const config = loadConfig(project);
+    const candidate = candidateFor(config, 'research');
+    return runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      { ...options(), runContext: continuation(candidate) },
+    );
+  }
+
+  function stagingFiles(): string[] {
+    return readdirSync(join(project, 'docs/dev'))
+      .filter(name => /^\.(?:spec|plan)\.md\.orc-smash-[0-9a-f]{64}\.tmp$/.test(name))
+      .sort();
+  }
+
+  function assertPublishedPair(): void {
+    const spec = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    const plan = readFileSync(join(project, 'docs/dev/plan.md'), 'utf8');
+    expect(spec).toContain('sourceKind: accepted-research');
+    expect(plan).toContain('sourceKind: accepted-research');
+    const specTx = spec.match(/transactionId: ([0-9a-f]{64})/)?.[1];
+    const planTx = plan.match(/transactionId: ([0-9a-f]{64})/)?.[1];
+    expect(specTx).toMatch(/^[0-9a-f]{64}$/);
+    expect(planTx).toBe(specTx);
+    expect(spec).toContain('peerBodyDigest:');
+    expect(plan).toContain('peerBodyDigest:');
+  }
+
+  it('recovers interruption window (a): interruption before either rename', async () => {
+    await acceptedResearch();
+    fakeAdapterState.planningSetInterrupt = 'before-renames';
+    const interrupted = await runCreatePlan();
+    expect(interrupted.success).toBe(false);
+    expect(interrupted.outcome?.kind).toBe('unknown');
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(false);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(false);
+    expect(stagingFiles()).toHaveLength(2);
+
+    const retry = await runCreatePlan();
+    expect(retry.success).toBe(true);
+    assertPublishedPair();
+    expect(stagingFiles()).toHaveLength(0);
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
+  });
+
+  it('recovers interruption window (b): interruption between renames', async () => {
+    await acceptedResearch();
+    fakeAdapterState.planningSetInterrupt = 'between-renames';
+    const interrupted = await runCreatePlan();
+    expect(interrupted.success).toBe(false);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(false);
+
+    const retry = await runCreatePlan();
+    expect(retry.success).toBe(true);
+    assertPublishedPair();
+    expect(stagingFiles()).toHaveLength(0);
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
+  });
+
+  it('recovers interruption window (c): interruption after both renames but before evidence', async () => {
+    await acceptedResearch();
+    fakeAdapterState.planningSetInterrupt = 'after-renames';
+    const interrupted = await runCreatePlan();
+    expect(interrupted.success).toBe(false);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/create-plan-v1-fake.md'))).toBe(false);
+
+    const retry = await runCreatePlan();
+    expect(retry.success).toBe(true);
+    assertPublishedPair();
+    expect(stagingFiles()).toHaveLength(0);
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
+  });
+
+  it('recovers interruption window (d): interruption during bounded staging cleanup', async () => {
+    await acceptedResearch();
+    // First interrupted attempt leaves both canonical documents published
+    // without evidence (staging renames move the staged bytes into place).
+    fakeAdapterState.planningSetInterrupt = 'after-renames';
+    const first = await runCreatePlan();
+    expect(first.success).toBe(false);
+    // A retry is interrupted at its cleanup step; a matching transaction
+    // staging file and an unrelated staging file coexist.
+    fakeAdapterState.planningSetInterrupt = 'during-cleanup';
+    const specBytes = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    const txId = specBytes.match(/transactionId: ([0-9a-f]{64})/)?.[1]!;
+    writeFileSync(join(project, 'docs/dev', `.spec.md.orc-smash-${txId}.tmp`), specBytes);
+    writeFileSync(join(project, 'docs/dev', `.plan.md.orc-smash-${'f'.repeat(64)}.tmp`), 'unrelated staged bytes');
+    const second = await runCreatePlan();
+    expect(second.success).toBe(false);
+    expect(existsSync(join(project, 'docs/dev', `.plan.md.orc-smash-${'f'.repeat(64)}.tmp`))).toBe(true);
+
+    const finalRetry = await runCreatePlan();
+    expect(finalRetry.success).toBe(true);
+    assertPublishedPair();
+    // Bounded cleanup removed only the matching transaction staging file.
+    expect(stagingFiles()).toEqual([`.plan.md.orc-smash-${'f'.repeat(64)}.tmp`]);
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
+  });
+
+  it('preserves an unrelated canonical spec and returns BLOCKED without adopting it', async () => {
+    await acceptedResearch();
+    writeFileSync(join(project, 'docs/dev/spec.md'), '# Unrelated spec\n');
+    const blocked = await runCreatePlan();
+    expect(blocked.success).toBe(false);
+    expect(blocked.outcome?.kind).toBe('blocked');
+    expect(readFileSync(join(project, 'docs/dev/spec.md'), 'utf8')).toBe('# Unrelated spec\n');
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(false);
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nBLOCKED');
+    expect(pipelineSuggestions(project, loadConfig(project).manifest)).toEqual([]);
+  });
+
+  it('preserves a malformed staging file and returns BLOCKED', async () => {
+    await acceptedResearch();
+    const name = `.plan.md.orc-smash-${'c'.repeat(64)}.tmp`;
+    writeFileSync(join(project, 'docs/dev', name), 'not a planning-set document\n');
+    const blocked = await runCreatePlan();
+    expect(blocked.success).toBe(false);
+    expect(blocked.outcome?.kind).toBe('blocked');
+    expect(existsSync(join(project, 'docs/dev', name))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(false);
+  });
+
+  it('blocks on an ambiguous unbounded staging set and preserves every entry', async () => {
+    await acceptedResearch();
+    const names = Array.from({ length: 9 }, (_, index) => `.spec.md.orc-smash-${String(index).padStart(64, 'a')}.tmp`);
+    for (const name of names) {
+      writeFileSync(join(project, 'docs/dev', name), 'staged\n');
+    }
+    const blocked = await runCreatePlan();
+    expect(blocked.success).toBe(false);
+    expect(blocked.outcome?.kind).toBe('blocked');
+    const remaining = stagingFiles();
+    expect(remaining).toHaveLength(9);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(false);
+  });
+
+  it('blocks on multiple matching transaction candidates', async () => {
+    await acceptedResearch();
+    writeFileSync(join(project, 'docs/dev', `.spec.md.orc-smash-${'d'.repeat(64)}.tmp`), 'staged one\n');
+    writeFileSync(join(project, 'docs/dev', `.spec.md.orc-smash-${'e'.repeat(64)}.tmp`), 'staged two\n');
+    const blocked = await runCreatePlan();
+    expect(blocked.success).toBe(false);
+    expect(blocked.outcome?.kind).toBe('blocked');
+    expect(stagingFiles()).toHaveLength(2);
+  });
+
+  it('blocks on a changed source and preserves the published documents', async () => {
+    await acceptedResearch();
+    expect((await runCreatePlan()).success).toBe(true);
+    const planBefore = readFileSync(join(project, 'docs/dev/plan.md'), 'utf8');
+    const specBefore = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n\nChanged source after publication.\n');
+    const config = loadConfig(project);
+    const researchStep = (await import('../../src/state.js')).scanGlobalSnapshot(project, config.manifest)
+      .steps.find(step => step.bindingId === 'research' && step.kind === 'evaluate')!;
+    const rerun = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({
+          mode: 'stage-continuation',
+          pipelineId: researchStep.pipelineId ?? 'research-first',
+          pipelineRunId: researchStep.pipelineRunId ?? 'run',
+          stageId: 'create-plan',
+          parentArtifactIdentity: researchStep.artifactIdentity,
+        }),
+      },
+    );
+    expect(rerun.success).toBe(false);
+    expect(rerun.outcome?.kind).toBe('blocked');
+    expect(readFileSync(join(project, 'docs/dev/plan.md'), 'utf8')).toBe(planBefore);
+    expect(readFileSync(join(project, 'docs/dev/spec.md'), 'utf8')).toBe(specBefore);
+  });
+
+  it('reports an idempotent success when both canonical documents match the transaction', async () => {
+    await acceptedResearch();
+    expect((await runCreatePlan()).success).toBe(true);
+    rmSync(join(project, 'docs/dev/create-plan-v1-fake.md'));
+    const specBefore = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    const planBefore = readFileSync(join(project, 'docs/dev/plan.md'), 'utf8');
+    const retry = await runCreatePlan();
+    expect(retry.success).toBe(true);
+    expect(readFileSync(join(project, 'docs/dev/spec.md'), 'utf8')).toBe(specBefore ?? '');
+    expect(readFileSync(join(project, 'docs/dev/plan.md'), 'utf8')).toBe(planBefore ?? '');
+    expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
   });
 });

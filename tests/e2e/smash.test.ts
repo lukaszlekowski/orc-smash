@@ -16,6 +16,7 @@ describe('generic engine integration', () => {
     createTempDir('temp-e2e-workspace/project');
     mkdirSync(join(project, 'docs/dev'), { recursive: true });
     writeFileSync(join(project, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(project, 'docs/dev/spec.md'), '# Specification\n');
     fakeAdapterState.verdicts = [];
   });
 

@@ -179,6 +179,36 @@ export function captureFileDigests(
   return result;
 }
 
+/** Length-delimited field encoding so serialized boundaries cannot collide. */
+function lengthDelimited(value: string): string {
+  return `${Buffer.byteLength(value, 'utf8')}:${value}`;
+}
+
+/**
+ * Capture the composite binding result snapshot: the target fingerprint plus
+ * the content digest of every declared `files:` dependency in sorted key
+ * order. The serialized shape is domain-separated and length-delimited so
+ * target and file boundaries cannot collide; missing declared files throw.
+ */
+export function captureBindingResultFingerprint(
+  projectRoot: string,
+  target: TargetSpec,
+  files: Record<string, string> | undefined,
+  manifest: V1Manifest,
+): string {
+  const segments: string[] = ['binding-result-v1'];
+  segments.push('target');
+  segments.push(lengthDelimited(captureTargetFingerprint(projectRoot, target, manifest)));
+  const digests = captureFileDigests(projectRoot, files);
+  for (const key of Object.keys(digests).sort()) {
+    segments.push('file');
+    segments.push(lengthDelimited(key));
+    segments.push('digest');
+    segments.push(lengthDelimited(digests[key]!));
+  }
+  return sha256(segments.join('\n'));
+}
+
 function outputPatterns(manifest: V1Manifest): string[] {
   const patterns: string[] = [];
   for (const loop of Object.values(manifest.loops ?? {})) {

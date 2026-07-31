@@ -54,6 +54,7 @@ describe('Plain mode loop-level integration', () => {
     const devDir = join(root, 'docs/dev');
     mkdirSync(devDir, { recursive: true });
     writeFileSync(join(root, 'docs/dev/plan.md'), `# My Plan\nInitial content.\n`);
+    writeFileSync(join(root, 'docs/dev/spec.md'), `# Specification\n`);
     return root;
   }
 

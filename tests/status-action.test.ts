@@ -7,7 +7,7 @@ import { writeInterruptedMarker } from '../src/interrupted-artifact.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
-import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { captureBindingResultFingerprint } from '../src/target-snapshot.js';
 import { loadConfig } from '../src/config.js';
 import { allPipelineCandidates, pipelineSuggestions } from '../src/next-step.js';
 
@@ -19,6 +19,7 @@ describe('generic status snapshot', () => {
     createTempDir('temp-status-action');
     mkdirSync(join(project, 'docs/dev'), { recursive: true });
     writeFileSync(join(project, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(project, 'docs/dev/spec.md'), '# Specification\n');
     output = createMockOutput();
   });
 
@@ -90,7 +91,7 @@ describe('generic status snapshot', () => {
     const planPath = join(project, 'docs/dev/plan.md');
     writeFileSync(planPath, '# Plan\n');
     const config = loadConfig(project);
-    const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+    const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
     const meta = makeV1ArtifactMeta({
       version: 1,
@@ -177,7 +178,7 @@ describe('generic status snapshot', () => {
     const planPath = join(project, 'docs/dev/plan.md');
     writeFileSync(planPath, '# Plan\n');
     const config = loadConfig(project);
-    const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+    const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
     writeArtifactWithMeta(
       join(project, 'docs/dev/plan-audit-v1-fake.md'),

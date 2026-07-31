@@ -57,6 +57,7 @@ function createProject(name: string, approvedPlan = false): string {
   const devDir = join(projectRoot, 'docs', 'dev');
   mkdirSync(devDir, { recursive: true });
   writeFileSync(join(devDir, 'plan.md'), '---\nstatus: ready\nconfidence: 0.96\nowners: cli-runtime\nscope: e2e\n---\n\n# Test plan\n');
+  writeFileSync(join(devDir, 'spec.md'), '# Specification\n\n## Acceptance Criteria\n\n1. Works.\n');
   if (approvedPlan) {
     writeFileSync(join(devDir, 'plan-audit-v1-opencode.md'), '# Plan Audit\n\n## Verdict\n\nAPPROVED\n');
   }
