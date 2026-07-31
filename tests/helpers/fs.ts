@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -11,6 +11,25 @@ export function createTempDir(name: string): string {
   }
   mkdirSync(dirPath, { recursive: true });
   return dirPath;
+}
+
+/**
+ * Writes the Batch 8 planning-set documents (`docs/dev/spec.md` and
+ * `docs/dev/plan.md`) into a test project so packaged bindings that declare
+ * `specPath`/`planPath` are preflighted. Use in workspace setups that
+ * exercise the plan, implement, or review bindings.
+ */
+export function writePlanningSet(project: string): void {
+  const devDir = join(project, 'docs/dev');
+  mkdirSync(devDir, { recursive: true });
+  writeFileSync(
+    join(devDir, 'spec.md'),
+    '# Specification\n\n## Acceptance Criteria\n\n1. The feature works end to end.\n',
+  );
+  writeFileSync(
+    join(devDir, 'plan.md'),
+    '---\nstatus: ready\nconfidence: 0.96\n---\n\n# Plan\n',
+  );
 }
 
 /**

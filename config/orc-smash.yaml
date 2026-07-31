@@ -43,6 +43,10 @@ skills:
     file: skills/23-simple-create-plan/SKILL.md
     role: planner
     runnerProfile: follow-up
+  24-simple-create-spec:
+    file: skills/24-simple-create-spec/SKILL.md
+    role: planner
+    runnerProfile: follow-up
 
 loops:
   research:
@@ -67,8 +71,11 @@ loops:
   plan:
     type: approval-loop
     target: { path: docs/dev/plan.md, kind: file }
+    files:
+      specPath: docs/dev/spec.md
     inputs:
       - { source: target }
+      - { source: specPath, label: Specification document }
       - { source: version }
       - { source: priorArtifact }
       - { source: outputPath }
@@ -87,9 +94,11 @@ loops:
     type: approval-loop
     target: { path: ".", kind: worktree }
     files:
+      specPath: docs/dev/spec.md
       planPath: docs/dev/plan.md
     inputs:
-      - { source: planPath }
+      - { source: specPath, label: Specification document }
+      - { source: planPath, label: Implementation plan document }
       - { source: target }
       - { source: version }
       - { source: priorArtifact }
@@ -121,13 +130,27 @@ tasks:
     output:
       pattern: "docs/dev/create-plan-v{version}-{provider}.md"
       contract: completion-artifact
-  implement:
-    skill: 30-simple-implement
+  create-spec:
+    skill: 24-simple-create-spec
     target: { path: ".", kind: worktree }
     files:
       planPath: docs/dev/plan.md
     inputs:
-      - { source: planPath }
+      - { source: planPath, label: Implementation plan document }
+      - { source: version }
+      - { source: outputPath }
+    output:
+      pattern: "docs/dev/create-spec-v{version}-{provider}.md"
+      contract: completion-artifact
+  implement:
+    skill: 30-simple-implement
+    target: { path: ".", kind: worktree }
+    files:
+      specPath: docs/dev/spec.md
+      planPath: docs/dev/plan.md
+    inputs:
+      - { source: specPath, label: Specification document }
+      - { source: planPath, label: Implementation plan document }
       - { source: version }
       - { source: priorArtifact }
       - { source: outputPath }

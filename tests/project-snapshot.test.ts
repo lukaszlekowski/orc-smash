@@ -310,9 +310,9 @@ loops:
     const snapshot = scanGlobalSnapshot(process.cwd(), config.manifest);
     const view = buildProjectSnapshotView(config, snapshot);
 
-    expect(view.promptContracts.length).toBe(6); // plan, review, research, implement, commit, create-plan
+    expect(view.promptContracts.length).toBe(7); // plan, review, research, implement, commit, create-plan, create-spec
     const stepCount = view.promptContracts.reduce((sum, b) => sum + b.steps.length, 0);
-    expect(stepCount).toBe(9); // three loop pairs plus three tasks
+    expect(stepCount).toBe(10); // three loop pairs plus four tasks
 
     const text = renderDetailedSnapshot(view);
     expect(text).toContain('Prompt Contracts:');
@@ -334,6 +334,7 @@ loops:
     expect(text).toContain('[task] implement');
     expect(text).toContain('[task] commit');
     expect(text).toContain('[task] create-plan');
+    expect(text).toContain('[task] create-spec');
     expect(text).toContain("- Pipeline 'research-first': research (research) -> create-plan (create-plan) -> plan (plan) -> implement (implement) -> review (review)");
   });
 

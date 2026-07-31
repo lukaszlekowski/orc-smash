@@ -15,7 +15,7 @@ import { getProcessStartTime, getProcessCommand } from '../src/process-identity.
 import { loadConfig } from '../src/config.js';
 import { scanGlobalSnapshot } from '../src/artifact-index.js';
 import { writeArtifactWithMeta } from '../src/provenance.js';
-import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { captureBindingResultFingerprint } from '../src/target-snapshot.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
 vi.mock('../src/interactive.js', () => {
@@ -96,6 +96,7 @@ describe('generic smash dispatch', () => {
     createTempDir('temp-smash-action');
     mkdirSync(join(project, 'docs/dev'), { recursive: true });
     writeFileSync(join(project, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(project, 'docs/dev/spec.md'), '# Specification\n');
   });
 
   afterEach(() => removeTempDir(project));
@@ -190,6 +191,26 @@ describe('generic smash dispatch', () => {
     expect(result.message).toContain('planPath=docs/dev/plan.md');
   });
 
+  it('prevents implement and review spawn when spec.md is missing (exact named input)', async () => {
+    unlinkSync(join(project, 'docs/dev/spec.md'));
+    const implement = await run({ task: 'implement' });
+    expect(implement.exitCode).toBe(1);
+    expect(implement.message).toContain('specPath=docs/dev/spec.md');
+    expect(implement.message).not.toContain('provider.started');
+
+    const review = await run({ loop: 'review' });
+    expect(review.exitCode).toBe(1);
+    expect(review.message).toContain('specPath=docs/dev/spec.md');
+  });
+
+  it('prevents the plan loop when spec.md is missing while leaving the plan target present', async () => {
+    unlinkSync(join(project, 'docs/dev/spec.md'));
+    const result = await run({ loop: 'plan' });
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain('specPath=docs/dev/spec.md');
+    expect(result.message).not.toContain('provider.started');
+  });
+
   describe('F11 Interactive vs Non-interactive Recovery Matrix', () => {
     let savedEnv: NodeJS.ProcessEnv;
 
@@ -235,7 +256,7 @@ describe('generic smash dispatch', () => {
 
     it('interactive project status uses the invocation fingerprint visibility choice', async () => {
       const config = loadConfig(project);
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
       writeArtifactWithMeta(
         join(project, 'docs/dev/plan-audit-v1-fake.md'),
         '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
@@ -368,7 +389,7 @@ describe('generic smash dispatch', () => {
     it('passes eligible continuation evidence from the Tasks snapshot to confirmation', async () => {
       vi.clearAllMocks();
       const config = loadConfig(project);
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
       writeArtifactWithMeta(
         join(project, 'docs/dev/plan-audit-v1-fake.md'),
         '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
@@ -858,14 +879,14 @@ describe('generic smash dispatch', () => {
       const { writeArtifactWithMeta } = await import('../src/provenance.js');
       const { makeV1ArtifactMeta } = await import('./helpers/v1-artifact.js');
 
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
       const { loadConfig } = await import('../src/config.js');
       const config = loadConfig(project);
 
       // Write plan.md and its matching fingerprint to avoid staleness
       const planPath = join(project, 'docs/dev/plan.md');
       writeFileSync(planPath, '# Plan\n');
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
       const predecessorMeta = makeV1ArtifactMeta({
         version: 1,
@@ -949,8 +970,8 @@ describe('generic smash dispatch', () => {
         staleMeta,
       );
 
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
-      const freshFingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
+      const freshFingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
       const freshMeta = makeV1ArtifactMeta({
         version: 2,
         agent: 'opencode',
@@ -1049,8 +1070,8 @@ describe('generic smash dispatch', () => {
 
       const planPath = join(project, 'docs/dev/plan.md');
       writeFileSync(planPath, '# Plan\n');
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
       const meta = makeV1ArtifactMeta({
         version: 1,
@@ -1101,8 +1122,8 @@ describe('generic smash dispatch', () => {
       const config = loadConfig(project);
       const planPath = join(project, 'docs/dev/plan.md');
       writeFileSync(planPath, '# Plan\n');
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
       const meta = makeV1ArtifactMeta({
         version: 1,
         agent: 'opencode',
@@ -1215,8 +1236,8 @@ describe('generic smash dispatch', () => {
       const { loadConfig } = await import('../src/config.js');
       const config = loadConfig(continueProject);
 
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
-      const targetFingerprint = captureTargetFingerprint(continueProject, config.manifest.loops.plan!.target, config.manifest);
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
+      const targetFingerprint = captureBindingResultFingerprint(continueProject, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
       const meta = makeV1ArtifactMeta({
         version: 1,
@@ -1296,10 +1317,10 @@ describe('generic smash dispatch', () => {
 
       const planPath = join(project, 'docs/dev/plan.md');
       writeFileSync(planPath, '# Plan\n');
-      const { captureTargetFingerprint } = await import('../src/target-snapshot.js');
+      const { captureBindingResultFingerprint } = await import('../src/target-snapshot.js');
       const { loadConfig } = await import('../src/config.js');
       const config = loadConfig(project);
-      const fingerprint = captureTargetFingerprint(project, config.manifest.loops.plan!.target, config.manifest);
+      const fingerprint = captureBindingResultFingerprint(project, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
 
       const meta1 = makeV1ArtifactMeta({
         version: 1,

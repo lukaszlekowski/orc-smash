@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runLoop, runTask } from '../src/loop.js';
 import { loadConfig } from '../src/config.js';
@@ -16,6 +16,14 @@ import * as interruptedArtifact from '../src/interrupted-artifact.js';
 import * as provenance from '../src/provenance.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
+function rmSyncSafe(path: string): void {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // best-effort cleanup
+  }
+}
+
 describe('generic one-off task execution', () => {
   const tempWorkspace = resolve(process.cwd(), 'temp-loop-implement');
   const output = createMockOutput();
@@ -24,6 +32,7 @@ describe('generic one-off task execution', () => {
     createTempDir('temp-loop-implement');
     mkdirSync(join(tempWorkspace, 'docs/dev'), { recursive: true });
     writeFileSync(join(tempWorkspace, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(tempWorkspace, 'docs/dev/spec.md'), '# Specification\n');
   });
 
   afterEach(() => {
@@ -186,6 +195,53 @@ describe('generic one-off task execution', () => {
     );
     expect(result.success).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops as unknown without classified successor evidence when the provider deletes a declared file', async () => {
+    const config = loadConfig(tempWorkspace);
+    const task = config.manifest.tasks!.implement!;
+    const events: RunEvent[] = [];
+    const capturedOutput = createMockOutput({ emit: (event: RunEvent) => events.push(event) });
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      const match = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      if (match?.[1]) {
+        const path = resolve(input.cwd, match[1].trim());
+        mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+        writeFileSync(path,
+          '| Plan Step | Files Changed | Tests / Verification | Result | Deviation |\n'
+          + '| --- | --- | --- | --- | --- |\n'
+          + '| Step 1 | src/x.ts | pnpm test | pass | none |\n\n'
+          + '| Spec Requirement / Checklist Item | Implemented In | Verified By | Status |\n'
+          + '| --- | --- | --- | --- |\n'
+          + '| Req A | src/x.ts | tests/x.test.ts | pass |\n\n'
+          + 'Confidence: 0.95\n');
+        // The provider removed a declared project-file dependency.
+        rmSyncSafe(join(input.cwd, 'docs/dev/spec.md'));
+      }
+      return { stdout: 'done', exitCode: 0 };
+    });
+
+    const result = await runTask(
+      tempWorkspace,
+      'implement',
+      task,
+      config,
+      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { ...taskOptions(config), output: capturedOutput },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.outcome?.kind).toBe('unknown');
+    expect(result.message).toContain('Binding result snapshot failed');
+    expect(events.find(event => event.type === 'artifact.verified')).toBeUndefined();
+    expect(events.find(event => event.type === 'stage.completed')).toBeUndefined();
+
+    // The provider's raw ledger was never stamped with provenance: it is not
+    // classified evidence and cannot authorize a successor.
+    const raw = readFileSync(join(tempWorkspace, 'docs/dev/impl-v1-fake.md'), 'utf8');
+    expect(raw).not.toContain('schemaVersion: 1');
+    const snapshot = scanGlobalSnapshot(tempWorkspace, config.manifest);
+    expect(snapshot.steps.find(step => step.bindingId === 'implement')).toMatchObject({ unclassified: true });
   });
 
   it('corrects one qualified decision line after operator confirmation without a second provider call', async () => {

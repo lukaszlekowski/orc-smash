@@ -24,4 +24,6 @@ export function resetFakeAdapterState(): void {
   fakeAdapterState.failAfterMs = undefined;
   fakeAdapterState.extraWrites = [];
   fakeAdapterState.taskOutcome = undefined;
+  fakeAdapterState.planningSetInterrupt = 'none';
+  fakeAdapterState.implementLedgerBlocked = undefined;
 }

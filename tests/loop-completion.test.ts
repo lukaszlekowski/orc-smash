@@ -45,6 +45,7 @@ describe('generic execution-completeness and artifact gates', () => {
     const root = join(tempWorkspace, 'project');
     mkdirSync(join(root, 'docs/dev'), { recursive: true });
     writeFileSync(join(root, 'docs/dev/plan.md'), '# My Plan\nInitial content.\n');
+    writeFileSync(join(root, 'docs/dev/spec.md'), '# Specification\n');
     return root;
   }
 

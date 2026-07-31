@@ -3,6 +3,7 @@ import { composePrompt } from '../src/prompt-composer.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { InputSpec } from '../src/manifest.js';
+import { loadConfig } from '../src/config.js';
 
 describe('Prompt Composer', () => {
   const tempDir = join(process.cwd(), 'temp-prompt-composer-test');
@@ -156,9 +157,85 @@ describe('Prompt Composer', () => {
       process.cwd()
     );
 
-    expect(prompt).toContain('Do not modify source code or the target plan document.');
+    expect(prompt).toContain('Do not modify source code or the target planning documents (the specification or the plan).');
     expect(prompt).toContain('explicitly authorized and required to create the audit document');
     expect(prompt).toContain('do not return it only in chat or stdout');
     expect(prompt).toContain(`Output path: ${join(tempDir, 'docs/dev/plan-audit-v1-codex.md')}`);
+  });
+
+  it('resolves specPath and planPath from the project root in declared order for packaged bindings', () => {
+    const config = loadConfig(process.cwd());
+    const manifestRoot = config.manifestRoot;
+
+    const specAbs = join(tempDir, 'docs/dev/spec.md');
+    const planAbs = join(tempDir, 'docs/dev/plan.md');
+    mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
+    writeFileSync(specAbs, '# Spec\n');
+    writeFileSync(planAbs, '# Plan\n');
+
+    // Planning loop: target first, specPath second, in declared order.
+    const planPrompt = composePrompt(
+      'plan-audit',
+      config.manifest.roles.auditor,
+      config.manifest.skills['plan-audit']!.file,
+      config.manifest.loops.plan!.inputs,
+      {
+        projectRoot: tempDir,
+        target: config.manifest.loops.plan!.target,
+        version: 1,
+        provider: 'opencode',
+        priorArtifact: { kind: 'none' },
+        outputPattern: config.manifest.loops.plan!.evaluate.output.pattern,
+        files: config.manifest.loops.plan!.files,
+      },
+      manifestRoot,
+    );
+    expect(planPrompt).toContain(`Specification document: ${specAbs}`);
+    expect(planPrompt.indexOf(`Target document: ${planAbs}`))
+      .toBeLessThan(planPrompt.indexOf(`Specification document: ${specAbs}`));
+
+    // Implementation task: specPath then planPath, in declared order.
+    const implementPrompt = composePrompt(
+      '30-simple-implement',
+      config.manifest.roles.implementer,
+      config.manifest.skills['30-simple-implement']!.file,
+      config.manifest.tasks.implement.inputs,
+      {
+        projectRoot: tempDir,
+        target: config.manifest.tasks.implement.target,
+        version: 1,
+        provider: 'opencode',
+        priorArtifact: { kind: 'none' },
+        outputPattern: config.manifest.tasks.implement.output.pattern,
+        files: config.manifest.tasks.implement.files,
+      },
+      manifestRoot,
+    );
+    expect(implementPrompt).toContain(`Specification document: ${specAbs}`);
+    expect(implementPrompt).toContain(`Implementation plan document: ${planAbs}`);
+    expect(implementPrompt.indexOf(`Specification document: ${specAbs}`))
+      .toBeLessThan(implementPrompt.indexOf(`Implementation plan document: ${planAbs}`));
+
+    // Review loop: specPath then planPath, in declared order.
+    const reviewPrompt = composePrompt(
+      'review',
+      config.manifest.roles.reviewer,
+      config.manifest.skills.review!.file,
+      config.manifest.loops.review.inputs,
+      {
+        projectRoot: tempDir,
+        target: config.manifest.loops.review.target,
+        version: 1,
+        provider: 'opencode',
+        priorArtifact: { kind: 'none' },
+        outputPattern: config.manifest.loops.review.evaluate.output.pattern,
+        files: config.manifest.loops.review.files,
+      },
+      manifestRoot,
+    );
+    expect(reviewPrompt).toContain(`Specification document: ${specAbs}`);
+    expect(reviewPrompt).toContain(`Implementation plan document: ${planAbs}`);
+    expect(reviewPrompt.indexOf(`Specification document: ${specAbs}`))
+      .toBeLessThan(reviewPrompt.indexOf(`Implementation plan document: ${planAbs}`));
   });
 });

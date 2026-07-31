@@ -54,6 +54,7 @@ export interface Candidate {
   predecessorStageId: string;
   predecessorArtifactPath: string;
   resultFingerprint: string;
+  /** Current binding snapshot digest (target plus declared file dependencies). */
   targetFingerprintNow: string | null;
   stale: boolean;
   reason: CandidateReason;
@@ -247,7 +248,7 @@ function consumedBySuccessor(
 export function pipelineStageCandidates(
   allArtifacts: readonly ArtifactRecord[],
   manifest: V1Manifest,
-  targetSnapshots: Map<string, string>,
+  bindingSnapshots: Map<string, string>,
   evidenceResolver: typeof completionEvidenceForStage = completionEvidenceForStage,
 ): Candidate[] {
   const candidates: Candidate[] = [];
@@ -257,7 +258,9 @@ export function pipelineStageCandidates(
       const successorStageId = pipeline.stages[index + 1]!.stageId;
       const evidence = evidenceResolver(allArtifacts, pipelineId, predecessorStageId, manifest);
       for (const item of evidence) {
-        const targetFingerprintNow = targetSnapshots.get(`${pipelineId}:${predecessorStageId}`) ?? null;
+        // bindingSnapshots contains the composite binding snapshot (target
+        // plus declared file dependencies) reconstructed at scan time.
+        const targetFingerprintNow = bindingSnapshots.get(`${pipelineId}:${predecessorStageId}`) ?? null;
         const consumed = consumedBySuccessor(item, allArtifacts, manifest, pipelineId, successorStageId);
         const stale = targetFingerprintNow !== null && targetFingerprintNow !== item.resultFingerprint;
         const reason: CandidateReason = consumed
@@ -309,9 +312,9 @@ export function pipelineStageCandidates(
 export function eligibleNextStages(
   allArtifacts: readonly ArtifactRecord[],
   manifest: V1Manifest,
-  targetSnapshots: Map<string, string>,
+  bindingSnapshots: Map<string, string>,
 ): Candidate[] {
-  return pipelineStageCandidates(allArtifacts, manifest, targetSnapshots)
+  return pipelineStageCandidates(allArtifacts, manifest, bindingSnapshots)
     .filter(candidate => candidate.reason === 'eligible');
 }
 
