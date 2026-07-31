@@ -84,7 +84,7 @@ describe('provider catalogue configuration', () => {
   it('opencode deepseek-v4-pro efforts parse correctly (no YAML comma bug)', () => {
     const efforts = DEFAULT_REGISTRY.providers.opencode.modelEfforts?.['opencode-go/deepseek-v4-pro'];
     expect(efforts).toBeDefined();
-    expect(efforts).toEqual(['default', 'high', 'max']);
+    expect(efforts).toEqual(['Default', 'high', 'max']);
   });
 
   it('agy provider has no defaultEffort in committed config', () => {
@@ -92,10 +92,10 @@ describe('provider catalogue configuration', () => {
   });
 
   it('opencode deepseek-v4-pro effort tokens validate correctly', () => {
-    // After the fix for the YAML comma bug, 'default', 'high', and 'max' must
+    // After the fix for the YAML comma bug, 'Default', 'high', and 'max' must
     // all be valid efforts for deepseek-v4-pro.
     const registry = structuredClone(DEFAULT_REGISTRY);
-    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'default', registry)).toBe(true);
+    expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'Default', registry)).toBe(true);
     expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'high', registry)).toBe(true);
     expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'max', registry)).toBe(true);
     // The old comma-bug token "default high" must NOT be valid.

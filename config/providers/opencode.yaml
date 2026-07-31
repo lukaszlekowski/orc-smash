@@ -14,18 +14,25 @@ models:
   - opencode-go/qwen3.7-max
   - opencode-go/qwen3.7-plus
   - opencode-go/qwen3.6-plus
+  - opencode-go/grok-4.5
+  - opencode-go/gpt-5.6-luna
+  - opencode-go/hy3
+
 modelEfforts:
-  opencode-go/deepseek-v4-flash: [default, high, max]
-  opencode-go/deepseek-v4-pro: [default, high, max]
-  opencode-go/glm-5.2: [low, medium, high]
-  opencode-go/glm-5.1: [low, medium, high]
-  opencode-go/kimi-k3: [low, medium]
-  opencode-go/kimi-k2.7-code: [low, medium]
-  opencode-go/kimi-k2.6: [low, medium]
-  opencode-go/mimo-v2.5: [low]
-  opencode-go/mimo-v2.5-pro: [low, medium]
-  opencode-go/minimax-m3: [low, medium]
-  opencode-go/minimax-m2.7: [low]
-  opencode-go/qwen3.7-max: [low, medium, high]
-  opencode-go/qwen3.7-plus: [low, medium, high]
-  opencode-go/qwen3.6-plus: [low, medium]
+  opencode-go/deepseek-v4-flash: [Default, high, max]
+  opencode-go/deepseek-v4-pro: [Default, high, max]
+  opencode-go/glm-5.2: [Default, high, max]
+  opencode-go/glm-5.1: [Default]
+  opencode-go/kimi-k3: [Default, max]
+  opencode-go/kimi-k2.7-code: [Default]
+  opencode-go/kimi-k2.6: [Default]
+  opencode-go/mimo-v2.5: [Default]
+  opencode-go/mimo-v2.5-pro: [Default]
+  opencode-go/minimax-m3: [Default, none, thinking]
+  opencode-go/minimax-m2.7: [Default]
+  opencode-go/qwen3.7-max: [Default, high, max]
+  opencode-go/qwen3.7-plus: [Default, high, max]
+  opencode-go/qwen3.6-plus: [Default, high, max]
+  opencode-go/grok-4.5: [Default, low, medium, high]
+  opencode-go/gpt-5.6-luna: [Default, none, low, medium, high, xhigh, max]
+  opencode-go/hy3: [Default, none, low, high]
