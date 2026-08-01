@@ -91,6 +91,7 @@ describe('agy unified contract (loop-driven: authenticated success + unauthentic
     createTempDir('temp-agy-contract');
     mkdirSync(join(tempDir, 'docs/dev'), { recursive: true });
     writeFileSync(join(tempDir, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(tempDir, 'docs/dev/spec.md'), '# Specification\n');
     registry = createProductionAdapterRegistry(loadConfig(tempDir).registry);
   });
 

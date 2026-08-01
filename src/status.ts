@@ -32,6 +32,18 @@ export function formatCompactId(value?: string | null): string {
   return value.length > 5 ? `*${value.slice(-5)}` : value;
 }
 
+/**
+ * Display-only: strip a namespace prefix (e.g. opencode's `opencode-go/`) from a
+ * model id, leaving the human-meaningful suffix. Models without a slash are
+ * returned unchanged. Used in the status panel tables (run-config and timeline)
+ * — the canonical stored model id (used for provider calls) is unaffected.
+ */
+export function formatModelDisplay(model: string | null | undefined): string {
+  if (!model) return '';
+  const slash = model.lastIndexOf('/');
+  return slash >= 0 ? model.slice(slash + 1) : model;
+}
+
 export interface ActiveInvocationDisplay {
   skillId: string;
   version: number;

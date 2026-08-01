@@ -1,13 +1,15 @@
-import { captureTargetFingerprint } from './target-snapshot.js';
+import { captureBindingResultFingerprint } from './target-snapshot.js';
 import type { V1Manifest } from './manifest.js';
 import { eligibleNextStages, pipelineStageCandidates, artifactRecordFromStep, type Candidate } from './pipeline-stage-state.js';
 import { scanGlobalSnapshot } from './state.js';
 
 /**
- * Compute fingerprint snapshots for every binding target across all pipelines.
- * Used by the eligibility predicate to check staleness.
+ * Reconstruct the current binding snapshot for every pipeline stage: the
+ * binding target plus its declared project-file dependencies. A stage whose
+ * declared files are missing is omitted (not crashed) so the typed
+ * missing-fingerprint and missing-input preflight paths fail closed.
  */
-export function buildTargetSnapshots(projectRoot: string, manifest: V1Manifest): Map<string, string> {
+export function buildBindingSnapshots(projectRoot: string, manifest: V1Manifest): Map<string, string> {
   const snapshots = new Map<string, string>();
   for (const [pipelineId, pipeline] of Object.entries(manifest.pipelines ?? {})) {
     for (const stage of pipeline.stages) {
@@ -15,8 +17,12 @@ export function buildTargetSnapshots(projectRoot: string, manifest: V1Manifest):
       if (!bindingId) continue;
       const binding = manifest.loops[bindingId] ?? manifest.tasks?.[bindingId];
       if (!binding) continue;
-      const fingerprint = captureTargetFingerprint(projectRoot, binding.target, manifest);
-      snapshots.set(`${pipelineId}:${stage.stageId}`, fingerprint);
+      try {
+        const fingerprint = captureBindingResultFingerprint(projectRoot, binding.target, binding.files, manifest);
+        snapshots.set(`${pipelineId}:${stage.stageId}`, fingerprint);
+      } catch {
+        // Missing target or declared file: omit this stage's current snapshot.
+      }
     }
   }
   return snapshots;
@@ -35,8 +41,8 @@ export function pipelineSuggestions(
 ): Candidate[] {
   const snapshot = scanGlobalSnapshot(projectRoot, manifest);
   const artifacts = snapshot.steps.map(artifactRecordFromStep);
-  const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
-  return eligibleNextStages(artifacts, manifest, targetSnapshots);
+  const bindingSnapshots = buildBindingSnapshots(projectRoot, manifest);
+  return eligibleNextStages(artifacts, manifest, bindingSnapshots);
 }
 
 /**
@@ -49,6 +55,6 @@ export function allPipelineCandidates(
 ): Candidate[] {
   const snapshot = scanGlobalSnapshot(projectRoot, manifest);
   const artifacts = snapshot.steps.map(artifactRecordFromStep);
-  const targetSnapshots = buildTargetSnapshots(projectRoot, manifest);
-  return pipelineStageCandidates(artifacts, manifest, targetSnapshots);
+  const bindingSnapshots = buildBindingSnapshots(projectRoot, manifest);
+  return pipelineStageCandidates(artifacts, manifest, bindingSnapshots);
 }
