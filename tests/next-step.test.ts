@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pipelineSuggestions } from '../src/next-step.js';
 import { loadConfig } from '../src/config.js';
-import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { captureBindingResultFingerprint } from '../src/target-snapshot.js';
 import { writeArtifactWithMeta } from '../src/provenance.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
 
@@ -57,7 +57,7 @@ describe('F9 pipeline suggestions', () => {
 
   it('returns candidates when a pipeline stage has a completed artifact', async () => {
     const config = loadConfig(fixtureRoot);
-    const fingerprint = captureTargetFingerprint(fixtureRoot, config.manifest.loops.plan!.target, config.manifest);
+    const fingerprint = captureBindingResultFingerprint(fixtureRoot, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest);
     const meta = makeV1ArtifactMeta({
       version: 1,
       agent: 'fake',

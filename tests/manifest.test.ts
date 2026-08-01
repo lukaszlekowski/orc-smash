@@ -17,6 +17,12 @@ describe('v1 manifest contract', () => {
     expect(manifest.tasks?.implement).toBeDefined();
     expect(manifest.tasks?.commit).toBeDefined();
     expect(manifest.tasks?.['create-plan']).toBeDefined();
+    expect(manifest.tasks?.['create-spec']).toBeDefined();
+    expect(manifest.skills['24-simple-create-spec']).toEqual({
+      file: 'skills/24-simple-create-spec/SKILL.md',
+      role: 'planner',
+      runnerProfile: 'follow-up',
+    });
     expect(manifest.skills['50-simple-commit']).toEqual({
       file: 'skills/50-simple-commit/SKILL.md',
       role: 'committer',
@@ -30,7 +36,7 @@ describe('v1 manifest contract', () => {
     ]);
     expect((manifest as any).manifestDeclarationOrder).toBeUndefined();
     expect(declarationOrder.loops).toEqual(['research', 'plan', 'review']);
-    expect(declarationOrder.tasks).toEqual(['create-plan', 'implement', 'commit']);
+    expect(declarationOrder.tasks).toEqual(['create-plan', 'create-spec', 'implement', 'commit']);
     expect(declarationOrder.pipelines).toEqual(['default', 'research-first']);
   });
 
@@ -240,5 +246,24 @@ describe('v1 manifest contract', () => {
       ...base,
       tasks: { check: { skill: 'audit', target: { path: '.', kind: 'worktree' as const }, inputs: [], output: { pattern: 'docs/task-v{version}-{provider}.md', contract: 'required-artifact' as const } } },
     })).toThrow(/both a loop and a task/);
+  });
+
+  it('requires every packaged files: key to be referenced by the binding inputs', () => {
+    const { manifest } = loadManifest(manifestPath, DEFAULT_REGISTRY);
+    const bindings = [
+      ...Object.entries(manifest.loops),
+      ...Object.entries(manifest.tasks ?? {}),
+    ];
+    for (const [bindingId, binding] of bindings) {
+      const inputSources = new Set(binding.inputs.map(input => input.source));
+      for (const key of Object.keys(binding.files ?? {})) {
+        expect(inputSources.has(key), `binding '${bindingId}' files key '${key}' must be referenced by inputs`).toBe(true);
+      }
+    }
+    expect(manifest.loops.plan!.files).toEqual({ specPath: 'docs/dev/spec.md' });
+    expect(manifest.loops.review!.files).toEqual({ specPath: 'docs/dev/spec.md', planPath: 'docs/dev/plan.md' });
+    expect(manifest.tasks!.implement.files).toEqual({ specPath: 'docs/dev/spec.md', planPath: 'docs/dev/plan.md' });
+    expect(manifest.tasks!['create-spec'].files).toEqual({ planPath: 'docs/dev/plan.md' });
+    expect(manifest.tasks!['create-plan'].files).toEqual({ researchPath: 'docs/dev/research.md' });
   });
 });

@@ -30,6 +30,7 @@ beforeEach(() => {
   mkdirSync(join(tempWorkspace, 'docs/dev'), { recursive: true });
   writeFileSync(join(tempWorkspace, 'docs/dev/plan.md'),
     '---\nstatus: ready\nconfidence: 0.96\nowners: harness-runtime\n---\n\n# My Plan\n');
+  writeFileSync(join(tempWorkspace, 'docs/dev/spec.md'), '# Specification\n\n## Acceptance Criteria\n\n1. Works end to end.\n');
   fakeAdapterState.verdicts = [];
   fakeAdapterState.delayMs = undefined;
   fakeAdapterState.lifecycleMessages = [];

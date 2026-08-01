@@ -5,8 +5,10 @@
 > plan/implement/review stages, fixed verdict words, audit-only continuity
 > flags, filename heuristics, and automatic downstream transitions are removed,
 > not deprecated. Binding-aware pipeline stage state, lineage, and provider progress telemetry
-> landed in the current runtime. `docs/dev/plan.md` is the controlling contract for the active
-> planned issue; it never
+> landed in the current runtime. `docs/dev/spec.md` is the acceptance contract and
+> `docs/dev/plan.md` is the delivery and closeout source for the active
+> planned issue; the `plan` approval loop audits the two documents as one set through a
+> named `specPath` file input. Neither document
 > overrides the provider, ownership, signal-gate, interruption, timeout, event,
 > logging, or supervisor-compatibility safety invariants in this file.
 
@@ -208,6 +210,12 @@ itself.
   surface keeps a second opinion visible. A second opinion is an independent
   chain root with no inherited provider session. It does not automatically start
   a downstream stage.
+- Artifact version does not define second-opinion semantics: a v2 evaluation
+  can be the ordinary audit after a v1 repair, while a second opinion is a
+  fresh chain whose prior artifact is `none`. The packaged skills assess
+  current documents independently and treat a supplied prior artifact as
+  repair/comparison evidence, never authority; no skill performs a historical
+  lookup based on the numeric version alone.
 
 ## 5. Statelessness; one runner per target
 
@@ -266,15 +274,40 @@ itself.
 
 ## 6. Plan before implementation; verify every real provider path
 
-- `docs/dev/plan.md` is the design source of truth for active planned work and
-  is audited and repaired through the configured `plan` approval loop before
-  implementation. A separate `docs/dev/research.md` remains optional: it is
+- `docs/dev/spec.md` is the acceptance contract (objective, acceptance
+  criteria, constraints, non-goals, research-derived requirements) and
+  `docs/dev/plan.md` is the delivery and closeout source (architecture,
+  ownership boundaries, sequencing, file impact, verification). The `plan`
+  approval loop keeps `docs/dev/plan.md` as its target and audits both
+  documents as one set through the named `specPath` file input; `implement`
+  and `review` declare both `specPath` and `planPath`, so missing either
+  document fails the existing generic missing-input preflight before a
+  provider is spawned. A plan-only project migrates through the ordinary
+  `create-spec` task, which preserves the plan byte-for-byte and requires a
+  fresh joint plan approval before implementation or review; no legacy
+  plan-only audit is successor evidence for the new pair.
+- The recorded `resultFingerprint` is the digest of the binding target plus
+  every declared `files:` project-file dependency (a canonical binding
+  snapshot), while the v1 provenance field name and the typed
+  `target-fingerprint-drift` / `missing-target-fingerprint` reasons are
+  preserved. Editing only `spec.md` stales accepted plan evidence; restoring
+  the accepted bytes restores eligibility; unrelated files do not stale a
+  file-target plan stage. Legacy target-only result fingerprints fail closed
+  as stale and are never migrated.
+- A separate `docs/dev/research.md` remains optional: it is
   the first stage only in the packaged `research-first` pipeline, while the
   `default` pipeline remains `plan → implement → review` and does not infer or
-  require research state. Implement the approved plan's release boundaries and
+  require research state. When approved research exists, its applicable
+  non-negotiables are traced into the spec and plan; optional research is
+  never made mandatory. Implement the approved plan's release boundaries and
   acceptance gates even where legacy descriptions differ. Do not use an old
   audit artifact as an architectural constraint; audit-response bookkeeping
   remains in versioned artifacts.
+- Existing harness validation, pipeline structure, decision/outcome parsing,
+  implementation-ledger validation, provenance, lineage, runner selection,
+  and provider behavior are preserved; the generic result snapshot expands to
+  include declared file dependencies without branching on `plan`, `spec`, or
+  pipeline names.
 - All behavior ships with tests. The deterministic e2e (`fake` adapter + fixtures) gates the
   **harness logic** (incl. provenance, dual-target isolation, and mixed-runner loops). The
   contract-gated real provider paths are `opencode`, `codex`, and `claude`; `agy` remains a real

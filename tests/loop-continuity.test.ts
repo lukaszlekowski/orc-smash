@@ -8,7 +8,7 @@ import { createTestAdapterRegistry } from '../src/adapters/testing.js';
 import { scanGlobalSnapshot } from '../src/state.js';
 import { continueRunContext, recoverInProgressRun, mintRunContext } from '../src/pipeline-state.js';
 import { writeArtifactWithMeta } from '../src/provenance.js';
-import { captureTargetFingerprint } from '../src/target-snapshot.js';
+import { captureBindingResultFingerprint } from '../src/target-snapshot.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
 import { makeV1ArtifactMeta } from './helpers/v1-artifact.js';
@@ -21,6 +21,7 @@ describe('generic per-step continuity', () => {
     createTempDir('temp-loop-continuity-test');
     mkdirSync(join(workspace, 'docs/dev'), { recursive: true });
     writeFileSync(join(workspace, 'docs/dev/plan.md'), '# Plan\n');
+    writeFileSync(join(workspace, 'docs/dev/spec.md'), '# Specification\n');
   });
 
   afterEach(() => {
@@ -40,7 +41,7 @@ describe('generic per-step continuity', () => {
       stageId: 'plan',
       chainId: 'plan-chain',
       chainMode: 'pipeline-start',
-      resultFingerprint: captureTargetFingerprint(workspace, config.manifest.loops.plan!.target, config.manifest),
+      resultFingerprint: captureBindingResultFingerprint(workspace, config.manifest.loops.plan!.target, config.manifest.loops.plan!.files, config.manifest),
     });
     writeArtifactWithMeta(
       join(workspace, 'docs/dev/plan-audit-v1-fake.md'),
@@ -57,7 +58,7 @@ describe('generic per-step continuity', () => {
       stageId: 'implement',
       chainMode: 'stage-continuation',
       parentArtifactIdentity: planMeta.artifactIdentity,
-      resultFingerprint: captureTargetFingerprint(workspace, config.manifest.tasks!.implement!.target, config.manifest),
+      resultFingerprint: captureBindingResultFingerprint(workspace, config.manifest.tasks!.implement!.target, config.manifest.tasks!.implement!.files, config.manifest),
     });
     writeArtifactWithMeta(
       join(workspace, 'docs/dev/impl-v1-fake.md'),
