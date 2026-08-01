@@ -1,4 +1,5 @@
 defaultModel: gemini-3.6-flash
+defaultEffort: high
 models:
   - gemini-3.6-flash
   - gemini-3.5-flash

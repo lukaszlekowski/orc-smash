@@ -1,4 +1,5 @@
 defaultModel: opencode-go/deepseek-v4-flash
+defaultEffort: max
 models:
   - opencode-go/deepseek-v4-flash
   - opencode-go/deepseek-v4-pro
