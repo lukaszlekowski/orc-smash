@@ -10,7 +10,10 @@ database.
 Binding-aware pipeline stage state and lineage are part of the current runtime.
 The completed Batch 5 contract adds configured Tasks and an agent-run Commit
 task, and the optional research-first Batch 6 contract adds a research loop
-and plan-creation task, in
+and plan-creation task; the Batch 8 contract adds the paired planning set —
+`docs/dev/spec.md` as the acceptance source and `docs/dev/plan.md` as the
+delivery and closeout source — audited by the plan loop through a named
+`specPath` input, in
 [docs/dev/plan.md](./docs/dev/plan.md). The single v1 manifest is
 `config/orc-smash.yaml`, optionally overridden by
 `<project>/.orc-smash.yaml` or an explicit `--config <path>` (highest
@@ -108,7 +111,23 @@ The packaged manifest preserves the `default` pipeline as
 The research approval loop and `create-plan` task are ordinary generic
 bindings. Research is never a prerequisite for the default pipeline, and every
 stage transition remains operator-confirmed; no downstream stage starts
-automatically.
+automatically. When approved research exists, its applicable non-negotiables
+are traced into the spec and plan; optional research is never made mandatory.
+
+The `plan` loop keeps `docs/dev/plan.md` as its target and audits
+`docs/dev/spec.md` as one set through the named `specPath` file input;
+`implement` and `review` declare both `specPath` and `planPath`, so missing
+either document fails the generic missing-input preflight before a provider is
+spawned. A plan-only project migrates with the ordinary `create-spec` task,
+which preserves the plan byte-for-byte and requires a fresh joint plan
+approval before implementation or review.
+
+Second opinions remain fresh chains with no inherited provider session, and
+artifact version never defines second-opinion semantics: a v2 evaluation can
+be the ordinary audit after a v1 repair, while a second opinion is a fresh
+chain whose prior artifact is `none`. Packaged skills assess current documents
+independently and treat a supplied prior artifact as repair/comparison
+evidence, never authority.
 
 Decision artifacts normalize configured tokens to `accepted`, `retry`, or
 `unknown`. Completion artifacts require exactly one `## Outcome` section whose
@@ -137,6 +156,15 @@ single-use, while distinct accepted chains remain independent candidates.
 Historical continuation is validated from its recorded binding, phase, and
 parent identity; later unrelated activity or target drift does not rewrite
 already-classified lineage.
+
+The recorded `resultFingerprint` is the digest of the binding target plus every
+declared `files:` project-file dependency (a canonical binding snapshot),
+while the v1 provenance field name and the typed stale reasons
+(`target-fingerprint-drift` / `missing-target-fingerprint`) are preserved.
+Editing only `spec.md` stales accepted plan evidence; restoring the accepted
+bytes restores eligibility; unrelated files do not stale a file-target plan
+stage. Legacy target-only result fingerprints fail closed as stale and are
+never migrated.
 
 ## Providers and safety
 

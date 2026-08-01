@@ -87,8 +87,8 @@ describe('provider catalogue configuration', () => {
     expect(efforts).toEqual(['Default', 'high', 'max']);
   });
 
-  it('agy provider has no defaultEffort in committed config', () => {
-    expect(DEFAULT_REGISTRY.providers.agy.defaultEffort).toBeUndefined();
+  it('agy provider declares a configured defaultEffort in committed config', () => {
+    expect(DEFAULT_REGISTRY.providers.agy.defaultEffort).toBe('high');
   });
 
   it('opencode deepseek-v4-pro effort tokens validate correctly', () => {
@@ -102,19 +102,15 @@ describe('provider catalogue configuration', () => {
     expect(isValidEffortForModel('opencode', 'opencode-go/deepseek-v4-pro', 'default high', registry)).toBe(false);
   });
 
-  it('agy runner resolves no effort when defaultEffort is absent', () => {
-    // With no defaultEffort in the AGY provider config, the runner must return
-    // undefined effort when no explicit choice is given.
+  it('agy runner resolves the committed defaultEffort when no explicit choice is given', () => {
+    // With defaultEffort present in the AGY provider config, the runner's
+    // resolveEffort lookup chain (explicit ?? profileEffort ??
+    // registry.providers[agent]?.defaultEffort) falls through to 'high'.
     const registry: ModelRegistry = structuredClone(DEFAULT_REGISTRY);
-    expect(registry.providers.agy.defaultEffort).toBeUndefined();
-    // Simulate effort resolution: when explicit, profile, and defaultEffort are
-    // all absent, resolveEffort returns null. We verify this by checking that
-    // isValidEffortForModel still works (the effort contract is modelEfforts-only)
-    // and that the real config matches the committed state.
+    expect(registry.providers.agy.defaultEffort).toBe('high');
+    // The effort contract remains modelEfforts-only; absence of a per-model
+    // default keeps the committed catalogue authoritative.
     expect(registry.providers.agy.modelEfforts?.['gemini-3.6-flash']).toEqual(['low', 'medium', 'high']);
-    // The runner's resolveEffort lookup chain: explicit ?? profileEffort ??
-    // registry.providers[agent]?.defaultEffort. When the last is undefined, null.
-    expect(registry.providers.agy.defaultEffort).toBeUndefined();
   });
 
   it('rejects an unknown provider file in the packaged config', () => {

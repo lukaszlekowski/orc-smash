@@ -165,6 +165,75 @@ describe('Batch 8 packaged skill contracts', () => {
     });
   });
 
+  describe('review and review follow-up skills (40/42)', () => {
+    const review = readSkill('40-simple-review');
+    const reviewFollowUp = readSkill('42-simple-review-follow-up');
+
+    it('review the worktree against spec outcomes first and plan architecture second', () => {
+      expect(review).toContain('Specification path');
+      expect(review).toContain('Plan document path');
+      expect(review).toContain('docs/dev/spec.md');
+      expect(review).toContain('docs/dev/plan.md');
+      expect(review).toMatch(/acceptance contract first and\s+the delivery design second/);
+      expect(review).toContain('Spec Outcome Coverage');
+      expect(review).toContain('Plan Step Coverage');
+    });
+
+    it('apply independent-first, prior-artifact-aware comparison without version-based second opinions', () => {
+      expect(review).toContain('Independent-First Assessment');
+      expect(review).toContain('Prior-Artifact-Aware Behavior');
+      expect(review).toContain('Artifact version does not identify a review mode');
+      expect(review).toContain('Never perform a historical lookup based on the numeric version alone');
+      expect(review).toContain('Prior artifact: none');
+      expect(review).not.toContain('second opinion reviewing v1');
+    });
+
+    it('enforce severity semantics and blocker authority', () => {
+      expect(review).toContain('Blocking Threshold and Authority');
+      expect(review).toContain('Critical and Major findings block approval');
+      expect(review).toContain('Minor findings are advisory');
+      expect(review).toContain('cites its authority');
+      expect(review).toContain('0.95');
+      expect(review).toContain('Reject unapproved architectural deviations');
+    });
+
+    it('retain the exact verdict, output-path, and no-target-modification contracts', () => {
+      expect(review).toContain('APPROVED');
+      expect(review).toContain('REJECTED');
+      expect(review).toMatch(/\*\*APPROVED\*\* and \*\*REJECTED\*\* are valid verdicts/);
+      expect(review).toContain('The exact `Write your output to` value in Inputs is authoritative');
+      expect(review).toContain('Do not modify `docs/dev/spec.md`, `docs/dev/plan.md`, or any source code.');
+    });
+
+    it('constrain operator-only verification and preserve diff/regression/maintainability checks', () => {
+      expect(review).toContain('git diff --staged');
+      expect(review).toContain('git diff HEAD');
+      expect(review).toContain('Regressions');
+      expect(review).toContain('Maintainability');
+      expect(review).toContain('Partial Implementation Detector');
+    });
+
+    it('follow-up requires both documents, repairs only rejected findings, and blocks on conflicts', () => {
+      expect(reviewFollowUp).toContain('Specification path');
+      expect(reviewFollowUp).toContain('Plan path');
+      expect(reviewFollowUp).toMatch(/Fix every Critical, Major, and relevant Minor finding/);
+      expect(reviewFollowUp).toContain('and only those findings');
+      expect(reviewFollowUp).toMatch(/write `BLOCKED`\s+evidence and require planning to be reopened/);
+      expect(reviewFollowUp).toMatch(/spec\'s required outcomes/);
+      expect(reviewFollowUp).toContain('## Outcome');
+      expect(reviewFollowUp).toContain('COMPLETED');
+      expect(reviewFollowUp).toContain('BLOCKED');
+      expect(reviewFollowUp).toContain('Do not write a `## Verdict` section');
+    });
+
+    it('removes the unrelated timeline-row instruction and ADR/todo requirements', () => {
+      expect(reviewFollowUp).not.toContain('timeline has exactly one row');
+      expect(review).not.toContain('ADR');
+      expect(review).not.toContain('timeline');
+      expect(reviewFollowUp).not.toContain('ADR');
+    });
+  });
+
   describe('implementation skill (30) first-slice contract', () => {
     const implement = readSkill('30-simple-implement');
 
@@ -262,5 +331,45 @@ describe('plan-audit prior-artifact semantics (Batch 8)', () => {
     const opinionPrompt = [...capturedPrompts].reverse().find(prompt => prompt.includes('# Skill: plan-audit'))!;
     expect(opinionPrompt).toContain('Prior artifact: none');
     expect(opinionPrompt).not.toContain('plan-audit-v2-fake.md');
+  });
+
+  it('runs a review rejection, repair, and re-evaluation with both absolute document paths and unchanged contracts', async () => {
+    const config = loadConfig(workspace);
+    const reviewRunners = {
+      review: { agent: 'fake', model: 'fake-model' },
+      'review-follow-up': { agent: 'fake', model: 'fake-model' },
+    };
+    const capturedPrompts: string[] = [];
+    const originalRun = fakeAdapter.run;
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(function (input: Parameters<typeof fakeAdapter.run>[0]) {
+      capturedPrompts.push(input.prompt);
+      return originalRun.call(fakeAdapter, input);
+    });
+
+    fakeAdapterState.verdicts = ['REJECTED', 'APPROVED'];
+    const result = await runLoop(
+      workspace,
+      'review',
+      config.manifest.loops.review,
+      config,
+      reviewRunners,
+      { ...options(), runContext: mintRunContext({ mode: 'ad-hoc' }) },
+    );
+    expect(result.success).toBe(true);
+    expect(result.verdict).toBe('accepted');
+    expect(result.lastAuditPath).toContain('review-v2-fake.md');
+
+    for (const prompt of capturedPrompts) {
+      if (!prompt.includes('# Skill: review')) continue;
+      expect(prompt).toContain(`Specification document: ${resolve(workspace, 'docs/dev/spec.md')}`);
+      expect(prompt).toContain(`Implementation plan document: ${resolve(workspace, 'docs/dev/plan.md')}`);
+    }
+
+    // The follow-up repair artifact is the v2 prior artifact, and the
+    // configured decision/completion contracts are unchanged.
+    const v2Prompt = capturedPrompts.find(prompt => prompt.includes('Version: 2'))!;
+    expect(v2Prompt).toContain(`Prior artifact: ${resolve(workspace, 'docs/dev/review-followup-v1-fake.md')}`);
+    expect(readFileSync(join(workspace, 'docs/dev/review-followup-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
+    expect(readFileSync(join(workspace, 'docs/dev/review-v1-fake.md'), 'utf8')).toContain('## Verdict\n\nREJECTED');
   });
 });
