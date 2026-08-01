@@ -1,7 +1,7 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
 import chalk from 'chalk';
-import { formatCompactId, formatDurationMs, formatSessionId, type PanelContext, type ResolvedRunnerDisplay } from './status.js';
+import { formatCompactId, formatDurationMs, formatModelDisplay, formatSessionId, type PanelContext, type ResolvedRunnerDisplay } from './status.js';
 import { resolveTerminalWidth } from './plain-render.js';
 import { formatToolCalls } from './run-event.js';
 import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
@@ -16,6 +16,17 @@ function strippedWidth(text: string): number {
 
 function maxLineWidth(text: string): number {
   return Math.max(0, ...text.split('\n').map(strippedWidth));
+}
+
+/**
+ * Usable content width inside the boxen status panel. boxen's chrome (round
+ * border + `padding: 1`) consumes 8 columns of the terminal width — not the 4
+ * you'd expect from "2 border + 2 padding": a 122-char line already wraps inside
+ * a width-129 box. Sizing tables to this value keeps a filled final column (e.g.
+ * `Status` = `unclassifi…`) from word-wrapping onto a new line.
+ */
+function boxInnerWidth(): number {
+  return Math.max(1, resolveTerminalWidth() - 8);
 }
 
 function tableChars(): Record<string, string> {
@@ -59,7 +70,7 @@ function renderAlignedTable(
   preferred: number[],
   minimum: number[],
 ): string {
-  const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
+  const panelInnerWidth = boxInnerWidth();
   const colWidths = fitColumnWidths(preferred, minimum, panelInnerWidth);
   const table = new Table({
     head,
@@ -95,15 +106,15 @@ function renderRunConfiguration(runners: ResolvedRunnerDisplay[]): string {
     runner.skillId,
     runner.role,
     runner.agent,
-    runner.model,
+    formatModelDisplay(runner.model),
     runner.effort ?? 'provider default',
     runner.sessionStrategy === 'resume-per-skill' ? 'resume per skill' : 'fresh per invocation',
   ]);
   return renderAlignedTable(
     ['Phase', 'Skill', 'Role', 'Provider', 'Model', 'Effort', 'Session'],
     rows,
-    [9, 22, 15, 14, 28, 18, 22],
-    [5, 7, 6, 8, 7, 16, 20],
+    [9, 16, 11, 8, 17, 8, 7],
+    [5, 5, 4, 8, 5, 6, 7],
   );
 }
 
@@ -264,7 +275,7 @@ function timelineCells(row: TimelineRow, marked: boolean): string[] {
     String(s.version),
     roleCell,
     s.agent,
-    s.model,
+    formatModelDisplay(s.model),
     s.effort ?? 'provider default',
     resultStr,
     formatDurationMs(s.durationMs),
@@ -284,7 +295,7 @@ function inFlightCells(context: PanelContext): string[] {
     String(active.version),
     roleAccent(active.role).chalk(active.role),
     active.agent,
-    active.model,
+    formatModelDisplay(active.model),
     active.effort ?? 'provider default',
     '—',
     formatDurationMs(Date.now() - active.startedAtMs),
@@ -308,8 +319,8 @@ function renderTimelineSection(context: PanelContext): string {
   if (rows.length === 0) return '';
 
   const head = ['Ver', 'Role', 'Agent', 'Model', 'Effort', 'Result', 'Time', 'Session', 'Status', 'Artifact', 'Parent', 'Input FP', 'Result FP'];
-  const preferred = [5, 10, 13, 22, 14, 16, 8, 10, 11, 9, 9, 9, 9];
-  const minimum = [3, 10, 6, 6, 8, 14, 5, 7, 11, 10, 8, 10, 10];
+  const preferred = [3, 11, 8, 17, 8, 48, 7, 7, 12, 10, 10, 10, 10];
+  const minimum = [3, 4, 5, 5, 6, 6, 4, 7, 6, 8, 6, 8, 9];
   const coreHead = head.slice(0, 9);
   const corePreferred = preferred.slice(0, 9);
   const coreMinimum = minimum.slice(0, 9);
@@ -319,7 +330,7 @@ function renderTimelineSection(context: PanelContext): string {
     return renderAlignedTable(coreHead, coreRows, corePreferred, coreMinimum);
   }
 
-  const panelInnerWidth = Math.max(1, resolveTerminalWidth() - 4);
+  const panelInnerWidth = boxInnerWidth();
   const minTableWidth = minimum.reduce((sum, width) => sum + width, 0) + head.length - 1;
 
   if (minTableWidth <= panelInnerWidth) {
