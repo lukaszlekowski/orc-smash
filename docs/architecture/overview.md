@@ -4,7 +4,11 @@ orc-smash is a stateless subprocess harness. It selects configured coding-agent
 CLI invocations, runs them through provider adapters, validates their outputs,
 and reconstructs workflow state from project artifacts. It never imports a
 provider runtime or calls a model API. The active design contract is
-[`docs/dev/plan.md`](../dev/plan.md); [`AGENTS.md`](../../AGENTS.md) preserves
+[`docs/dev/plan.md`](../dev/plan.md) (delivery and closeout source) paired with
+[`docs/dev/spec.md`](../dev/spec.md) (acceptance contract); the `plan` approval
+loop audits both as one set through the named `specPath` file input while
+keeping `plan.md` as its target.
+[`AGENTS.md`](../../AGENTS.md) preserves
 the safety and supervisor invariants that apply during the migration.
 
 ## Runtime shape
@@ -33,6 +37,17 @@ pipeline (`plan → implement → review`) plus an optional `research-first`
 pipeline (`research → create-plan → plan → implement → review`). Its research
 approval loop and plan-creation task are ordinary configuration; the generic
 engine does not make research a prerequisite and no stage starts automatically.
+When approved research exists, its applicable non-negotiables are traced into
+the spec and plan; optional research is never mandatory. The packaged
+`create-spec` task is the explicit migration for a plan-only project: it writes
+only a missing `docs/dev/spec.md` bound to the unchanged plan and requires a
+fresh joint plan approval before implementation or review.
+
+Second opinions remain fresh chains: artifact version never defines
+second-opinion semantics. The packaged skills assess current documents
+independently and treat a supplied prior artifact as repair/comparison
+evidence, never authority; no skill performs a historical lookup from a
+numeric version.
 
 The interactive **Tasks** action is a generic configured-task chooser. Its
 rows follow manifest declaration order and retain missing-input presentation.
@@ -74,10 +89,17 @@ exactly one `## Outcome` section with `COMPLETED` or `BLOCKED`.
 Artifacts are the state store. v1 provenance records binding identity,
 pipeline/run/stage identity, chain mode and identity, immediate parent,
 provider/model/effort, session strategy and session ID, input fingerprint, and
-post-step target result fingerprint. `binding-inputs.ts` owns canonical prior
+post-step result fingerprint. The recorded `resultFingerprint` is the digest of
+the binding target plus every declared `files:` project-file dependency (a
+canonical binding snapshot) — the v1 field name and the typed
+`target-fingerprint-drift` / `missing-target-fingerprint` reasons are
+preserved, and legacy target-only fingerprints fail closed as stale without
+migration. `binding-inputs.ts` owns canonical prior
 artifact snapshots. `target-snapshot.ts` captures file content or the complete
 visible worktree (including staged, unstaged, and untracked content while
-excluding configured harness artifacts). `pipeline-state.ts` owns identity,
+excluding configured harness artifacts) and owns the composite binding-result
+snapshot used at result time and during eligibility reconstruction.
+`pipeline-state.ts` owns identity,
 fingerprinting, run context, and predecessor-resolution primitives.
 `pipeline-stage-state.ts` owns binding-aware completion evidence, historical
 continuation validation, candidate eligibility, exact-edge replay suppression,

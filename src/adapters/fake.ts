@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { sha256 } from '../pipeline-state.js';
 import type { AgentAdapter, RunInput, RunResult, RunError } from './types.js';
@@ -676,7 +676,10 @@ export const fakeAdapter: AgentAdapter = {
       if (targetMatch?.[1]) {
         const relTarget = targetMatch[1].trim();
         if (relTarget !== '.' && relTarget !== 'none') {
-          writeFileSync(resolve(input.cwd, relTarget), `\n# Patched by follow-up\n`, { flag: 'a' });
+          const absTarget = resolve(input.cwd, relTarget);
+          if (existsSync(absTarget) && statSync(absTarget).isFile()) {
+            writeFileSync(absTarget, `\n# Patched by follow-up\n`, { flag: 'a' });
+          }
         }
       }
       emitEnd();
@@ -791,7 +794,10 @@ export const fakeAdapter: AgentAdapter = {
     if (targetMatch?.[1]) {
       const relTarget = targetMatch[1].trim();
       if (relTarget !== '.' && relTarget !== 'none') {
-        writeFileSync(resolve(input.cwd, relTarget), `\n# Patched by follow-up\n`, { flag: 'a' });
+        const absTarget = resolve(input.cwd, relTarget);
+        if (existsSync(absTarget) && statSync(absTarget).isFile()) {
+          writeFileSync(absTarget, `\n# Patched by follow-up\n`, { flag: 'a' });
+        }
       }
     }
     emitEnd();

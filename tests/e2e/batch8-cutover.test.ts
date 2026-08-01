@@ -289,6 +289,10 @@ describe('Batch 8 cutover: blocked first slice, create-spec migration, joint app
     const secondStep = scanGlobalSnapshot(project, config.manifest).steps
       .find(step => step.bindingId === 'implement' && step.contractValid === true && step.completionOutcome === undefined);
     expect(secondStep?.parentArtifactIdentity).toBe(jointStep.artifactIdentity);
+    // The valid second-slice ledger unlocks the review stage normally.
+    expect(pipelineSuggestions(project, config.manifest)).toMatchObject([
+      { predecessorStageId: 'implement', successorStageId: 'review', reason: 'eligible' },
+    ]);
 
     // Zero nested provider runs: exactly one call per harness invocation.
     expect(providerCalls).toEqual([
