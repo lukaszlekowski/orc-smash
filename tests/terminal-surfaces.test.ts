@@ -60,7 +60,22 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
       currentIteration: 1,
       maxIterations: 3,
       activeSkillRunner: null,
-      timeline: snapshot.steps.map(step => ({ step, relevance: 'current-chain' as const })),
+      timeline: [
+        {
+          relevance: 'current-chain',
+          step: {
+            kind: 'evaluate',
+            role: 'auditor',
+            agent: 'fake',
+            model: 'fake-model',
+            version: 1,
+            status: 'done',
+            decision: 'accepted',
+            artifactPath: '/tmp/eval.md',
+            mtime: Date.now(),
+          },
+        },
+      ],
       nextStepMessage: 'Ready',
     };
     const statusPanel = renderStatusPanel(sampleContext);
