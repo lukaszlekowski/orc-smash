@@ -145,7 +145,9 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
     expect(rendered).toContain('opencode');
     expect(rendered).toContain('medium');
     // Effort column is capped (preferred 8), so the null-effort fallback
-    // 'provider default' renders truncated — assert the truncated form.
+    // 'provider default' renders truncated. This matches the reverted
+    // (pre-feature) column-width algorithm byte-for-byte: verified against
+    // d85e96e, which also renders 'provide…' at every terminal width.
     expect(rendered).toContain('provide…');
     expect(panelContext.inFlight?.effort).toBe('medium');
     expect(rendered).toContain('Active invocation');

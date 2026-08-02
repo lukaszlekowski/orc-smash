@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderStatusPanel } from '../src/status-panel.js';
-import { resolveTerminalWidth } from '../src/plain-render.js';
+import { renderPlainPanel, resolveTerminalWidth } from '../src/plain-render.js';
 import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
-import { resolveStyle } from '../src/theme.js';
+import { initTheme, resolveStyle } from '../src/theme.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type Step, type StepKind, type StepStatus } from '../src/state.js';
 import type { TimelineRow } from '../src/timeline-rows.js';
@@ -593,54 +595,7 @@ describe('renderStatusPanel — unavailable progress capability', () => {
   });
 });
 
-describe('renderStatusPanel — content-aware column sizing', () => {
-  // The boxen box is always `COLUMNS` wide, so line length does not reflect the
-  // table width. Instead, return the rightmost column on the timeline data row
-  // that is neither whitespace nor the boxen '│' wall — i.e. where the table
-  // content actually ends.
-  const dataRowExtent = (out: string, marker: string): number => {
-    const line = out.split('\n').find(candidate => candidate.includes(marker));
-    if (!line) throw new Error(`no rendered line contains ${marker}`);
-    const stripped = line.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
-    for (let index = stripped.length - 1; index >= 0; index -= 1) {
-      const ch = stripped[index];
-      if (ch !== ' ' && ch !== '│') return index + 1;
-    }
-    return 0;
-  };
-
-  it('collapses an empty Result column and grows it when a long result arrives', () => {
-    const previous = process.env.COLUMNS;
-    process.env.COLUMNS = '160';
-    try {
-      const empty = renderStatusPanel(makeContext({
-        timeline: [makeRow({
-          kind: 'audit', role: 'auditor', version: 1, agent: 'fake', model: 'fake-model',
-          status: 'done', artifactPath: '/x', mtime: 0,
-        })],
-      }));
-      const longResult = renderStatusPanel(makeContext({
-        timeline: [makeRow({
-          kind: 'audit', role: 'auditor', version: 1, agent: 'fake', model: 'fake-model',
-          status: 'done', decision: 'x'.repeat(40), artifactPath: '/x', mtime: 0,
-        })],
-      }));
-
-      const emptyExtent = dataRowExtent(empty, 'fake-model');
-      const longExtent = dataRowExtent(longResult, 'fake-model');
-
-      // Width tracks content: the long-result row extends well past the empty one.
-      expect(longExtent - emptyExtent).toBeGreaterThan(20);
-      // An empty Result no longer stretches to fill the terminal.
-      expect(emptyExtent).toBeLessThan(resolveTerminalWidth() - 20);
-      // Both still fit inside the terminal (no row leak).
-      expect(longExtent).toBeLessThanOrEqual(resolveTerminalWidth());
-    } finally {
-      if (previous === undefined) delete process.env.COLUMNS;
-      else process.env.COLUMNS = previous;
-    }
-  });
-
+describe('renderStatusPanel — background fill vs truncation (AC7)', () => {
   it('closes the implementer background before cli-table3 reaches the next column', () => {
     const previous = process.env.COLUMNS;
     process.env.COLUMNS = '40';
@@ -663,5 +618,62 @@ describe('renderStatusPanel — content-aware column sizing', () => {
       if (previous === undefined) delete process.env.COLUMNS;
       else process.env.COLUMNS = previous;
     }
+  });
+});
+
+describe('AC4 / Gate A — step-1 baseline byte-identity snapshot', () => {
+  // The before/after proof the plan's Gate A names (MIN-4): render the status
+  // panel and the --plain timeline against the step-1 baseline theme fixture
+  // and compare byte-for-byte with the captured pre-feature renderer output.
+  const baselineTheme = join(__dirname, 'fixtures', 'theme.baseline.yaml');
+  const panelBaseline = readFileSync(join(__dirname, 'fixtures', 'panel-baseline.bytes.txt'), 'utf8');
+  const plainBaseline = readFileSync(join(__dirname, 'fixtures', 'plain-timeline-baseline.bytes.txt'), 'utf8');
+  const savedColumns = process.env.COLUMNS;
+
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1700000000000);
+    process.env.COLUMNS = '160';
+    initTheme(baselineTheme);
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+    initTheme();
+    if (savedColumns === undefined) delete process.env.COLUMNS;
+    else process.env.COLUMNS = savedColumns;
+  });
+
+  // The no-in-flight context matches the pre-feature capture exactly
+  // (deterministic: no Date.now() reads in the panel, fixed COLUMNS).
+  function makeBaselineContext(): PanelContext {
+    return {
+      projectRoot: '/p',
+      loopName: 'plan',
+      bindingKind: 'loop',
+      currentIteration: 1,
+      maxIterations: 5,
+      activeSkillRunner: { skillId: 'plan-audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' },
+      resolvedRunners: [
+        { skillId: 'plan-audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash', role: 'auditor', phase: 'evaluate', effort: 'medium', sessionStrategy: 'resume-per-skill' },
+        { skillId: 'plan-follow-up', agent: 'fake', model: 'fake-model', role: 'planner', phase: 'repair', effort: null, sessionStrategy: 'fresh-per-invocation' },
+      ],
+      timeline: [
+        { relevance: 'current-chain', step: { kind: 'audit', role: 'auditor', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash', version: 1, status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 1700000000000, durationMs: 65000, sessionId: 'sess_timeline_123' } },
+        { relevance: 'unrelated', step: { kind: 'follow-up', role: 'planner', agent: 'fake', model: 'fake-model', version: 2, status: 'done', outcome: 'patched', artifactPath: '/x/b.md', mtime: 1700000001000, durationMs: 30000, sessionId: 'sess_456' } },
+      ],
+      nextStepMessage: 'Run the plan audit',
+      inFlight: null,
+      latestVersion: 2,
+      readOnly: false,
+    };
+  }
+
+  it('renders the status panel byte-identical to the captured pre-feature output', () => {
+    expect(renderStatusPanel(makeBaselineContext())).toBe(panelBaseline);
+  });
+
+  it('renders the --plain timeline byte-identical to the captured pre-feature output', () => {
+    expect(renderPlainPanel(makeBaselineContext())).toBe(plainBaseline);
   });
 });

@@ -419,6 +419,24 @@ describe('renderPlainPanel — session ID', () => {
   });
 });
 
+describe('renderPlainPanel — level-0 / non-TTY zero-SGR (AC8, MIN-1)', () => {
+  it('emits no SGR sequences at chalk.level = 0', () => {
+    const originalLevel = chalk.level;
+    chalk.level = 0;
+    try {
+      const out = renderPlainPanel(makeContext({
+        timeline: [
+          makeStep({ kind: 'audit', role: 'auditor', version: 1, verdict: 'APPROVED', status: 'done', mtime: 1700000000000 }),
+        ],
+      }));
+      expect(out).not.toMatch(/\u001b\[/);
+      expect(out).toContain('result: APPROVED');
+    } finally {
+      chalk.level = originalLevel;
+    }
+  });
+});
+
 describe('renderPlainPanel — resolvedRunners and activeInvocation', () => {
   it('renders resolvedRunners phase and activeInvocation mode', () => {
     const out = renderPlainPanel(makeContext({
