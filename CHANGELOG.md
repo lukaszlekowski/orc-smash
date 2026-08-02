@@ -4,7 +4,9 @@ All notable changes to orc-smash are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 2026-08-02
+## [Unreleased]
+
+## [1.0.0] - 2026-08-02
 
 ### Added
 - Semantic per-location color theming system (`src/theme.ts`, `config/theme.yaml`):
@@ -47,7 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Model prefix stripping (`opencode-go/`) in timeline and run-config tables.
 - Column preferred/minimum widths tuned (Status 12, Model 17, Effort 8).
 
-## 2026-07-28 – 2026-07-31
+## 2026-07-31
 
 ### Added
 - Optional `research-first` pipeline (`research → create-plan → plan →
@@ -65,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Reordered research-first pipeline stages for logical precedence.
 
-## 2026-07-25 – 2026-07-27
+## 2026-07-27
 
 ### Added
 - Live status panel (`renderStatusPanel`): boxen-bordered TUI with project
@@ -87,7 +89,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Disabled `wordWrap` in status-panel tables to prevent cell wrapping.
 
-## 2026-07-22 – 2026-07-24
+## 2026-07-24
 
 ### Added
 - Unified action menu with standardized availability labels and typed
@@ -105,7 +107,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   logical Gemini model slugs, auth-failure detection.
 - AGY effort tokens, strengthened model gate, effort validation.
 
-## 2026-07-17 – 2026-07-21
+## 2026-07-21
 
 ### Added
 - `bin/orc.js` as the canonical runtime entrypoint.
@@ -124,7 +126,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Provider artifact and timeout guidance.
 
-## 2026-07-11 – 2026-07-15
+## 2026-07-15
 
 ### Added
 - Provider catalogue split into per-agent YAML files (`config/providers/*.yaml`).
@@ -147,7 +149,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Approved-continue fallback regression for providers without session-resume.
 - Review-v1 findings across follow-up chains and tests.
 
-## 2026-07-01 – 2026-07-08
+## 2026-07-08
 
 ### Added
 - Antigravity (`agy`) provider with watchdog timeouts and interrupted-run
@@ -163,7 +165,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - AGY auth-detection grounding.
 - Implementation loop fix.
 
-## 2026-06-29 – 2026-06-30
+## 2026-06-30
 
 ### Added
 - Rendering and output polish for CLI/runtime ergonomics.
