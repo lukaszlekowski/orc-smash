@@ -188,9 +188,9 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
       { state: 'retry', colorCode: '\u001b[31m' },      // Red
       { state: 'failed', colorCode: '\u001b[31m' },     // Red
       { state: 'rejected', colorCode: '\u001b[31m' },   // Red
-      { state: 'blocked', colorCode: '\u001b[33m' },    // Yellow
-      { state: 'unknown', colorCode: '\u001b[33m' },    // Yellow
-      { state: 'interrupted', colorCode: '\u001b[33m' },// Yellow
+      { state: 'blocked', colorCode: '\u001b[93m' },    // Rich orange
+      { state: 'unknown', colorCode: '\u001b[93m' },    // Rich orange
+      { state: 'interrupted', colorCode: '\u001b[93m' },// Rich orange
     ];
 
     for (const { state, colorCode } of resultStateCases) {
@@ -220,9 +220,16 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
           ],
           nextStepMessage: 'Ready',
         };
-        const rendered = renderStatusPanel(panelCtx);
-        expect(rendered).toContain(colorCode);
-        expect(rendered.replace(/\u001b\[\d+m/g, '')).toContain(state);
+        const previousColumns = process.env.COLUMNS;
+        process.env.COLUMNS = '160';
+        try {
+          const rendered = renderStatusPanel(panelCtx);
+          expect(rendered).toContain(colorCode);
+          expect(rendered.replace(/\u001b\[\d+m/g, '')).toContain(state);
+        } finally {
+          if (previousColumns === undefined) delete process.env.COLUMNS;
+          else process.env.COLUMNS = previousColumns;
+        }
       });
 
       it(`renders ResultState '${state}' through plain panel with ANSI code ${JSON.stringify(colorCode)}`, () => {
@@ -261,7 +268,7 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
     const availabilityCases: Array<{ avail: AvailabilityState; colorCheck: (s: string) => boolean }> = [
       { avail: 'available', colorCheck: (s) => !s.includes('\u001b[31m') && !s.includes('\u001b[33m') },
       { avail: 'unavailable', colorCheck: (s) => s.includes('\u001b[2m') },
-      { avail: 'missing-inputs', colorCheck: (s) => s.includes('\u001b[33m') },
+      { avail: 'missing-inputs', colorCheck: (s) => s.includes('\u001b[93m') },
     ];
 
     for (const { avail, colorCheck } of availabilityCases) {
@@ -276,7 +283,7 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
       { event: makeRunEvent({ type: 'run.completed', atMs: Date.now(), result: 'success', outcome: 'completed' }), colorCode: '\u001b[32m', text: 'PASS' },
       { event: makeRunEvent({ type: 'run.failed', atMs: Date.now(), reason: 'Failed Run', errorKind: 'unknown' }), colorCode: '\u001b[31m', text: 'FAIL' },
       { event: makeRunEvent({ type: 'error', atMs: Date.now(), message: 'Error Event' }), colorCode: '\u001b[31m', text: 'Error Event' },
-      { event: makeRunEvent({ type: 'warning', atMs: Date.now(), message: 'Warning Event' }), colorCode: '\u001b[33m', text: 'Warning Event' },
+      { event: makeRunEvent({ type: 'warning', atMs: Date.now(), message: 'Warning Event' }), colorCode: '\u001b[93m', text: 'Warning Event' },
       { event: makeRunEvent({ type: 'run.started', atMs: Date.now() }), colorCode: '\u001b[36m', text: 'run.started' },
     ];
 

@@ -1,0 +1,20 @@
+[36m╭────────────────────────────────────────────────────────────────── [1m[36m ORC SMASH STATUS PANEL [39m[36m[22m ──────────────────────────────────────────────────────────────────╮[39m
+[36m│[39m                                                                                                                                                              [36m│[39m
+[36m│[39m   Project:          [1m[36m/p[39m[22m                                                                                                                                       [36m│[39m
+[36m│[39m   Loop:             [36mplan[39m                                                                                                                                     [36m│[39m
+[36m│[39m   Iteration:        [2m1/5[22m                                                                                                                                      [36m│[39m
+[36m│[39m   Active Runner:    [1m[36mplan-audit (opencode · opencode-go/deepseek-v4-flash)[39m[22m                                                                                    [36m│[39m
+[36m│[39m   Next Step:        [1m[36mRun the plan audit[39m[22m                                                                                                                       [36m│[39m
+[36m│[39m   Latest version:   v2                                                                                                                                       [36m│[39m
+[36m│[39m                                                                                                                                                              [36m│[39m
+[36m│[39m   [1m[36mRun configuration[39m[22m                                                                                                                                          [36m│[39m
+[36m│[39m   [36mPhase   [39m [36mSkill         [39m [36mRole   [39m [36mProvider[39m [36mModel            [39m [36mEffort  [39m [36mSession[39m                                                                                [36m│[39m
+[36m│[39m   Evaluate plan-audit     auditor opencode deepseek-v4-flash medium   resume…                                                                                [36m│[39m
+[36m│[39m   Repair   plan-follow-up planner fake     fake-model        provide… fresh …                                                                                [36m│[39m
+[36m│[39m                                                                                                                                                              [36m│[39m
+[36m│[39m   [1m[36mTimeline:[39m[22m                                                                                                                                                  [36m│[39m
+[36m│[39m   [36mVer[39m [36mRole   [39m [36mAgent   [39m [36mModel            [39m [36mEffort  [39m [36mResult    [39m [36mTime [39m [36mSession[39m [36mStatus[39m                                                                            [36m│[39m
+[36m│[39m   1   [36mauditor[39m opencode deepseek-v4-flash provide… [32mAPPROVED[39m [2m*[22m 1m 5s *e_123  [90mdone[39m                                                                              [36m│[39m
+[36m│[39m   [2m2[22m   [2mplanner[22m [2mfake[22m     [2mfake-model[22m        [2mprovide… [2mpatched[22m    [2m30s[22m   [2m*s_456[22m  [2mdone[22m                                                                              [36m│[39m
+[36m│[39m                                                                                                                                                              [36m│[39m
+[36m╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[39m

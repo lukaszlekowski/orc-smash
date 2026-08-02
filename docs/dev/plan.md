@@ -1,735 +1,414 @@
 ---
-status: ready
-confidence: 0.98
----
-
-# Batch 8 — Spec-and-Plan Skill Contract Improvements
-
-## Objective
-
-Improve the packaged planning, implementation, and review skills by adopting the
-useful quality controls identified in the older planning skills while preserving
-the current config-driven harness, approval loops, artifact contracts, automatic
-preflight, fingerprints, lineage, provider selection, and pipeline behavior.
-
-Batch 8 introduces `docs/dev/spec.md` as the acceptance contract alongside
-`docs/dev/plan.md` as the implementation design. The existing `plan` approval
-loop audits and repairs the two documents as one planning set; it does not gain a
-second loop or a special-case execution path.
-
-## Scope and Authority
-
-- `spec.md` owns the required behavior: objective, acceptance criteria,
-  constraints, non-goals, and relevant research requirements.
-- `plan.md` owns delivery: architecture, ownership boundaries, implementation
-  sequence, affected files, migration or compatibility work, and verification.
-- A plan may elaborate a spec but must not silently narrow or contradict it.
-- `plan.md` remains the approval-loop target and the only document updated by
-  implementation closeout. `spec.md` is a named project-file input and remains
-  the stable acceptance contract.
-- The current implementation and descriptive architecture documents are
-  evidence about the baseline, not automatically immutable design constraints.
-  An explicitly proposed architecture change is assessed as a transition to a
-  target design. Controlling safety invariants in `AGENTS.md` remain mandatory
-  unless the user explicitly reopens them.
-- The executing agent owns every feasible local and automated verification.
-  Operator-only checks are exceptional and must identify the unavailable
-  capability, exact steps, expected result, substitute evidence, and whether the
-  missing result blocks approval or completion.
-
-## Non-Goals
-
-- Do not support, load, or emulate the old `21-plans-audit` or
-  `22-plans-follow-up` workflow.
-- Do not add ADR, todo, timeline, or feature-folder conventions.
-- Do not add another approval loop, pipeline stage, execution engine, database,
-  workflow-name branch, or automatic downstream transition.
-- Do not remove or weaken existing manifest validation, missing-input preflight,
-  output classification, implementation-ledger validation, exact decision and
-  outcome tokens, fingerprints, provenance, lineage, continuity, provider
-  telemetry, or iteration controls.
-- Do not make research mandatory for the default pipeline.
-- Do not introduce harness-owned semantic scoring or parse the new audit tables
-  in TypeScript in this batch.
-- Do not introduce a dynamically selected second-opinion role or require a prior
-  audit/repair artifact for a second opinion.
-- Do not treat an audit of a legacy plan alone as approval of a newly created
-  specification.
-
-## Design Decisions
-
-### Document-set lifecycle and recoverable publication
-
-The direct planning skill and the research-first `create-plan` task create both
-documents. Neither skill overwrites a canonical document. Recovery authority is
-durable document metadata, not a fixed temporary filename or the continued
-existence of a provider process.
-
-Every document created by the paired-publication protocol contains a preserved
-`creation:` mapping in YAML front matter with this exact logical schema:
-
-```yaml
+confidence: 0.96
 creation:
   protocol: orc-planning-set-v1
-  transactionId: <64 lowercase hex>
-  sourceKind: direct | accepted-research | plan-bootstrap
-  sourceArtifactIdentity: <artifact identity or none>
-  sourceDigest: <64 lowercase hex>
-  document: spec | plan
-  bodyDigest: <64 lowercase hex>
-  peerBodyDigest: <64 lowercase hex>
-```
-
-`bodyDigest` is SHA-256 over the Markdown body after the complete YAML front
-matter. `peerBodyDigest` is the other canonical document's body digest. The
-transaction ID is SHA-256 over a length-delimited serialization of the protocol,
-source kind, source artifact identity, source digest, spec body digest, and plan
-body digest. Lengths are unsigned decimal UTF-8 byte counts followed by `:`, in
-the field order just listed; no JSON/YAML key ordering is involved. For
-`accepted-research`, `sourceArtifactIdentity` is the exact
-accepted evaluation identity and `sourceDigest` covers both the research bytes
-and accepted evaluation artifact bytes. For direct authoring without research,
-the source identity is `none` and the source digest is the domain-separated,
-length-delimited digest of the literal `direct` plus the two body digests, so it
-is reconstructable without conversation history. The two documents must carry
-the same transaction ID, source tuple, and reciprocal body digests.
-
-Staging files are transaction-scoped siblings:
-`docs/dev/.spec.md.orc-smash-<transactionId>.tmp` and
-`docs/dev/.plan.md.orc-smash-<transactionId>.tmp`. They contain the complete
-final bytes, including creation metadata. Publication follows this protocol:
-
-1. Inspect canonical files and only staging names matching the strict protocol
-   pattern. Inspect at most eight matching entries; more than eight blocks as an
-   ambiguous/unbounded directory state. Recompute every declared digest;
-   metadata text alone is not proof.
-2. When no canonical pair exists, generate and validate both complete staging
-   files before publishing either one. Recheck that each destination remains
-   absent immediately before its same-directory atomic rename. Publish spec
-   first and plan second. Never rename over an existing destination.
-3. On retry, identify a transaction by a valid source tuple and recomputed
-   digests—not merely by filename. Resume exactly one matching transaction.
-   Multiple matching candidates, malformed metadata, a changed source, or an
-   unrelated canonical file returns `BLOCKED` without modifying any canonical
-   file.
-4. A valid canonical spec plus matching staged plan resumes the second publish.
-   Two canonical documents with matching creation metadata and recomputed
-   reciprocal digests reconstruct successful publication even when interruption
-   occurred after both renames but before the completion artifact was written.
-   The retry writes the configured `COMPLETED` evidence; it does not regenerate
-   or replace the documents.
-5. Once canonical content alone is sufficient to reconstruct success, remove
-   only staging files whose transaction ID and recomputed bytes match that
-   canonical transaction. Cleanup interruption is idempotent: a later retry
-   verifies the canonical pair, finishes bounded cleanup, and writes completion
-   evidence. At most the two expected matching staging files are removed;
-   unrelated or unverifiable staging files are preserved and reported.
-
-Zero files therefore creates a pair; one protocol-owned canonical file can
-resume its missing peer; and two valid protocol-owned canonical files are an
-idempotent success for the same source authority. An unrelated pre-existing
-document without matching, recomputable creation metadata is never adopted or
-overwritten. The plan follow-up skill edits an existing complete pair after
-rejection and preserves the creation mapping as an immutable publication
-receipt. After direct authoring has returned successfully or classified task
-completion exists, that receipt is not a current-content integrity check and its
-original body digests are not rewritten. Current document integrity and
-staleness belong to binding fingerprints. Plan follow-up is not the recovery
-mechanism for a missing document.
-
-The `plan` loop continues to target `docs/dev/plan.md` and declares
-`specPath: docs/dev/spec.md` as a named file input. The `implement` task and
-`review` loop declare both `specPath` and `planPath`. This uses the current
-generic input resolution and means missing files prevent execution and changes
-to either document affect the input fingerprint.
-
-The `create-plan` task must not declare its not-yet-created output documents as
-named file inputs because existing preflight correctly treats missing named
-inputs as unavailable. Its skill continues to own the canonical creation paths.
-
-### Plan-only project migration and Batch 8 cutover
-
-Add a packaged ordinary `create-spec` task backed by a new
-`skills/24-simple-create-spec/SKILL.md`. It targets the worktree, receives the
-existing `planPath` as a declared input, and writes only a missing
-`docs/dev/spec.md` plus its configured completion artifact. It never modifies
-or replaces the plan. The skill derives objective, acceptance criteria,
-constraints, and non-goals from the plan and verified codebase context. It
-returns `BLOCKED` without creating the spec when confidence is below `0.95` or
-the plan is too ambiguous to preserve intent.
-
-The bootstrapped spec uses the same `creation:` schema with
-`sourceKind: plan-bootstrap`, `sourceArtifactIdentity: none`, `sourceDigest` and
-`peerBodyDigest` equal to the existing plan-body digest, and a transaction ID
-derived from the source tuple plus the spec and plan body digests. The existing
-plan remains byte-for-byte unchanged and need not acquire reciprocal metadata.
-On retry, a spec whose recomputed metadata still binds to the unchanged plan is
-idempotent completed work, including the window after spec publication but
-before task evidence. A changed plan, unrelated spec, ambiguous staging set, or
-digest mismatch blocks without overwriting either document.
-
-The task is operator-invoked and remains outside both pipelines. After it
-returns `COMPLETED`, the operator must run the plan approval loop against the
-new spec/plan pair. No legacy plan audit is successor evidence for that pair:
-the new binding-result fingerprint differs, so implementation remains
-unavailable until the joint audit is accepted.
-
-Release ordering is a mandatory migration gate:
-
-1. **First implementation invocation:** start from the accepted legacy plan
-   edge. In this one provider subprocess, implement and test the `create-spec`
-   task, transaction-aware authoring rules, generic binding-result snapshot,
-   joint plan-audit/follow-up skills, `specPath` on the plan/implement/review
-   bindings, and the spec-aware implement skill. The running subprocess keeps
-   the legacy manifest/prompt snapshot with which it started; the new bindings
-   govern only later invocations. Do not invoke `orc` recursively or wait for
-   operator input.
-2. End that first invocation with a structurally valid blocked implementation
-   ledger whose exact remaining blocker is `fresh joint plan approval required`.
-   The blocked artifact is durable terminal evidence for the first invocation,
-   releases run ownership, cannot unlock review, and consumes only its legacy
-   predecessor edge.
-3. **Operator invocation after ownership release:** run the ordinary
-   `create-spec` task. It requires only `planPath`, so it remains available even
-   though the newly configured plan, implement, and review actions are
-   unavailable until `spec.md` exists.
-4. **Separate operator invocation:** run the newly joint plan loop. The new
-   composite binding snapshot makes the target-only legacy approval stale; the
-   blocked implementation artifact is not approval evidence. Obtain a distinct
-   accepted joint-audit edge for the current spec/plan bytes.
-5. **Second implementation invocation:** start only from that distinct accepted
-   joint edge. Because the first invocation already installed `specPath`, this
-   invocation is preflighted and composed with both exact document paths before
-   the provider starts. Complete the remaining 8D–8E role, review/follow-up
-   skill, test, and documentation work. Its valid completed ledger may then
-   unlock review normally.
-
-The initial legacy-plan approval authorizes only this bounded bootstrap/cutover
-slice. It is not approval of the newly generated spec or the remaining feature.
-The cutover is not a compatibility loader or hidden state; it is an explicit,
-one-time document migration using an ordinary configured task and a mandatory
-re-entry through the existing plan approval loop. Every numbered boundary above
-is a completed harness invocation; no subprocess is paused and resumed, and no
-two invocations own the target concurrently.
-
-### Generic binding-result snapshot
-
-The current `resultFingerprint` name and provenance field remain v1-compatible,
-but their result-time value becomes the digest of a canonical binding snapshot:
-
-- the existing target fingerprint; and
-- the content digest of every declared `files:` dependency in sorted key order.
-
-`src/target-snapshot.ts` owns a new pure
-`captureBindingResultFingerprint(projectRoot, target, files, manifest)` helper
-that reuses `captureTargetFingerprint` and `captureFileDigests`. The serialized
-shape is domain-separated and deterministic so target/file boundaries cannot
-collide. `src/loops/binding-engine.ts` records this composite value after a
-classified provider result. If a provider removed a declared file, result
-snapshot capture is caught and the step stops as `unknown` without classified
-successor evidence. `src/next-step.ts` reconstructs the same composite value for
-each configured pipeline-stage binding. If a declared file is missing, snapshot
-construction does not crash status or menus: it omits that stage's current
-snapshot so existing typed missing-fingerprint/unavailable and missing-input
-preflight paths fail closed.
-
-`src/pipeline-stage-state.ts` continues to compare the current map entry with
-the recorded `resultFingerprint`, preserve `target-fingerprint-drift` and
-`missing-target-fingerprint` reasons, and preserve exact-edge consumption and
-historical-lineage rules. Its internal parameter/comment naming is updated to
-make clear that the map now contains binding snapshots. Historical artifacts
-whose target-only result fingerprint predates this rule fail closed as stale;
-they are not migrated or reclassified.
-
-### Independent audit and second-opinion semantics
-
-Artifact version does not identify a second opinion. A v2 evaluation can be the
-ordinary audit after a v1 repair, while a second opinion is a fresh chain root
-whose prior artifact is `none`.
-
-Auditor and reviewer instructions require an independent assessment of the
-current target, declared requirements, and codebase before consulting any prior
-artifact. When a prior artifact is supplied, it is repair/comparison evidence,
-not authority. When it is `none`, the agent does not search for historical
-audits or reviews. The existing harness behavior for fresh second-opinion chains
-is unchanged.
-
-### Blocking threshold and audit convergence
-
-- Critical and Major findings block approval.
-- Minor findings are advisory and do not block approval.
-- A missing acceptance criterion, safety invariant, feasibility requirement,
-  migration obligation, or required verification is at least Major; an auditor
-  must not hide a blocker under Minor.
-- Every blocking finding cites its authority: a spec requirement, applicable
-  approved research constraint, controlling project invariant, verified
-  codebase fact, or missing verification obligation.
-- A later audit may introduce a new blocker only with that concrete basis.
-- Implementation-local uncertainty may remain for implementation/review when
-  the plan defines a reliable way to expose it. Planning approval does not
-  require predicting every coding defect.
-- Approval requires zero unresolved Critical or Major findings and overall
-  confidence of at least `0.95`.
-
-### Intentional architecture changes
-
-The planning audit must not reject solely because the proposed design differs
-from current code or descriptive architecture documentation. It first decides
-whether the difference is intentional. An intentional replacement must state:
-
-1. the current behavior or architecture being replaced;
-2. the target architecture and ownership boundaries;
-3. the invariants retained;
-4. migration and compatibility effects; and
-5. the tests and documentation that will be updated.
-
-Reject accidental contradictions, infeasible transitions, missing migration or
-verification coverage, and violations of controlling invariants that were not
-explicitly reopened. When an architecture document describes the superseded
-baseline, updating that document belongs in implementation scope rather than
-forcing the plan back to the old design.
-
-### Skill-owned quality measures
-
-The planning audit records semantic coverage rather than adding a harness
-validator:
-
-- 100% of spec acceptance criteria map to plan work.
-- 100% of spec acceptance criteria map to verification evidence.
-- 100% of applicable approved research constraints map into the spec and plan
-  when approved research exists.
-- 100% of claimed workflows have success-path verification and relevant
-  failure/recovery verification.
-- Zero unexplained missing requirements.
-- Zero unresolved Critical or Major findings.
-- Overall confidence is at least `0.95`.
-
-## Implementation Steps
-
-### 8A — Establish the two-document authoring contract
-
-#### Design
-
-Update both plan-creation skills to produce a coherent `spec.md` and `plan.md`
-pair with the authority split defined above.
-
-`skills/20-simple-plan/SKILL.md` must:
-
-- produce `docs/dev/spec.md` and `docs/dev/plan.md`;
-- require a confidence score of at least `0.95` for each document;
-- put acceptance criteria, constraints, research-derived requirements, and
-  non-goals in the spec;
-- put architecture, sequencing, file impact, failure handling, and verification
-  in the plan;
-- include a spec-to-plan coverage table in the plan;
-- treat approved research as optional, but preserve and trace its applicable
-  non-negotiables when it exists;
-- emit and validate the `orc-planning-set-v1` creation mapping, reciprocal body
-  digests, reconstructable direct-source digest, transaction-scoped staging,
-  and zero/one/two-file recovery protocol; and
-- prefer decision-level and file-level instructions, using exact symbols only
-  where a fragile contract would otherwise be ambiguous.
-
-`skills/23-simple-create-plan/SKILL.md` must:
-
-- create both canonical files from accepted research;
-- bind the transaction to the accepted research artifact identity and the
-  recomputed research/evaluation source digest;
-- use transaction-scoped staging and recover valid interruption windows without
-  overwriting either canonical file;
-- define behavior for zero, one, and two canonical files and reject unsafe or
-  inconsistent pre-existing content;
-- never report successful completion with only one canonical document;
-- define the same spec/plan authority split and coverage requirements; and
-- retain the current `COMPLETED`/`BLOCKED` task-evidence contract and
-  non-clobbering behavior.
-
-Add `skills/24-simple-create-spec/SKILL.md` for the plan-only migration. It must:
-
-- require an existing `planPath`; fresh creation requires an absent
-  `docs/dev/spec.md`, while retry reconstruction permits only an existing
-  protocol-valid spec whose recomputed metadata binds to the unchanged plan;
-- create only the spec using `plan-bootstrap` metadata, transaction-scoped
-  staging, and same-directory atomic publication;
-- preserve the plan byte-for-byte;
-- recognize an already published spec as idempotent success only when its
-  recomputed metadata still binds to the unchanged plan;
-- require confidence of at least `0.95` and block on ambiguous requirements;
-- explain that the resulting pair requires a fresh joint plan audit; and
-- write exactly one configured `## Outcome` token to its task evidence.
-
-Register this skill and its ordinary `create-spec` task in
-`config/orc-smash.yaml` during the first cutover invocation. In that same
-invocation, 8B adds `specPath` to plan, implement, and review. The running legacy
-implementation is unaffected because its config and prompt were resolved before
-those edits; after ownership release, the new missing-input preflight disables
-those three actions while leaving `create-spec` runnable for plan-only targets.
-
-`roles/planner.md` must describe planning documents generically enough to cover
-spec creation, plan creation, research follow-up, and paired plan repair without
-embedding project-specific workflow branching.
-
-#### File impact
-
-- `skills/20-simple-plan/SKILL.md`
-- `skills/23-simple-create-plan/SKILL.md`
-- `skills/24-simple-create-spec/SKILL.md` (new)
-- `roles/planner.md`
-- `config/orc-smash.yaml` (add the migration skill/task; the same first
-  invocation also applies all 8B named-input changes)
-
-#### Verification
-
-- Add a focused skill-contract test that reads the packaged skills and proves
-  both authoring paths require the two canonical documents, their authority
-  split, non-clobbering behavior, creation-metadata schema, source binding,
-  transaction-scoped recovery protocol, and the existing outcome contract.
-- In the research-first deterministic e2e, verify successful `create-plan`
-  produces both files. Inject interruption (a) before either rename, (b) between
-  renames, (c) after both renames but before completion-artifact classification,
-  and (d) during staging cleanup. For every window, prove source attribution,
-  digest validation, canonical-file preservation, retry classification,
-  exact-edge behavior, and bounded cleanup. Also prove unrelated, ambiguous,
-  changed-source, and malformed transaction files are preserved and return
-  `BLOCKED` without claiming successor availability.
-- Add deterministic `create-spec` task coverage for an existing plan-only
-  target: success preserves the plan bytes, ambiguity blocks without a spec,
-  pre-existing unrelated spec is never overwritten, after-publication/
-  before-evidence retry is idempotent, cleanup is bounded, and the task remains
-  outside pipeline progression.
-- Add a cutover integration fixture proving the bootstrap implementation ledger
-  is classified `blocked`, releases ownership, does not unlock review, and a
-  later distinct jointly accepted plan edge can start a separate implementation
-  invocation.
-
-### 8B — Wire `specPath` through existing generic manifest inputs
-
-#### Design
-
-Execute this complete step in the first legacy-authorized implementation
-invocation. The running invocation retains its already-resolved legacy binding;
-the changed manifest applies after ownership is released:
-
-- `plan` loop: keep `target: docs/dev/plan.md`; add
-  `files.specPath: docs/dev/spec.md` and include `specPath` in `inputs`.
-- `implement` task: add `files.specPath: docs/dev/spec.md` beside `planPath`
-  and include both in `inputs`.
-- `review` loop: add `files.specPath: docs/dev/spec.md` beside `planPath` and
-  include both in `inputs`.
-- Preserve the `24-simple-create-spec` registration and ordinary `create-spec`
-  completion task added in 8A; its only named input remains `planPath`.
-- Give the prompt inputs explicit human-readable labels for the specification
-  and implementation plan.
-- Keep `create-plan` wired only to its existing input documents; do not declare
-  absent output paths as named inputs.
-
-Do not change manifest schemas, prompt composition, preflight policy, pipeline
-definitions, artifact schema version, or output contracts. The generic
-machinery already supports multiple declared project-file inputs. Change only
-result-time snapshot construction and current-stage snapshot reconstruction so
-the existing state comparison covers the binding target plus declared files.
-
-#### File impact
-
-- `config/orc-smash.yaml`
-- `src/target-snapshot.ts`
-- `src/loops/binding-engine.ts`
-- `src/next-step.ts`
-- `src/pipeline-stage-state.ts` (semantic naming/comments; preserve typed
-  reasons and comparison behavior)
-
-#### Verification
-
-- Extend `tests/prompt-composer.test.ts` to prove both paths resolve from the
-  project root and appear in declared order for planning, implementation, and
-  review prompts.
-- Extend manifest/config tests to prove every new `files:` key is referenced by
-  `inputs` and the packaged manifest loads unchanged through the v1 schema.
-- Extend action/preflight tests to prove missing `spec.md` or `plan.md` reports
-  the exact named missing input and prevents ownership admission/provider spawn
-  for implement/review; missing `spec.md` similarly prevents the plan loop.
-- Add focused snapshot tests proving canonical ordering, target/file domain
-  separation, stable unchanged values, and missing dependency handling.
-- Add loop-level coverage proving deletion of a declared file during provider
-  execution stops as `unknown` without a classified artifact or successor.
-- Add pipeline/action regressions proving an accepted plan+spec remains
-  eligible unchanged; editing only `spec.md` yields the existing typed stale
-  reason and prevents implementation; restoring the exact accepted bytes
-  restores eligibility; a missing spec remains a typed preflight failure; and
-  changing an unrelated file does not stale a file-target plan stage.
-- Retain a separate assertion that the pre-run `inputFingerprint` changes when
-  `spec.md` changes, but do not use that assertion as proof of successor
-  invalidation.
-- Prove a pre-Batch-8 target-only `resultFingerprint` does not authorize the new
-  paired successor after `spec.md` is bootstrapped; a fresh joint approval is
-  required.
-
-### 8C — Strengthen plan audit and plan follow-up
-
-#### Design
-
-Apply the plan-audit and plan-follow-up portions of this step at the cutover
-alongside the plan loop's `specPath`; they are prerequisites for the mandatory
-joint re-audit. Update `skills/21-simple-plans-audit/SKILL.md` to audit the spec
-and plan as one set. It must include:
-
-- spec completeness and testability;
-- the intentional-architecture-change rule;
-- the blocking-authority and convergence rules;
-- a Spec-to-Plan Coverage table with requirement, plan step, verification, and
-  status;
-- a conditional Research-to-Execution table when approved research exists;
-- a `Requirements Not Carried Forward` section that says `None` when empty;
-- the existing Testability and Real Workflow matrices, updated to cite both
-  documents;
-- the semantic quality measures above; and
-- exact `APPROVED`/`REJECTED`, confidence, output-path, and no-target-modification
-  requirements already present.
-
-Replace the `v2+` second-opinion rule with prior-artifact-aware behavior. The
-audit first assesses current documents independently. If the supplied prior
-artifact is a follow-up, it then verifies the repair claims; if it is another
-explicitly supplied comparison artifact, it records agreements and
-disagreements. Version alone never requires a historical lookup.
-
-Update `skills/22-simple-plans-follow-up/SKILL.md` to:
-
-- read and patch both documents in place;
-- preserve the spec/plan authority boundary and all good content;
-- fix each blocking finding without weakening research or controlling
-  invariants;
-- block rather than guess when an audit asks to change approved research or a
-  non-reopened controlling invariant;
-- keep the existing exact `Outcome`, output-path, and no-approval contracts;
-  and
-- re-check all coverage and traceability sections after repair.
-
-Update `roles/auditor.md` with the generic independent-first rule. Keep its
-authorization to write only the configured audit artifact and its prohibition
-on editing the target documents or source code.
-
-#### File impact
-
-- `skills/21-simple-plans-audit/SKILL.md`
-- `skills/22-simple-plans-follow-up/SKILL.md`
-- `roles/auditor.md`
-
-#### Verification
-
-- Add skill-contract tests for the two required document inputs, mandatory
-  matrices/omissions section, architecture-change exception, blocker authority,
-  severity threshold, confidence threshold, and exact decision/outcome tokens.
-- Add prompt/e2e coverage proving an ordinary post-repair v2 receives the repair
-  artifact while a fresh second opinion receives `Prior artifact: none`; neither
-  skill equates the numeric version with chain mode.
-- Prove a spec-file change makes prior accepted plan evaluation evidence stale
-  through the new binding-result snapshot and existing state comparison.
-
-### 8D — Make implementation and review spec-and-plan aware
-
-#### Design
-
-Update `skills/30-simple-implement/SKILL.md` during the first cutover invocation,
-so the second invocation is composed with the new contract already installed.
-It must require the spec, plan, and approved joint plan audit before modifying
-code. Every spec acceptance criterion must appear in the implementation
-requirement-coverage table. The implementer follows the approved plan as the
-delivery design; a material spec/plan conflict or a necessary architecture
-change outside the approved set results in blocked evidence rather than an
-improvised implementation. Preserve the exact existing implementation-ledger
-headers, accepted status vocabulary, confidence threshold, and harness-owned
-plan closeout. Add one narrow phase-boundary rule: when an approved plan
-explicitly requires a fresh approval between independently verifiable slices,
-finish the first subprocess with a structurally valid blocked ledger, release
-ownership, and require a later implementation invocation from a new accepted
-edge. The implementer must never invoke the harness recursively or claim
-completion for the unfinished slices.
-
-Update `skills/40-simple-review/SKILL.md` to review the worktree first against
-the spec's required outcomes and then against the plan's architecture, steps,
-and verification. It must:
-
-- map every acceptance criterion and plan step to implementation evidence;
-- retain diff, regression, partial-implementation, real-workflow,
-  maintainability, and exact-remediation checks;
-- apply the same intentional-architecture and blocker-authority rules, while
-  rejecting unapproved architectural deviations from the spec/plan set;
-- use Critical/Major as blocking and Minor as advisory;
-- replace version-based second-opinion wording with independent-first,
-  prior-artifact-aware comparison; and
-- retain the configured exact verdict, output path, and confidence requirements.
-
-Update `skills/42-simple-review-follow-up/SKILL.md` to require both documents,
-repair only rejected findings, and preserve the spec outcomes plus approved plan
-architecture. If a finding contradicts the approved documents or requires a new
-architecture beyond them, write `BLOCKED` evidence and require planning to be
-reopened. Remove the unrelated timeline-row instruction.
-
-Across implementation, review, and review follow-up, require the agent to run
-all feasible local/automated verification. Operator-only verification is allowed
-only under the exception contract in Scope and Authority; a mandatory check that
-cannot be performed or substituted keeps the result blocked.
-
-Update `roles/implementer.md` and `roles/reviewer.md` so their concise role
-definitions recognize both documents. The reviewer role also receives the
-independent-first rule. Do not add a special second-opinion role.
-
-#### File impact
-
-- `skills/30-simple-implement/SKILL.md`
-- `skills/40-simple-review/SKILL.md`
-- `skills/42-simple-review-follow-up/SKILL.md`
-- `roles/implementer.md`
-- `roles/reviewer.md`
-
-#### Verification
-
-- Preserve all `tests/implement-ledger.test.ts` cases and add a regression that
-  confirms the skill still emits the exact validator-owned table headers.
-- Extend deterministic implementation/review loop tests so prompts contain both
-  absolute document paths and so missing either document fails preflight.
-- Add a purpose-named cutover e2e that executes the first `runTask`, ownership
-  release, separate `create-spec` task, separate joint `runLoop`, and second
-  `runTask`. Assert zero nested provider runs and prove missing prior evidence,
-  the legacy target-only approval, and the blocked first ledger cannot authorize
-  the second implementation slice. Capture the second implementation prompt and
-  require both absolute `specPath` and `planPath`, proving the manifest edit was
-  installed before—not during—that subprocess.
-- Add skill-contract assertions for conflict blocking, independent-first review,
-  operator-verification limits, severity semantics, and removal of timeline/ADR/
-  todo requirements.
-- Exercise a review rejection followed by repair and reevaluation to prove the
-  configured decision and completion contracts are unchanged.
-
-### 8E — Synchronize operator documentation and run release gates
-
-#### Design
-
-Document the paired planning contract without presenting it as a new execution
-engine:
-
-- describe `spec.md` as the acceptance source and `plan.md` as the delivery and
-  closeout source;
-- explain that the existing plan loop audits both through a named file input;
-- document `create-spec` as the explicit migration for a plan-only project and
-  require a fresh joint approval afterward;
-- define `resultFingerprint` as the binding target plus declared project-file
-  dependencies while preserving the v1 provenance field and typed stale
-  reasons;
-- retain the default and research-first pipeline sequences exactly;
-- state that optional research is traced when present but remains unnecessary
-  for the default pipeline;
-- state that second opinions remain fresh chains and artifact version does not
-  define second-opinion semantics; and
-- state that existing harness validation, pipeline structure, and artifact
-  contracts are preserved while the generic result snapshot expands to include
-  declared file dependencies.
-
-#### File impact
-
-- `AGENTS.md`
-- `README.md`
-- `docs/architecture/overview.md`
-- Relevant tests under `tests/`, selected according to the preceding steps.
-
-#### Verification
-
-Run, in order:
-
-1. `pnpm build`
-2. `pnpm test`
-
-Then inspect the final diff for accidental changes to pipeline order, output
-patterns/contracts, decision tokens, implementation-ledger headers, runner
-profiles, provider behavior, lineage, fingerprints, or closeout ownership.
-
-Run the migration/cutover verification in a disposable plan-only project before
-the final release gate. Execute the actual discrete sequence: legacy-authorized
-first implementation returning a blocked ledger; ownership release; ordinary
-`create-spec`; joint plan loop; second implementation from its accepted edge.
-Confirm the plan bytes are unchanged by migration, the old approval and blocked
-ledger cannot authorize the second slice, no provider calls overlap, and only
-the accepted paired evidence unlocks the existing implement stage.
-
-Real-provider contract runs are not required because Batch 8 changes packaged
-prompts/configuration and deterministic harness behavior, not provider adapters
-or subprocess arguments. If implementation unexpectedly touches an adapter or
-provider execution seam, stop and expand verification to the affected real
-provider contract before declaring completion.
-
-## Acceptance Gates
-
-- Both planning creation paths define and safely create `spec.md` plus
-  `plan.md`.
-- Interrupted two-file creation has a tested retry path that preserves canonical
-  files, validates durable transaction/source metadata, handles every
-  publication/evidence window, cleans only matching staging files, and does not
-  consume the predecessor edge with misleading terminal evidence.
-- A plan-only project can invoke the ordinary `create-spec` task without
-  changing its plan, after which a fresh joint plan audit is mandatory.
-- The active Batch 8 cutover ends with blocked implementation evidence, cannot
-  unlock review, releases ownership before `create-spec`, and resumes in a new
-  provider invocation only from a distinct accepted joint-audit edge.
-- Plan audit/follow-up, implementation, review, and review follow-up receive and
-  use the two-document authority model.
-- The plan loop remains one approval loop with `plan.md` as target and
-  `specPath` as a named input.
-- Missing required documents fail through existing generic preflight before a
-  provider is spawned.
-- The recorded result fingerprint and reconstructed current binding snapshot
-  cover both planning documents; editing only `spec.md` stales accepted plan
-  evidence, restoring the accepted bytes restores eligibility, and unrelated
-  files do not stale the file-target plan stage.
-- Plan and implementation audits contain complete requirement coverage and can
-  reject structural-only workflows.
-- Intentional architecture changes are evaluated as transitions rather than
-  automatically forced back to outdated descriptive documentation.
-- Every blocking finding cites a concrete authority; Minor findings do not
-  prevent approval.
-- Second opinions remain independent fresh chains without version-based or
-  prior-artifact inference in the skills.
-- Agents do not delegate feasible verification to the operator.
-- No ADR, todo, timeline, compatibility loader, hardcoded workflow branch, new
-  pipeline stage, or semantic harness validator is introduced.
-- Existing v1 provenance field names, typed stale reasons, exact-edge
-  consumption, and historical-lineage rules remain compatible and fail closed
-  for legacy target-only fingerprints.
-- Existing decision/outcome parsing, implementation-ledger validation,
-  provenance, lineage, runner selection, provider behavior, and plan closeout
-  tests remain green.
-- `pnpm build` and the deterministic test suite pass.
-
-## Risks and Mitigations
-
-- **Partial document pair or terminal evidence gap:** creation skills bind body
-  digests and source authority into durable creation metadata, use
-  transaction-scoped staging, and reconstruct success from canonical bytes even
-  after both renames. Unsafe/ambiguous state is preserved and reported
-  `BLOCKED`; cleanup touches only recomputed matching transaction files.
-- **Cutover attempts a nested run:** the first implementation invocation ends
-  with blocked evidence and releases ownership before the separately invoked
-  migration task and joint loop; the second implementation uses a new accepted
-  edge and a new provider subprocess.
-- **Plan-only projects become unusable:** the ordinary `create-spec` task needs
-  only the existing plan, preserves it byte-for-byte, and explicitly requires a
-  fresh joint audit before implementation or review.
-- **Spec changes accepted under stale evidence:** result-time and current
-  eligibility snapshots use the same target-plus-declared-files digest; tests
-  exercise successor eligibility rather than only input-fingerprint mutation.
-- **Optional research accidentally becomes mandatory:** do not add
-  `researchPath` as a required plan-loop file input; trace it in the documents
-  and skills only when approved research exists.
-- **Outdated architecture blocks deliberate modernization:** require the audit
-  to distinguish the baseline from an explicitly documented target transition.
-- **Audit loops grow through subjective polish:** only Critical/Major findings
-  block, and each must cite a concrete authority.
-- **Prompt changes break structural artifact validation:** retain exact decision,
-  outcome, ledger table, confidence, and configured output-path language and pin
-  it with contract tests.
-- **Snapshot fix spreads into workflow-specific logic:** keep the change in the
-  generic snapshot/execution/state seams, preserve the v1 field and reason
-  contracts, and add no branching on `plan`, `spec`, or pipeline names.
-
-## Change Log
-
-No implementation entries yet.
+  transactionId: deb5151b40759626e8fccf508ed4889c9954335aa1cecd13303576a1479c65eb
+  sourceKind: accepted-research
+  sourceArtifactIdentity: 29f563eeb17f37071c5b20f8b46bc5d231de88d9fc23ebaf72d4fa6aad4ca5bf
+  sourceDigest: c0b1f67eddbe8cc4cd23de40426d98ac9fe9c53bed6a06cdea77359f9cc545e2
+  document: plan
+  bodyDigest: 5f0390f0fdae7133b2398a09bb4a3a795494f9a93829fe61bc148a94c8428f17
+  peerBodyDigest: 81ad471830f42f59651d512d89dd21a745bda15b725424d8cf203e1331efa2a3
+---
+# Implementation Plan — Semantic, per-location color theming for orc-smash renderers
+
+Acceptance authority: `docs/dev/spec.md`. This plan is the delivery design; every
+acceptance criterion (AC1–AC10) and research-derived requirement (R1–R7) maps to
+a step below (Spec-to-Plan Coverage). It is concrete against the current
+codebase: chalk v5, boxen v8, cli-table3 v0.6, yaml v2, zod v3; accent importers
+at `status-panel.ts`, `plain-render.ts`, `plain-event-renderer.ts`,
+`interactive.ts`, `cli-output.ts`, `project-snapshot-renderer.ts`; `--plain`
+selected at `cli.ts:59`.
+
+## Architecture
+
+### New module — `src/theme.ts`
+
+Owns the theming runtime. Responsibilities:
+
+- The zod schema for `config/theme.yaml` (strict; unknown keys rejected) and the
+  fixed token catalog (including `panel.column_header` and `panel.dim_row`).
+- `colors:` name resolution (a named hue → a chalk named color or a hex).
+- Style-spec → chalk builder (`{ fg, bg, bold, dim, underline, inverse }` → a
+  chalk chain), supporting the three color forms: chalk built-in named color,
+  `colors:` name, `#rrggbb`. The builder applies attributes in the same order
+  chalk does today (e.g. `emphasis.identity` = `{ fg: cyan, bold: true }` opens
+  `\x1b[1m\x1b[36m`, matching today's `chalk.bold.cyan`), so composed specs are
+  byte-identical by construction (MIN-5).
+- Border-spec → boxen color **string** (a chalk named color, or a hex) for
+  `borderColor`.
+- A per-resolved-spec cache so hot paths (live panel cells) do not rebuild chalk
+  chains per cell.
+- `borderContext(ctx) -> 'failed'|'audit'|'evaluate'|'follow-up'|'repair'|'implement'|'task'|'default'`
+  — the **single** extraction of the border context-selection logic (failed→red;
+  in-flight kind; else last-relevant kind; else default), shared by
+  `panelBorderColor` and `resolveBorderColor` so neither recurses into the other
+  (MIN-3).
+- `loadTheme(path?: string): Theme` — a **pure, parameterized** factory mirroring
+  `src/config.ts:135` `loadPackagedRegistry(toolRoot)` and the
+  `tests/config.test.ts:116-144` pattern: it takes an explicit root/path, holds
+  no module cache, and returns a `Theme`. This is the AC10 test target.
+- A `Theme` instance exposing `resolveStyle(token, location)` and
+  `resolveBorderColor(ctx, location)` — location-override → defaults, first match
+  wins; identity formatter at color level 0.
+
+### Theme lifecycle (AC10)
+
+The lifecycle is the **instance form, with a production-convenience default** —
+the design MAJ-2's remediation recommends and the only one that satisfies AC10
+*and* C-CALLERS at once. AC10 has two clauses that pull in opposite directions:
+"does not load at import time" and "a test can swap a fixture `theme.yaml`
+without process-wide side effects." A module-level cached singleton loaded lazily
+satisfies the first but makes the second unprovable (swapping then requires
+mutating process-global state). An explicit injected `Theme` satisfies the second
+but forces every accent helper to take a `theme` argument, breaking C-CALLERS
+(helpers must keep their single-arg + optional `location` signature). The hybrid
+below resolves both:
+
+- **AC10 test path (pure):** `tests/theme.test.ts` calls `loadTheme(fixturePath)`
+  → `theme.resolveStyle(...)` / `theme.resolveBorderColor(...)` against temp-dir
+  fixtures (good/bad, unknown token rejected), mirroring
+  `tests/config.test.ts:116-144`'s `loadPackagedRegistry(tempDir)` calls. Each
+  test builds its own `Theme`; **no module state is read or written**, so the
+  "swappable fixture without process-wide side effects" clause holds by
+  construction. This is the honest proof AC10 names.
+- **Production path (free functions, arity-preserving):** the module additionally
+  exports free-function `resolveStyle(token, location)` / `resolveBorderColor(ctx,
+  location)` that delegate to a **lazily-initialized module-default theme**.
+  Accent helpers call the free functions, so they keep their arity (C-CALLERS).
+  The default is created on first resolver call, **never at import** — so
+  importing `theme.ts` has no side effect and the `config.ts:168`
+  `DEFAULT_REGISTRY`-at-import trap is not repeated.
+- **Startup initialization (single write):** because the default is lazy, the
+  `--theme` path must be fixed before any rendering. `cli.ts` resolves the
+  three-tier precedence once and the constructed output calls
+  `initTheme(themePath)` to seed the module default (idempotent; one write per
+  process). After that, every renderer's free-function call — accent helpers, the
+  `panelStyle` wrapper, and `resolveBorderColor` — resolves against the seeded
+  theme. If no output initializes it (direct unit-test use of the accent
+  helpers), the free functions lazily `initTheme()` with packaged precedence as a
+  fallback, so those tests work without the CLI entry point.
+
+**Precedence decision (deferred by the research; C-FORMAT).** Theme precedence
+is: `--theme <path>` (explicit) → `<projectRoot>/.theme.yaml` (project-local
+override) → packaged `config/theme.yaml`. This mirrors `config.ts`'s three-tier
+precedence (`--config` → `.orc-smash.yaml` → `config/`) one-for-one and is the
+smallest surprise for users already familiar with orc-smash config. `--theme` is
+added as a commander option on the `smash` and `status` commands — the two that
+render colored output via `createPanelCliOutput` — mirroring `--config`'s
+placement (`cli.ts:50` for `smash`, `:70` for `status`). The `ownership` commands
+use `createPlainCliOutput` and carry no `--config`, so they are excluded and keep
+the lazy packaged-precedence fallback. The resolved path is threaded end-to-end:
+`cli.ts` (parse `--theme`) → `createPanelCliOutput` / `createPlainCliOutput`
+(accept an optional `themePath`, added to their signatures) → `initTheme(themePath)`
+→ the renderers' free-function resolver calls (MAJ-2). `initTheme` is the single
+point that fixes the module-default theme before any rendering.
+
+### Refactor — `src/terminal-accent.ts`
+
+Each helper delegates to `resolveStyle(token, location)` instead of hardcoding
+chalk. Each gains an **optional trailing `location` argument** defaulting to
+`'terminal-accent'` (C-CALLERS), so existing single-arg callers and
+`tests/terminal-accent.test.ts` keep working unchanged. Token mapping:
+
+| Helper | Token(s) |
+| --- | --- |
+| `roleAccent(role)` | `role.{auditor,planner,reviewer,implementer,unknown}` |
+| `kindAccent(kind)` | `kind.{audit,follow-up,implement,evaluate,repair,task}` |
+| `statusAccent(status)` | `status.{running,failed,done,interrupted}` |
+| `resultAccent(state)` | `result.{pass,fail,warn,neutral}` (via unchanged `toResultState`) |
+| `availabilityAccent(state)` | `availability.{available,unavailable,missing-inputs}` |
+| `emphasisAccent(state)` | `emphasis.{identity,binding-identity,supporting,placeholder,recommended,warning}` (token key matches the `EmphasisState` `'binding-identity'` verbatim — no abbreviation, MIN-2) |
+| `unclassifiedAccent(count)` | `unclassified.{attention,idle}` (count test stays in code) |
+| `staleAccent(isStale)` | `stale.{stale,fresh}` (boolean test stays in code) |
+| `eventLevelAccent(level)` | `log.{fail,warn,pass,info}` (location default `'log'`) |
+
+The context-selection logic in `panelBorderColor(ctx)` (failed→red; in-flight
+kind; else last-relevant kind; else default) is extracted into the single shared
+`borderContext(ctx)` helper in `theme.ts` (MIN-3). `panelBorderColor(ctx)` is a
+**thin delegate**: it calls `resolveBorderColor(ctx, 'status-panel')`, which runs
+`borderContext(ctx)` and resolves the `panel.border.{context}` token via the
+theme to a boxen color **string** — a named color (step-1 baseline) or a `#rrggbb`
+hex (step-2 rich palette), both accepted by boxen v8 (R2). **No color value lives
+in `terminal-accent.ts`**: there is no parallel context→color map; the color comes
+solely from the theme, so this is a single source of truth (MAJ-3, restoring the
+v1 delegation rather than a second hardcoded resolution). The one-arg
+`panelBorderColor(ctx): string` signature is preserved (location defaults to
+`'status-panel'`) so `tests/terminal-accent.test.ts`'s name assertions
+(`toBe('cyan')`, …) stay green in step 1, where the baseline border tokens resolve
+to those same names. `resolveBorderColor` and `panelBorderColor` therefore share
+one `borderContext` extraction and one theme resolution — neither recurses, and
+they cannot drift. The `PanelBorderColor` literal union
+(`'cyan'|'yellow'|'green'|'red'|'blue'`) is retired in favor of `string` because
+the resolved value is now theme-driven; the failed→red contract and the
+kind-driven selection are unchanged in behavior. `toResultState`, the
+`unclassifiedAccent` count test, and the `staleAccent` boolean test are untouched
+behavior (C-BEHAVIOR).
+
+### Call-site wiring (R4: local wrapper)
+
+`src/status-panel.ts`: add once
+`const panelStyle = (token) => resolveStyle(token, 'status-panel')` and route
+cell/header colors through it, replacing the direct
+`emphasisAccent`/`roleAccent`/`statusAccent`/`resultAccent` calls and the
+hardcoded `head: ['cyan']` at `:97`/`:112` with `panel.column_header`. When the
+header cells are pre-colored, cli-table3's `style.head` is set to `[]` (currently
+`['cyan']`) so the table does not re-wrap already-colored cells — the suite
+already guards against double-wrap (e.g. `tests/status-panel.test.ts:488`)
+(MIN-5). The title and section-header call sites (today `emphasisAccent('identity')`)
+**stay on `emphasis.identity`** (R3 decision); `panel.title` is dropped from the
+catalog and baseline to avoid a dead token. The `boxen({ borderColor })` call at
+`:213` receives `resolveBorderColor(context, 'status-panel')`.
+
+The two raw `chalk.dim` sites the audit flagged (MAJ-1) are routed through the
+theme, not left hardcoded:
+
+- `status-panel.ts:308` — `cells.map(cell => chalk.dim(cell))` (dims every cell of
+  an unrelated/unclassified timeline row) →
+  `cells.map(cell => panelStyle('panel.dim_row')(cell))`.
+- `status-panel.ts:376` — `chalk.dim(identity)` (the compact identity line in the
+  wide-fingerprint layout) → `panelStyle('panel.dim_row')(identity)`.
+
+`panel.dim_row: { dim: true }` reproduces `chalk.dim` byte-for-byte at level 1,
+so AC4 is unaffected. With both sites routed, the `import chalk` at `:3` is
+**dropped** — `status-panel.ts` no longer imports chalk directly for color, so
+the Ownership Boundaries sentence holds as written (MAJ-1, Option 1).
+
+| Renderer / call site | Location |
+| --- | --- |
+| `status-panel.ts` (cells, header, border) | `status-panel` |
+| `interactive.ts`, `cli-output.ts`, `project-snapshot-renderer.ts` | `terminal-accent` |
+| `plain-render.ts` (`--plain` timeline) | `plain-timeline` |
+| `plain-event-renderer.ts` (event log) | `log` |
+
+`cli-output.ts`, `interactive.ts`, `project-snapshot-renderer.ts`,
+`plain-render.ts`, and `plain-event-renderer.ts` pass their location explicitly
+at each accent call site. `stage-menu.ts` imports only the `AvailabilityState`
+type (no behavior change).
+
+## Ownership boundaries
+
+- **`theme.ts`** owns: schema, catalog, `colors:` table, spec→chalk builder,
+  border→name builder, `borderContext`, cache, `loadTheme`/`Theme`, the
+  free-function `resolveStyle`/`resolveBorderColor`, the lazy module default +
+  `initTheme`, and precedence. It imports nothing from `terminal-accent.ts`.
+- **`terminal-accent.ts`** owns: helper signatures, the token↔helper mapping, and
+  the preserved behavioral switches (`toResultState`, `panelBorderColor` context,
+  the count/boolean tests). It imports from `theme.ts`.
+- **`config/theme.yaml`** owns: every color value (baseline and rich). No color
+  value lives in `.ts`.
+- **Renderers** own: passing the correct `location` literal at each call site.
+  After MAJ-1, **no renderer imports chalk directly for color**: the row/identity
+  dimming is routed through `panel.dim_row` and the `chalk` import is dropped from
+  `status-panel.ts`. The boxen `borderColor` handoff receives a theme-resolved
+  color **string** (not a chalk call), and the cli-table3 `head` style is set to
+  `[]` with header cells pre-colored through `panel.column_header` — both resolve
+  through the theme, not chalk.
+
+## Implementation sequence
+
+**Step 0 — Scaffolding (C-FORMAT, AC10).** Add `src/theme.ts` with the schema,
+catalog, `colors:` resolution, spec→chalk builder, border→name builder,
+`borderContext`, cache, the pure `loadTheme(path?): Theme` factory, the
+`Theme.resolveStyle`/`Theme.resolveBorderColor` instance API, the free-function
+`resolveStyle`/`resolveBorderColor` delegating to a lazy module default +
+`initTheme`, and the three-tier precedence. Add `tests/theme.test.ts` exercising
+`loadTheme(fixturePath)` → `theme.resolveStyle`/`theme.resolveBorderColor`:
+strict validation (good/bad fixtures, unknown token rejected), module-load
+isolation with **no module state mutated** (per `tests/config.test.ts:116-144`),
+token resolution order, and spec→chalk byte assertions. No call site is wired yet.
+*Gate:* `pnpm test theme` green; importing `theme.ts` produces no side effects
+(AC10: the isolation test builds a `Theme` per case via `loadTheme`, never
+touching the module default).
+
+**Step 1 — No-op baseline (AC1–AC5, AC8, AC10).**
+
+1. Add `config/theme.yaml` with the step-1 baseline. Apply the audit fixes up
+   front (R1): `role.unknown: { fg: gray }` (no `dim`), and
+   `panel.column_header: { fg: cyan }` (no `bold`). Add `panel.dim_row: { dim: true }`
+   reproducing today's `chalk.dim` at `status-panel.ts:308,376` (MAJ-1). No
+   `panel.title` token (R3). All other baseline tokens use chalk built-in named
+   colors reproducing today's (`role.*`, `kind.*`, `status.*`, `result.*`,
+   `availability.*`, `emphasis.*`, `unclassified.*`, `stale.*`,
+   `panel.column_header`, `panel.dim_row`, `panel.border.*`, `log.*`). Empty
+   per-location blocks (`status-panel: {}`, etc.) so every location inherits
+   identical `defaults`.
+2. Refactor `terminal-accent.ts` helpers to delegate to
+   `resolveStyle(token, location)` with the optional trailing `location` arg
+   (default `'terminal-accent'`); `eventLevelAccent` defaults to `'log'`.
+   `panelBorderColor(ctx)` delegates to `resolveBorderColor(ctx, 'status-panel')`,
+   which runs the shared `borderContext(ctx)` and resolves the
+   `panel.border.{context}` token via the theme — one selection path, one theme
+   resolution, **no context→color map in `.ts`** (MIN-3/MAJ-3).
+3. Wire locations: `status-panel.ts` via the `panelStyle` wrapper (R4),
+   including routing the two `chalk.dim` sites through `panelStyle('panel.dim_row')`
+   and dropping `import chalk` (MAJ-1); `plain-render.ts` → `'plain-timeline'`;
+   `plain-event-renderer.ts` → `'log'`;
+   `interactive.ts`/`cli-output.ts`/`project-snapshot-renderer.ts` →
+   `'terminal-accent'`. One-line wiring edits; no behavior change because every
+   location's baseline inherits the same `defaults`.
+4. Replace `head: ['cyan']` (`:97`/`:112`) with `panel.column_header` applied to
+   the header cells and set `style.head: []` so cli-table3 does not re-wrap them
+   (MIN-5).
+
+*Gate (AC4):* `pnpm test status-panel terminal-accent` green — the byte
+assertions (`[36m`/`[33m`/`[32m`/`[31m`), the `panelBorderColor` name assertions,
+and the strip-ANSI assertions all hold **unchanged**. Plus a new before/after
+snapshot test asserting the status panel and the `--plain` timeline are
+byte-identical to a captured pre-step-1 baseline. The snapshot is
+**deterministic**: it freezes time with `vi.setSystemTime` (precedent
+`tests/status-panel.test.ts:14`) or captures a panel with no in-flight row, and
+the `--plain`-timeline snapshot is likewise time-stable, because `renderStatusPanel`
+reads `Date.now()` for elapsed cells (`status-panel.ts:223,320`) (MIN-4).
+
+**Step 2 — Rich palette (AC6).** Flip `config/theme.yaml` to the rich palette:
+add `colors:` (teal/amber/orange/red/green/purple/blue/gray hexes),
+`emphasis.identity` → orange bold, distinct role hues,
+`result.warn`/`emphasis.warning`/`unclassified.attention`/`stale.stale`/
+`availability.missing-inputs` → orange, `status-panel.role.implementer` backlight
+(`bg: green, fg: black, bold: true`), and
+`status-panel.panel.border.default` → orange. **This deliberately changes the
+pinned bytes** (the planned visual change). Update the `status-panel` byte/name
+assertions as an **enumerated, acknowledged edit** in `tests/status-panel.test.ts`
+(list each changed assertion explicitly in the step's commit message). Because
+`panelBorderColor` now delegates to `resolveBorderColor` (MAJ-3), the
+default-context `panelBorderColor(ctx)` name assertion follows the theme: it
+changes from `'blue'` to the orange value and is folded into this same enumerated
+edit (the other context assertions — `toBe('red')`/`toBe('cyan')`/… — are
+unchanged, since only `panel.border.default` is recolored). No `.ts` color change.
+*Gate:* full suite green; `--plain`/level-0 still uncolored (AC8).
+
+**Step 3 — Background-fill verification (AC7).** Add a `status-panel`/fixture
+test with a row whose implementer cell exceeds its column width; assert no
+background SGR sequence is left open past the slice boundary and no bleed reaches
+the separator or the next column. If bleeding occurs: append an explicit reset at
+each styled-cell boundary, or restrict background fills to non-truncating columns
+(Role/Status). Document the chosen mitigation in the step's evidence. *Gate:* the
+fixture passes (gate #1, R7).
+
+## File impact
+
+| File | Change |
+| --- | --- |
+| `src/theme.ts` | **New.** Schema, catalog, `colors:` table, spec→chalk builder, `borderContext`, cache, pure `loadTheme(path?): Theme` factory, `Theme.resolveStyle`/`resolveBorderColor`, free-function resolvers + lazy module default + `initTheme`, precedence (MAJ-2). |
+| `src/terminal-accent.ts` | Refactor all helpers to delegate; add optional `location` arg; `panelBorderColor` delegates to `resolveBorderColor` (sharing `borderContext`, **no context→color map in `.ts`**, MAJ-3/MIN-3); retire `PanelBorderColor` union for `string`. Behavior switches unchanged. |
+| `src/status-panel.ts` | `panelStyle` wrapper (R4); header cells via `panel.column_header` with `style.head: []` (MIN-5); route the two `chalk.dim` sites (`:308,376`) through `panelStyle('panel.dim_row')` and **drop `import chalk`** (MAJ-1); `boxen({borderColor})` via `resolveBorderColor`. Title/headers stay on `emphasis.identity` (R3). |
+| `src/plain-render.ts` | Pass `'plain-timeline'` at accent call sites. |
+| `src/plain-event-renderer.ts` | Pass `'log'` at `eventLevelAccent` call sites (already its domain). |
+| `src/interactive.ts`, `src/project-snapshot-renderer.ts` | Pass `'terminal-accent'` at accent call sites. |
+| `src/cli-output.ts` | `createPanelCliOutput` / `createPlainCliOutput` accept an optional `themePath` and call `initTheme(themePath)` to seed the module default once before rendering (MAJ-2); also pass `'terminal-accent'` at its accent call sites. |
+| `src/cli.ts` | Add `--theme <path>` option to `smash` and `status` (mirroring `--config` at `:50`/`:70`); resolve three-tier precedence; pass `themePath` to their `createPanelCliOutput` constructors (MAJ-2/MIN-7). |
+| `config/theme.yaml` | **New.** Baseline incl. `panel.dim_row: { dim: true }` (step 1) → rich palette (step 2). |
+| `tests/theme.test.ts` | **New.** `loadTheme(fixturePath)` isolation (no module state), strict validation, resolution order, spec→chalk bytes (incl. composed), level-0 identity (AC10). |
+| `tests/status-panel.test.ts` | Add before/after byte snapshot, **time-frozen / no-in-flight for determinism** (step 1, MIN-4); enumerate changed byte/name assertions (step 2); add backlight-bleed fixture (step 3). |
+| `tests/terminal-accent.test.ts` | Signatures unchanged; keep green. Add explicit level-1 byte assertions for composed specs (`emphasis.identity`, `emphasis.binding-identity`) (MIN-5). |
+
+No changes to: `src/state.ts`, `src/status.ts`, `src/manifest.ts`, `src/runner.ts`,
+`src/config.ts`, the providers/registry config, or any pipeline/runner/provenance/
+adapter module (C-SCOPE).
+
+## Failure handling
+
+- **Bad theme file** (unknown token, malformed hex, unknown color name,
+  structural error): zod rejects at load time; the error names the offending
+  token/path (mirroring `config.ts`'s `superRefine` messages). The process fails
+  fast with a clear message rather than rendering unstyled cells — fail-closed by
+  design (AC1).
+- **Missing packaged `config/theme.yaml`:** the loader throws a "packaged theme
+  not found" error analogous to `config.ts`'s packaged-manifest guard — this
+  covers both the explicit `initTheme()` path and the lazy free-function fallback
+  (MAJ-2). A project-local `.theme.yaml` still works.
+- **`--theme <path>` points to a missing file:** throw
+  "Specified theme file not found: <path>" (mirrors the `--config` guard).
+- **Background-fill bleed (step 3):** if the fixture shows a dangling background
+  SGR past the slice, apply the documented mitigation (explicit reset or
+  non-truncating-column restriction) and re-run the gate. Do not ship step 3 with
+  a known bleed.
+- **Test regression in step 1:** if any byte/name assertion changes unexpectedly,
+  the baseline is wrong (likely a missed R1 fix); correct the YAML rather than
+  weaken the assertion. Step 1 must be byte-identical — a byte change here is a
+  defect, not progress.
+- **Color level 0 / `--plain`:** `resolveStyle` returns the identity formatter;
+  no throw, no color leak. A colored byte appearing in `--plain` output is a
+  defect.
+
+## Verification
+
+Automated (vitest):
+
+- `tests/theme.test.ts` (AC10): `loadTheme(fixturePath)` is exercised directly
+  against temp-dir fixtures (good/bad, unknown token rejected), building a
+  `Theme` per test with **no module state read or written** (mirrors
+  `tests/config.test.ts:116-144`); `theme.resolveStyle` / `theme.resolveBorderColor`
+  assert token resolution order (location beats defaults; unknown token fails
+  closed) and spec→chalk correctness for named colors (exact bytes, e.g.
+  `{ fg: cyan }` → `\x1b[36m`), hex, background, and composed specs; level-0
+  returns the identity formatter.
+- `tests/status-panel.test.ts` (step 1): a before/after snapshot of the status
+  panel **and** the `--plain` timeline asserts identical bytes (closes
+  AC4/C1+M3); the snapshot is **time-frozen** (`vi.setSystemTime`, precedent
+  `tests/status-panel.test.ts:14`) or uses a no-in-flight panel so the
+  `Date.now()` elapsed cells (`status-panel.ts:223,320`) do not make the diff
+  flaky (MIN-4); the existing border byte assertions and the `panelBorderColor`
+  name assertions stay green unchanged (closes AC5/C2).
+- `tests/terminal-accent.test.ts`: the strip-ANSI and label assertions stay
+  green; signatures unchanged. Add explicit level-1 byte assertions for
+  **composed** specs — `emphasis.identity` (`chalk.bold.cyan` → opens
+  `\x1b[1m\x1b[36m`) and `emphasis.binding-identity` (`chalk.cyan` → `\x1b[36m`)
+  — pinning the builder's attribute order to today's chalk-chain order (MIN-5).
+- `--plain` / level-0 (AC8, MIN-1): pin `chalk.level = 0` (precedent
+  `tests/status-panel.test.ts:14`) and assert **zero SGR sequences** in
+  `plain-render.ts` and `plain-event-renderer.ts` output at that level.
+  `resolveStyle` keys off `chalk.level` only — no `--plain`-specific suppression
+  is introduced, so `--plain` on a TTY remains colored as today.
+- Step 2: the changed byte/name assertions are updated and enumerated.
+- Step 3 (gate #1, AC7): the backlight-truncation-no-bleed fixture.
+- AC9 label-retention spot-check (MIN-8): assert representative colored cells
+  still contain their text label/symbol after coloring — e.g. an
+  `status-panel.role.implementer` backlight cell still contains `implementer`,
+  and a failed border/result case still renders `failed`. A step-2 edit that
+  drops a label in favor of color alone trips this check.
+
+Manual (gate #2, R7; not automatable):
+
+- On one truecolor terminal (level 3): confirm `orange`/`purple`/`teal` hex render
+  and are distinguishable; confirm the implementer backlight reads as green-fill /
+  black-text; confirm no global bleed.
+- On one 256-color terminal (level 2): confirm the hex approximations of
+  orange/purple/teal remain distinguishable from each other and from red/green.
+- Re-confirm the level-1 exact-byte match for the named-color baseline — the
+  baseline is byte-identical at level 1 by construction, and the snapshot gate
+  already proves this deterministically.
+
+## Acceptance gates
+
+- **Gate A (step 1, byte-identical):** `pnpm test status-panel terminal-accent
+  theme` green **and** the status-panel + `--plain`-timeline before/after snapshot
+  is byte-identical (time-frozen / no-in-flight so it is deterministic, MIN-4).
+  This is the proof the plumbing is correct and non-behavioral.
+- **Gate B (step 2, rich palette):** full `pnpm test` green with the enumerated
+  byte/name assertion edits; `--plain`/level-0 uncolored; no `.ts` color change.
+- **Gate C (step 3, no bleed):** the backlight-truncation fixture passes
+  (gate #1). Gate #2 is a manual visual sign-off recorded in the step evidence.
+
+## Spec-to-Plan Coverage
+
+| Spec item | Plan step | Verification evidence |
+| --- | --- | --- |
+| AC1 — token catalog, fail-closed, no raw chalk | Step 0 (catalog/schema), Step 1 (wiring) | `tests/theme.test.ts`: unknown-token rejection at load; `panel.dim_row` routes the two `chalk.dim` sites and `import chalk` is dropped from `status-panel.ts` (MAJ-1) |
+| AC2 — style-spec resolution | Step 0 | `tests/theme.test.ts`: `{ fg: cyan }` → `\x1b[36m`; hex/bg/composed; `{}` identity; composed byte order pinned in `terminal-accent.test.ts` (MIN-5) |
+| AC3 — per-location themes | Step 0 (resolver), Step 1 (wiring) | `tests/theme.test.ts`: location beats defaults |
+| AC4 — no-op baseline byte-identical | Step 1 | Gate A: snapshot byte-identical (deterministic, MIN-4); status-panel/terminal-accent green unchanged |
+| AC5 — context border preserved | Step 1 | `panelBorderColor` delegates to `resolveBorderColor` (no color map in `.ts`, MAJ-3); shared `borderContext`; rendered border bytes + step-1 name assertions unchanged, default-context name folded into the step-2 enumerated edit |
+| AC6 — rich palette | Step 2 | Gate B: full suite green; enumerated byte edits; one-file palette |
+| AC7 — no background bleed | Step 3 | Gate C: backlight-truncation fixture (gate #1) |
+| AC8 — level-0/non-TTY uncolored | Step 0, Step 1 | `tests/theme.test.ts`: level-0 identity; `--plain` path via `cli.ts:59` with `chalk.level = 0` pinned and zero SGR asserted in plain output (MIN-1) |
+| AC9 — color never sole encoder | Steps 1–2 (constraint) | Label-retention spot-check: representative colored cells still contain their text label/symbol (e.g. an implementer backlight cell contains `implementer`; a failed case renders `failed`) (MIN-8) |
+| AC10 — module-load isolation | Step 0 (lifecycle) | `loadTheme(fixturePath)` → `Theme`, no module state mutated (`config.test.ts` patterns); Theme lifecycle subsection (MAJ-2) |
+| R1 — baseline fixes (m1, m2) | Step 1.1 | `role.unknown: { fg: gray }`; `panel.column_header: { fg: cyan }`; snapshot gate empty diff |
+| R2 — boxen v8 hex border (m3) | Step 0 (border→name), config | boxen v8 accepts hex `borderColor`; named-color border tokens in both palettes |
+| R3 — title routing (m4) | Step 1.3 | Title/headers stay on `emphasis.identity`; `panel.title` dropped from catalog + baseline |
+| R4 — panel-style wrapper (m5) | Step 1.3 | `const panelStyle = (token) => resolveStyle(token, 'status-panel')` in `status-panel.ts`; also wraps `panel.dim_row` (MAJ-1) |
+| R5 — `unclassified` own group | Step 0 (catalog) | No `status.unclassified`; `unclassified.{attention,idle}` |
+| R6 — truecolor rich / named baseline | Steps 1–2, manual | Baseline named colors; rich palette hex; chalk auto-detection |
+| R7 — two verification gates | Step 3 + manual | Gate #1 fixture; gate #2 manual truecolor/256/level-1 |

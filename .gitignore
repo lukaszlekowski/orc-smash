@@ -33,8 +33,7 @@ coverage/
 /docs/dev/*
 !/docs/dev/plan.md
 !/docs/dev/research.md
-/temp-debug
-/temp-agy-real-contract
+/temp-*
 .orc-smash/
 
 # OS files

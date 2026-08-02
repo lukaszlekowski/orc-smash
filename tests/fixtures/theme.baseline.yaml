@@ -1,0 +1,69 @@
+# Step-1 no-op baseline theme (AC4 / Gate A fixture).
+#
+# Reproduces today's (pre-feature) renderer bytes byte-for-byte at color level 1
+# using only chalk built-in named colors (R6). Includes the R1 audit fixes:
+# `role.unknown: { fg: gray }` (no dim) and `panel.column_header: { fg: cyan }`
+# (no bold). `panel.dim_row: { dim: true }` reproduces the former raw
+# `chalk.dim` row dimming; `panel.border.default: { fg: blue }` reproduces the
+# former default boxen border. The before/after snapshot gate proves identity.
+defaults:
+  role.auditor: { fg: cyan }
+  role.planner: { fg: yellow }
+  role.reviewer: { fg: magenta }
+  role.implementer: { fg: green }
+  role.unknown: { fg: gray }
+
+  kind.audit: { fg: cyan }
+  kind.follow-up: { fg: yellow }
+  kind.implement: { fg: green }
+  kind.evaluate: { fg: cyan }
+  kind.repair: { fg: yellow }
+  kind.task: { fg: green }
+
+  status.running: { fg: yellow }
+  status.failed: { fg: red }
+  status.done: { fg: gray }
+  status.interrupted: { fg: magenta }
+
+  result.pass: { fg: green }
+  result.fail: { fg: red }
+  result.warn: { fg: yellow }
+  result.neutral: {}
+
+  availability.available: {}
+  availability.unavailable: { dim: true }
+  availability.missing-inputs: { fg: yellow }
+
+  emphasis.identity: { fg: cyan, bold: true }
+  emphasis.binding-identity: { fg: cyan }
+  emphasis.supporting: { dim: true }
+  emphasis.placeholder: { dim: true }
+  emphasis.recommended: { fg: green }
+  emphasis.warning: { fg: yellow }
+
+  unclassified.attention: { fg: yellow }
+  unclassified.idle: { dim: true }
+
+  stale.stale: { fg: yellow }
+  stale.fresh: {}
+
+  panel.column_header: { fg: cyan }
+  panel.dim_row: { dim: true }
+  panel.border.failed: { fg: red }
+  panel.border.audit: { fg: cyan }
+  panel.border.evaluate: { fg: cyan }
+  panel.border.follow-up: { fg: yellow }
+  panel.border.repair: { fg: yellow }
+  panel.border.implement: { fg: green }
+  panel.border.task: { fg: green }
+  panel.border.default: { fg: blue }
+
+  log.fail: { fg: red }
+  log.warn: { fg: yellow }
+  log.pass: { fg: green }
+  log.info: { fg: cyan }
+
+status-panel: {}
+terminal-accent: {}
+plain-timeline: {}
+log: {}
