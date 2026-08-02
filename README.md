@@ -40,13 +40,14 @@ orc smash --project <path> --task <task-id>        # ad-hoc one-off task
 orc smash --project <path> --pipeline <pipeline>   # explicit pipeline start
 orc smash --project <path> --plain --task <task-id>
 orc smash --project <path> --show-fingerprints
-orc status --project <path> [--all] [--config <path>]
+orc smash --project <path> --theme <path>             # override color theme
+orc status --project <path> [--all] [--config <path>] [--theme <path>]
 orc status --project <path> --show-fingerprints
 ```
 
 On launch, interactive `orc smash` renders a compact startup snapshot displaying the project root, config path, configured pipelines, suggested loop & reason, and a compact per-binding state summary (binding kind, target path, latest evaluate/repair/task steps with decision/outcome, provider/model, effort, session strategy/ID, missing inputs, and unclassified count).
 
-Every operator-facing surface consumes one shared semantic terminal styling vocabulary (`terminal-accent.ts`). Statuses, decisions, warnings, availability, and lifecycle states use consistent accents across compact snapshots, interactive menus, the live status panel, detailed project status (`orc status`), and line-oriented plain-mode event output. Output remains 100% complete and understandable when colour is unsupported or disabled (`NO_COLOR=1`, non-TTY, or piped execution emit zero ANSI escape codes).
+Every operator-facing surface consumes one shared semantic color theming system. Colors are defined by semantic token (`role.auditor`, `result.fail`, `emphasis.identity`, …) in `config/theme.yaml`, resolved per location (status panel, shared terminal accents, plain timeline, logging) through `src/theme.ts`. The `terminal-accent.ts` helpers delegate to the theme, preserving their signatures so every renderer — compact snapshots, interactive menus, the live status panel, `orc status`, and plain-mode event output — uses consistent accents. Override the packaged theme with `--theme <path>` or a project `.theme.yaml`. Output remains 100% complete and understandable when colour is unsupported or disabled (`NO_COLOR=1`, non-TTY, or piped execution emit zero ANSI escape codes).
 
 All interactive choices use a standardized `(unavailable: reason)` label with boolean `disabled: true`. Unavailable choices, missing input blockers, and recommendations carry explicit, typed availability categories (`available`, `unavailable`, `missing-inputs`). **Tasks** opens a generic task chooser listing all configured tasks in manifest declaration order, followed by a task detail confirmation. Entering or re-entering Tasks performs one fresh state scan before its rows are rendered. If an eligible pipeline continuation exists, confirmation shows the configured pipeline and predecessor/successor stages and warns that the task may invalidate the suggestion; the warning is advisory and never disables the task. Pressing **Cancel — back to Tasks** returns to the rescanned chooser, while **Back to main menu** returns to the main action surface.
 
@@ -220,5 +221,6 @@ The AGY command must run from an already-authenticated operator shell; it writes
 only a redacted evidence record, never raw invocation logs or credentials.
 
 See [docs/architecture/overview.md](./docs/architecture/overview.md) for the
-architecture, [docs/dev/plan.md](./docs/dev/plan.md) for the Batch 5 contract
+architecture, [CHANGELOG.md](./CHANGELOG.md) for the full history,
+[docs/dev/plan.md](./docs/dev/plan.md) for the Batch 5 contract
 and closeout, and [AGENTS.md](./AGENTS.md) for repository invariants.
