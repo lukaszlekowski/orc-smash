@@ -1,0 +1,75 @@
+# Rich palette. All tunable color values live in this file.
+colors:
+  teal: '#2ec4b6'
+  amber: '#f4b942'
+  orange: '#ff8c42'
+  red: '#ef476f'
+  green: '#06d6a0'
+  purple: '#9b5de5'
+  blue: '#3a86ff'
+  gray: '#9aa0a6'
+
+defaults:
+  role.auditor: { fg: teal }
+  role.planner: { fg: amber }
+  role.reviewer: { fg: purple }
+  role.implementer: { fg: green }
+  role.unknown: { fg: gray }
+
+  kind.audit: { fg: teal }
+  kind.follow-up: { fg: amber }
+  kind.implement: { fg: green }
+  kind.evaluate: { fg: teal }
+  kind.repair: { fg: amber }
+  kind.task: { fg: green }
+
+  status.running: { fg: amber }
+  status.failed: { fg: red }
+  status.done: { fg: gray }
+  status.interrupted: { fg: purple }
+
+  result.pass: { fg: green }
+  result.fail: { fg: red }
+  result.warn: { fg: orange }
+  result.neutral: {}
+
+  availability.available: {}
+  availability.unavailable: { dim: true }
+  availability.missing-inputs: { fg: orange }
+
+  emphasis.identity: { fg: orange, bold: true }
+  emphasis.binding-identity: { fg: teal }
+  emphasis.supporting: { fg: gray, dim: true }
+  emphasis.placeholder: { fg: gray, dim: true }
+  emphasis.recommended: { fg: green }
+  emphasis.warning: { fg: orange }
+
+  unclassified.attention: { fg: orange }
+  unclassified.idle: { fg: gray, dim: true }
+
+  stale.stale: { fg: orange }
+  stale.fresh: {}
+
+  panel.column_header: { fg: teal }
+  panel.dim_row: { dim: true }
+  # Keep the stage-specific border names stable; the default border gains orange.
+  panel.border.failed: { fg: red }
+  panel.border.audit: { fg: cyan }
+  panel.border.evaluate: { fg: cyan }
+  panel.border.follow-up: { fg: yellow }
+  panel.border.repair: { fg: yellow }
+  panel.border.implement: { fg: green }
+  panel.border.task: { fg: green }
+  panel.border.default: { fg: orange }
+
+  log.fail: { fg: red }
+  log.warn: { fg: orange }
+  log.pass: { fg: green }
+  log.info: { fg: teal }
+
+status-panel:
+  role.implementer: { bg: green, fg: black, bold: true }
+  panel.border.default: { fg: orange }
+terminal-accent: {}
+plain-timeline: {}
+log: {}

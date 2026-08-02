@@ -31,7 +31,7 @@ function level(event: RunEvent): EventLevel {
 }
 
 function formatLevel(lvl: EventLevel): string {
-  return eventLevelAccent(lvl)(lvl);
+  return eventLevelAccent(lvl, 'log')(lvl);
 }
 
 function quote(s: string): string {

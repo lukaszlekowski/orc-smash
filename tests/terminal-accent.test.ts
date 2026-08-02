@@ -143,6 +143,17 @@ describe('terminal-accent accent map', () => {
     }
   });
 
+  it('pins the rich palette composed emphasis byte order at level 1', () => {
+    const origLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      expect(emphasisAccent('identity')('x')).toBe('\u001B[1m\u001B[93mx\u001B[39m\u001B[22m');
+      expect(emphasisAccent('binding-identity')('x')).toBe('\u001B[36mx\u001B[39m');
+    } finally {
+      chalk.level = origLevel;
+    }
+  });
+
   it('unclassifiedAccent distinguishes 0 vs > 0 counts', () => {
     expect(stripAnsi(unclassifiedAccent(0)('0'))).toBe('0');
     expect(stripAnsi(unclassifiedAccent(3)('3'))).toBe('3');
@@ -173,8 +184,8 @@ describe('panelBorderColor (stage-driven border color)', () => {
     expect(panelBorderColor(makeContext({ inFlight: makeInFlight('implement', 'failed') }))).toBe('red');
   });
 
-  it('no in-flight + empty timeline → blue (no active stage)', () => {
-    expect(panelBorderColor(makeContext({ inFlight: null, timeline: [] }))).toBe('blue');
+  it('no in-flight + empty timeline → rich orange (no active stage)', () => {
+    expect(panelBorderColor(makeContext({ inFlight: null, timeline: [] }))).toBe('#ff8c42');
   });
 
   it('timeline with last step of a given kind drives border color when inFlight is null', () => {

@@ -7,6 +7,7 @@ import { makeRunEvent, type RunEvent, type RunEventInput, type RunEventSink } fr
 import { renderRunEvent } from './plain-event-renderer.js';
 import { EventWriter } from './event-writer.js';
 import { resultAccent, emphasisAccent } from './terminal-accent.js';
+import { initTheme } from './theme.js';
 
 const ENTER_ALT_SCREEN = '\u001B[?1049h';
 const EXIT_ALT_SCREEN = '\u001B[?1049l';
@@ -65,8 +66,9 @@ export interface CliOutput extends RunEventSink {
   detachLiveRegion?(): void;
 }
 
-export function createPanelCliOutput(projectRoot?: string): CliOutput {
+export function createPanelCliOutput(projectRoot?: string, themePath?: string): CliOutput {
   const cwd = projectRoot ?? process.cwd();
+  initTheme(themePath);
   let spinner: Ora | null = null;
   let altScreenActive = false;
   let liveInterval: ReturnType<typeof setInterval> | null = null;
@@ -121,12 +123,12 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
     note(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'note', detail: message, result: 'info' });
       emitEvent({ type: 'note', atMs: Date.now(), message });
-      console.log(emphasisAccent('supporting')(message));
+      console.log(emphasisAccent('supporting', 'terminal-accent')(message));
     },
     warn(message: string) {
       debugHarnessEvent({ cwd, category: 'info', event: 'warn', detail: message, result: 'info' });
       emitEvent({ type: 'warning', atMs: Date.now(), message });
-      console.warn(emphasisAccent('warning')(`Warning: ${message}`));
+      console.warn(emphasisAccent('warning', 'terminal-accent')(`Warning: ${message}`));
     },
     error(message: string) {
       const line = `Error: ${message}`;
@@ -135,7 +137,7 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       if (liveActive) {
         pendingFailures.push(line);
       } else {
-        console.error(resultAccent('failed')(`${timestamp()} ${line}`));
+        console.error(resultAccent('failed', 'terminal-accent')(`${timestamp()} ${line}`));
       }
     },
     iterationStarted(ctx: { iteration: number; maxIterations: number }) {
@@ -152,19 +154,19 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       });
       if (liveActive) return;
       if (spinner) spinner.stop();
-      spinner = ora(emphasisAccent('binding-identity')(ctx.message)).start();
+      spinner = ora(emphasisAccent('binding-identity', 'terminal-accent')(ctx.message)).start();
     },
     stepSucceeded(ctx) {
       debugHarnessEvent({ cwd, category: 'lifecycle', event: `step-succeeded:${ctx.kind}`, detail: `v${ctx.version} ${ctx.message}`, result: 'pass' });
       if (liveActive) {
-        console.log(resultAccent('completed')(ctx.message));
+        console.log(resultAccent('completed', 'terminal-accent')(ctx.message));
         return;
       }
       if (spinner) {
-        spinner.succeed(resultAccent('completed')(ctx.message));
+        spinner.succeed(resultAccent('completed', 'terminal-accent')(ctx.message));
         spinner = null;
       } else {
-        console.log(resultAccent('completed')(ctx.message));
+        console.log(resultAccent('completed', 'terminal-accent')(ctx.message));
       }
     },
     stepFailed(ctx) {
@@ -174,10 +176,10 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
         return;
       }
       if (spinner) {
-        spinner.fail(resultAccent('failed')(`${timestamp()} ${ctx.message}`));
+        spinner.fail(resultAccent('failed', 'terminal-accent')(`${timestamp()} ${ctx.message}`));
         spinner = null;
       } else {
-        console.error(resultAccent('failed')(`${timestamp()} ${ctx.message}`));
+        console.error(resultAccent('failed', 'terminal-accent')(`${timestamp()} ${ctx.message}`));
       }
     },
     renderPanel(context: PanelContext) {
@@ -188,26 +190,26 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
       restoreMainScreen();
       debugHarnessEvent({ cwd, category: 'lifecycle', event: ctx.success ? 'loop-success' : 'loop-failed', detail: `verdict=${ctx.verdict} ${ctx.message}`, result: ctx.success ? 'pass' : 'fail' });
       for (const failure of pendingFailures) {
-        console.error(resultAccent('failed')(`${timestamp()} ${failure}`));
+        console.error(resultAccent('failed', 'terminal-accent')(`${timestamp()} ${failure}`));
       }
       pendingFailures.length = 0;
 
       if (eventLog.length > 0) {
-        console.log(emphasisAccent('binding-identity')('\n── Harness Event Log ──'));
+        console.log(emphasisAccent('binding-identity', 'terminal-accent')('\n── Harness Event Log ──'));
         for (const line of eventLog) {
-          console.log(emphasisAccent('supporting')(line));
+          console.log(emphasisAccent('supporting', 'terminal-accent')(line));
         }
         eventLog.length = 0;
       }
 
       if (ctx.success) {
-        console.log(resultAccent('completed')(`\n${timestamp()} Success: ${ctx.message}`));
+        console.log(resultAccent('completed', 'terminal-accent')(`\n${timestamp()} Success: ${ctx.message}`));
       } else {
-        console.log(resultAccent('failed')(`\n${timestamp()} Loop terminated: ${ctx.message}`));
+        console.log(resultAccent('failed', 'terminal-accent')(`\n${timestamp()} Loop terminated: ${ctx.message}`));
       }
       if (ctx.details && ctx.details.length > 0) {
-        console.log(emphasisAccent('binding-identity')('Current project snapshot:'));
-        for (const detail of ctx.details) console.log(emphasisAccent('supporting')(`  ${detail}`));
+        console.log(emphasisAccent('binding-identity', 'terminal-accent')('Current project snapshot:'));
+        for (const detail of ctx.details) console.log(emphasisAccent('supporting', 'terminal-accent')(`  ${detail}`));
       }
     },
     writeStatic(text: string) {
@@ -238,8 +240,9 @@ export function createPanelCliOutput(projectRoot?: string): CliOutput {
   };
 }
 
-export function createPlainCliOutput(projectRoot?: string): CliOutput {
+export function createPlainCliOutput(projectRoot?: string, themePath?: string): CliOutput {
   const cwd = projectRoot ?? process.cwd();
+  initTheme(themePath);
   const writer = new EventWriter(process.stdout);
 
   const emit = (event: RunEvent): void => {

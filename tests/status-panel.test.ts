@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { renderStatusPanel } from '../src/status-panel.js';
 import { resolveTerminalWidth } from '../src/plain-render.js';
 import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
+import { resolveStyle } from '../src/theme.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type Step, type StepKind, type StepStatus } from '../src/state.js';
 import type { TimelineRow } from '../src/timeline-rows.js';
@@ -190,7 +191,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
 
   it('in-flight Role cell mirrors the border color for a live implement (implementer → green)', () => {
     const out = renderStatusPanel(makeContext({ inFlight: makeInFlight('implement') }));
-    const expectedRole = roleAccent('implementer').chalk('implementer');
+    const expectedRole = resolveStyle('role.implementer', 'status-panel')('implementer');
     expect(out).toContain(expectedRole);
   });
 
@@ -239,7 +240,7 @@ describe('renderStatusPanel — in-flight role read from context.inFlight.role',
       inFlight: makeInFlight('follow-up', 'running', 'implementer'),
       timeline: []
     }));
-    const expectedRole = roleAccent('implementer').chalk('implementer');
+    const expectedRole = resolveStyle('role.implementer', 'status-panel')('implementer');
     expect(out).toContain(expectedRole);
   });
 
@@ -589,5 +590,78 @@ describe('renderStatusPanel — unavailable progress capability', () => {
     expect(out).toContain('Live progress unavailable for this provider');
     expect(out).not.toContain('Tool calls:');
     expect(out).not.toContain('Progress:');
+  });
+});
+
+describe('renderStatusPanel — content-aware column sizing', () => {
+  // The boxen box is always `COLUMNS` wide, so line length does not reflect the
+  // table width. Instead, return the rightmost column on the timeline data row
+  // that is neither whitespace nor the boxen '│' wall — i.e. where the table
+  // content actually ends.
+  const dataRowExtent = (out: string, marker: string): number => {
+    const line = out.split('\n').find(candidate => candidate.includes(marker));
+    if (!line) throw new Error(`no rendered line contains ${marker}`);
+    const stripped = line.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+    for (let index = stripped.length - 1; index >= 0; index -= 1) {
+      const ch = stripped[index];
+      if (ch !== ' ' && ch !== '│') return index + 1;
+    }
+    return 0;
+  };
+
+  it('collapses an empty Result column and grows it when a long result arrives', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '160';
+    try {
+      const empty = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          kind: 'audit', role: 'auditor', version: 1, agent: 'fake', model: 'fake-model',
+          status: 'done', artifactPath: '/x', mtime: 0,
+        })],
+      }));
+      const longResult = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          kind: 'audit', role: 'auditor', version: 1, agent: 'fake', model: 'fake-model',
+          status: 'done', decision: 'x'.repeat(40), artifactPath: '/x', mtime: 0,
+        })],
+      }));
+
+      const emptyExtent = dataRowExtent(empty, 'fake-model');
+      const longExtent = dataRowExtent(longResult, 'fake-model');
+
+      // Width tracks content: the long-result row extends well past the empty one.
+      expect(longExtent - emptyExtent).toBeGreaterThan(20);
+      // An empty Result no longer stretches to fill the terminal.
+      expect(emptyExtent).toBeLessThan(resolveTerminalWidth() - 20);
+      // Both still fit inside the terminal (no row leak).
+      expect(longExtent).toBeLessThanOrEqual(resolveTerminalWidth());
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+
+  it('closes the implementer background before cli-table3 reaches the next column', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '40';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          role: 'implementer', agent: 'fake', model: 'fake-model', status: 'done', artifactPath: '/x', mtime: 0,
+        })],
+      }));
+      const rowLine = out.split('\n').find(line => line.includes('fa'));
+      expect(rowLine).toBeDefined();
+      const line = rowLine!;
+      const nextColumn = line.indexOf('fa');
+      const backgroundOpen = line.indexOf('\u001B[42m');
+      const backgroundClose = line.indexOf('\u001B[49m', backgroundOpen);
+      expect(backgroundOpen).toBeGreaterThan(-1);
+      expect(backgroundClose).toBeGreaterThan(backgroundOpen);
+      expect(backgroundClose).toBeLessThan(nextColumn);
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
   });
 });

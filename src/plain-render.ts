@@ -98,8 +98,8 @@ export function renderPlainPanel(context: PanelContext): string {
   if (context.timeline.length > 0) {
     for (let i = 0; i < context.timeline.length; i++) {
       const s = context.timeline[i]!.step;
-      const kindAcc = kindAccent(s.kind);
-      const roleAcc = roleAccent(s.role);
+      const kindAcc = kindAccent(s.kind, 'plain-timeline');
+      const roleAcc = roleAccent(s.role, 'plain-timeline');
 
       const agentModel = `${s.agent} \u00b7 ${s.model}`;
       const headerLine = `\u2500\u2500 v${s.version} ${roleAcc.label} \u2500 ${agentModel}`;
@@ -131,8 +131,8 @@ export function renderPlainPanel(context: PanelContext): string {
         : '';
       const resultText = s.status === 'interrupted'
         ? '—'
-        : resultAccent(toResultState(rawRes))(rawRes + diagnosticText);
-      const statusAcc = statusAccent(s.status);
+        : resultAccent(toResultState(rawRes), 'plain-timeline')(rawRes + diagnosticText);
+      const statusAcc = statusAccent(s.status, 'plain-timeline');
       const statusStr = statusAcc.chalk(statusAcc.label);
 
       const plainDetailLine = `   ${timestamp}  result: ${rawRes}   time: ${formatDurationMs(s.durationMs)}   session: ${formatSessionId(s.sessionId)}   status: ${statusAcc.label}`;
