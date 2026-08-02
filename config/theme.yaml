@@ -69,7 +69,6 @@ defaults:
 
 status-panel:
   role.implementer: { bg: green, fg: black, bold: true }
-  panel.border.default: { fg: orange }
 terminal-accent: {}
 plain-timeline: {}
 log: {}

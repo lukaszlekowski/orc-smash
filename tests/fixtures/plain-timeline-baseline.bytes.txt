@@ -1,0 +1,14 @@
+── orc-smash ───────────────
+Loop: plan
+Iteration: 1/5
+Active: plan-audit (opencode · opencode-go/deepseek-v4-flash)
+Next: Run the plan audit
+Latest version: v2
+Runner [Evaluate] (plan-audit · auditor): opencode · opencode-go/deepseek-v4-flash (medium) — resume per skill
+Runner [Repair] (plan-follow-up · planner): fake · fake-model (provider default) — fresh per invocation
+Timeline:
+[36m── v1 auditor ─ opencode · opencode-go/deepseek-v4-flash[39m
+   2023-11-14 22:13:20  result: [32mAPPROVED[39m   time: 1m 5s   session: *e_123   status: [90mdone[39m
+---
+[33m── v2 planner ─ fake · fake-model[39m
+   2023-11-14 22:13:21  result: [33mpatched[39m   time: 30s   session: *s_456   status: [90mdone[39m
