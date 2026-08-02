@@ -39,28 +39,47 @@ function tableChars(): Record<string, string> {
   };
 }
 
-function fitColumnWidths(preferred: number[], minimum: number[], available: number): number[] {
+/**
+ * Widest visible cell in each column across the header and all rows. ANSI color
+ * codes are stripped via `strippedWidth` so pre-colored row cells are measured
+ * by their visible width (header cells are plain, so it is a no-op there). The
+ * column count is derived from `head` (or the first row when there is no head),
+ * so the empty-head / empty-row table shapes work.
+ */
+function measureColumnWidths(head: string[], rows: string[][]): number[] {
+  const colCount = head.length || (rows[0]?.length ?? 0);
+  const widths = new Array<number>(colCount).fill(0);
+  for (let index = 0; index < colCount; index += 1) {
+    let width = strippedWidth(head[index] ?? '');
+    for (const row of rows) {
+      width = Math.max(width, strippedWidth(row[index] ?? ''));
+    }
+    widths[index] = width;
+  }
+  return widths;
+}
+
+/**
+ * Content-aware column widths. Each column is sized to its measured content,
+ * clamped to `[minimum, preferred]` — so a header never clips and an over-long
+ * cell stops at `preferred` (cli-table3 truncates the rest) — then the whole set
+ * is shrunk to fit `available`, which is what keeps a row from exceeding the
+ * panel. Unlike the old fixed layout, columns do not stretch to fill the
+ * terminal: a sparse column (e.g. an empty `Result`) collapses to its minimum
+ * instead of absorbing the slack.
+ */
+function fitColumnWidths(content: number[], preferred: number[], minimum: number[], available: number): number[] {
   const maxSum = Math.max(0, available - Math.max(0, preferred.length - 1));
-  const widths = minimum.map((value, index) => Math.min(value, preferred[index] ?? value));
+  const widths = content.map((value, index) => {
+    const lo = minimum[index] ?? value;
+    const hi = preferred[index] ?? value;
+    return Math.min(Math.max(value, lo), hi);
+  });
   while (widths.reduce((sum, width) => sum + width, 0) > maxSum) {
     const largest = widths.reduce((candidate, width, index) =>
       width > (widths[candidate] ?? 0) && width > 3 ? index : candidate, 0);
     if (widths[largest]! <= 3) break;
     widths[largest] = widths[largest]! - 1;
-  }
-  let remaining = Math.max(0, maxSum - widths.reduce((sum, width) => sum + width, 0));
-
-  while (remaining > 0) {
-    let grew = false;
-    for (let index = 0; index < widths.length && remaining > 0; index += 1) {
-      const target = preferred[index] ?? widths[index]!;
-      if (widths[index]! < target) {
-        widths[index] = widths[index]! + 1;
-        remaining -= 1;
-        grew = true;
-      }
-    }
-    if (!grew) break;
   }
   return widths;
 }
@@ -72,7 +91,7 @@ function renderAlignedTable(
   minimum: number[],
 ): string {
   const panelInnerWidth = boxInnerWidth();
-  const colWidths = fitColumnWidths(preferred, minimum, panelInnerWidth);
+  const colWidths = fitColumnWidths(measureColumnWidths(head, rows), preferred, minimum, panelInnerWidth);
   // cli-table3 pads a styled head cell *before* wrapping it in the head style,
   // so the padding of a `head: ['cyan']` header lives inside the SGR wrap.
   // Pre-padding the header text inside the `panel.column_header` wrap
