@@ -7,6 +7,37 @@
   "bin": {
     "orc": "./bin/orc.js"
   },
+  "license": "MIT",
+  "author": "Lukasz Lekowski",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lukaszlekowski/orc-smash.git"
+  },
+  "homepage": "https://github.com/lukaszlekowski/orc-smash#readme",
+  "bugs": {
+    "url": "https://github.com/lukaszlekowski/orc-smash/issues"
+  },
+  "keywords": [
+    "cli",
+    "coding-agent",
+    "harness",
+    "pipeline",
+    "opencode",
+    "codex",
+    "claude",
+    "approval-loop",
+    "artifact-validation"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "config/",
+    "roles/",
+    "skills/"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && mkdir -p dist/src/adapters && cp -R config roles skills package.json dist/ && cp src/adapters/process-group-bootstrap.mjs dist/src/adapters/process-group-bootstrap.mjs",
     "dev": "tsx src/cli.ts",
