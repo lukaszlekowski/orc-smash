@@ -11,6 +11,9 @@ import type { DecisionCorrectionDiagnostic } from './artifact-contract.js';
 import type { DecisionCorrectionChoice } from './loops/binding-engine.js';
 import type { CandidateSnapshotView } from './project-snapshot-view.js';
 
+const terminalEmphasis = (state: Parameters<typeof emphasisAccent>[0]) => emphasisAccent(state, 'terminal-accent');
+const terminalAvailability = (state: Parameters<typeof availabilityAccent>[0]) => availabilityAccent(state, 'terminal-accent');
+
 export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean; availability?: AvailabilityState }>(
   item: T,
   value: string,
@@ -18,14 +21,14 @@ export function formatMenuChoice<T extends { label: string; disabledReason?: str
   const isRecommended = Boolean(item.recommended && !item.disabledReason);
   let baseLabel = item.label;
   if (isRecommended) {
-    baseLabel += ` ${emphasisAccent('recommended')('(recommended next action)')}`;
+    baseLabel += ` ${terminalEmphasis('recommended')('(recommended next action)')}`;
   }
   if (item.disabledReason) {
     baseLabel += ` (unavailable: ${item.disabledReason})`;
   }
 
   const avail = item.availability ?? (item.disabledReason ? 'unavailable' : 'available');
-  const name = availabilityAccent(avail)(baseLabel);
+  const name = terminalAvailability(avail)(baseLabel);
 
   return {
     name,
@@ -96,16 +99,16 @@ export interface TaskDetailView {
  * Show task details, any advisory pipeline risk, and prompt for confirmation.
  */
 export async function promptTaskDetailConfirmation(detail: TaskDetailView): Promise<'run' | 'back'> {
-  console.log(`\n${emphasisAccent('identity')(`Task Details: ${detail.taskId}`)}`);
-  console.log(`  ${emphasisAccent('supporting')(`Bound skill:  ${detail.skillId} (${detail.skillPath})`)}`);
-  console.log(`  ${emphasisAccent('supporting')(`Role:         ${detail.role}`)}`);
-  console.log(`  ${emphasisAccent('supporting')(`Target:       ${detail.targetPath}`)}`);
-  console.log(`  ${emphasisAccent('supporting')(`Output:       ${detail.outputPattern} (${detail.contract})`)}`);
+  console.log(`\n${terminalEmphasis('identity')(`Task Details: ${detail.taskId}`)}`);
+  console.log(`  ${terminalEmphasis('supporting')(`Bound skill:  ${detail.skillId} (${detail.skillPath})`)}`);
+  console.log(`  ${terminalEmphasis('supporting')(`Role:         ${detail.role}`)}`);
+  console.log(`  ${terminalEmphasis('supporting')(`Target:       ${detail.targetPath}`)}`);
+  console.log(`  ${terminalEmphasis('supporting')(`Output:       ${detail.outputPattern} (${detail.contract})`)}`);
   if (detail.missingInputs && detail.missingInputs.length > 0) {
-    console.log(`  ${availabilityAccent('missing-inputs')(`Missing:      ${detail.missingInputs.join(', ')}`)}`);
+    console.log(`  ${terminalAvailability('missing-inputs')(`Missing:      ${detail.missingInputs.join(', ')}`)}`);
   }
   if (detail.eligiblePipelineCandidates && detail.eligiblePipelineCandidates.length > 0) {
-    console.log(`  ${emphasisAccent('supporting')('Current eligible pipeline continuation:')}`);
+    console.log(`  ${terminalEmphasis('supporting')('Current eligible pipeline continuation:')}`);
     for (const candidate of detail.eligiblePipelineCandidates) {
       console.log(`    ${candidate.pipelineId}: ${candidate.predecessorStageId} → ${candidate.successorStageId}`);
     }
@@ -352,8 +355,8 @@ export async function promptRunners(
   // This is an editable preview. The post-selection summary below is the
   // committed source/continuity readout.
   if (defaultRunners.size > 0) {
-    console.log(emphasisAccent('identity')('Runner defaults (editable before execution):'));
-    console.log(emphasisAccent('supporting')('Runner selection happens before execution.'));
+    console.log(terminalEmphasis('identity')('Runner defaults (editable before execution):'));
+    console.log(terminalEmphasis('supporting')('Runner selection happens before execution.'));
     for (const [skillId, runner] of defaultRunners) {
       const parts = [`${skillId}: ${runner.agent} (${runner.model})`];
       parts.push(`effort: ${runner.effort ?? 'provider default'}`);
@@ -363,7 +366,7 @@ export async function promptRunners(
       if (preselection.sessionId) parts.push(`session ${sessionDisplay(preselection.sessionId)}`);
       if (preselection.fallbackReason) parts.push(`fallback: ${preselection.fallbackReason}`);
       if (preselection.note) parts.push(`note: ${preselection.note}`);
-      console.log(`  ${emphasisAccent('supporting')(parts.join(', '))}`);
+      console.log(`  ${terminalEmphasis('supporting')(parts.join(', '))}`);
     }
   }
 
@@ -522,7 +525,7 @@ export async function promptRunners(
     runners[skillId] = predicted.runner;
   }
 
-  console.log(emphasisAccent('identity')('Resolved runner selections (before execution):'));
+  console.log(terminalEmphasis('identity')('Resolved runner selections (before execution):'));
   for (const skillId of skills) {
     const runner = runners[skillId];
     if (!runner) continue;
@@ -550,7 +553,7 @@ export async function promptRunners(
     parts.push(continuity.mode === 'resumed'
       ? `resumes session ${sessionDisplay(continuity.sessionId!)}`
       : `fresh session (${continuity.freshReason ?? 'no-compatible-session'})`);
-    console.log(`  ${emphasisAccent('supporting')(parts.join(', '))}`);
+    console.log(`  ${terminalEmphasis('supporting')(parts.join(', '))}`);
   }
 
   return runners;
@@ -627,12 +630,12 @@ export async function promptPostRunRecovery(): Promise<'menu' | 'exit'> {
 export async function promptDecisionCorrection(
   request: DecisionCorrectionDiagnostic & { artifactPath: string },
 ): Promise<DecisionCorrectionChoice> {
-  console.log(`\n${emphasisAccent('warning')('Unclassified decision artifact requires operator confirmation.')}`);
+  console.log(`\n${terminalEmphasis('warning')('Unclassified decision artifact requires operator confirmation.')}`);
   console.log(`  Artifact: ${request.artifactPath}`);
   console.log(`  Invalid line: ${request.invalidLine ? JSON.stringify(request.invalidLine) : '(not identifiable)'}`);
   console.log(`  Canonical choices: ${request.acceptedToken} / ${request.retryToken}`);
   if (request.suggestedToken) {
-    console.log(`  ${emphasisAccent('supporting')(`Presentation-only suggestion: ${request.suggestedToken} (not selected automatically)`)}`);
+    console.log(`  ${terminalEmphasis('supporting')(`Presentation-only suggestion: ${request.suggestedToken} (not selected automatically)`)}`);
   }
 
   const selected = await select({

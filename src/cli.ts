@@ -7,6 +7,7 @@ import { statusAction } from './commands/status.js';
 import { createPanelCliOutput, createPlainCliOutput } from './cli-output.js';
 import { handleInterruptSignal } from './interrupted-artifact.js';
 import { ownershipStatusAction, ownershipReleaseAction } from './commands/ownership-recovery.js';
+import { resolveThemePath } from './theme.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,6 +49,7 @@ export function buildProgram(): Command {
     .option('-i, --max-iterations <iterations>', 'Maximum evaluator iterations', '4')
     .option('--effort <level>', 'Global override for effort level')
     .option('--config <path>', 'Path to config file (orc-smash.yaml)')
+    .option('--theme <path>', 'Path to theme file (theme.yaml)')
     .option('--debug-spawn', 'Write spawn/process debug logs to docs/dev/spawn-debug.log')
     .option('--debug-spawn-file <path>', 'Override the spawn/process debug log path')
     .option('--plain', 'Plain append-only line-oriented output (no spinners, no screen clears)')
@@ -56,7 +58,8 @@ export function buildProgram(): Command {
     .option('--runner-effort <skill-id=level>', 'Per-skill effort override (repeatable)', collectOption, [])
     .action(async (options) => {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
-      const output = options.plain ? createPlainCliOutput(projectRoot) : createPanelCliOutput(projectRoot);
+      const themePath = resolveThemePath(projectRoot, options.theme);
+      const output = options.plain ? createPlainCliOutput(projectRoot, themePath) : createPanelCliOutput(projectRoot, themePath);
       const result = await smashAction({ ...options, output });
       process.exitCode = result.exitCode;
     });
@@ -68,9 +71,11 @@ export function buildProgram(): Command {
     .option('--show-fingerprints', 'Show artifact lineage and input/result fingerprints')
     .option('-a, --all', 'Show artifacts across all loops')
     .option('--config <path>', 'Path to config file (orc-smash.yaml)')
+    .option('--theme <path>', 'Path to theme file (theme.yaml)')
     .action(async (options) => {
       const projectRoot = options.project ? resolve(options.project) : process.cwd();
-      const output = createPanelCliOutput(projectRoot);
+      const themePath = resolveThemePath(projectRoot, options.theme);
+      const output = createPanelCliOutput(projectRoot, themePath);
       const result = await statusAction({ ...options, output });
       process.exitCode = result.exitCode;
     });

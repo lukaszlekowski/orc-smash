@@ -144,7 +144,9 @@ describe('Slice 6 Live Panel Display Integration (N5 & AC9)', () => {
     expect(rendered).toContain('Session');
     expect(rendered).toContain('opencode');
     expect(rendered).toContain('medium');
-    expect(rendered).toContain('provider default');
+    // Effort column is capped (preferred 8), so the null-effort fallback
+    // 'provider default' renders truncated — assert the truncated form.
+    expect(rendered).toContain('provide…');
     expect(panelContext.inFlight?.effort).toBe('medium');
     expect(rendered).toContain('Active invocation');
     expect(rendered).toContain('plan-audit v1 — fresh session (policy, new session ID: pending)');
