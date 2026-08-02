@@ -84,6 +84,19 @@ itself.
   Semantic stale, drift, and missing-evidence reasons and `--plain` event
   output are unchanged; this is not workflow state or fingerprinting policy.
 
+- **Semantic color theming** (`src/theme.ts`, `config/theme.yaml`): all
+  terminal accent helpers in `terminal-accent.ts` delegate to a zod-validated
+  theme file that maps semantic tokens (`role.*`, `status.*`, `result.*`,
+  `emphasis.*`, `panel.*`, `log.*`) to style specs (`{fg, bg, bold, dim}`),
+  with per-location overrides (`status-panel`, `terminal-accent`,
+  `plain-timeline`, `log`). `--theme <path>` overrides the packaged theme;
+  a project `.theme.yaml` is picked up automatically. The theme ships a rich
+  palette (orange/teal/purple/…); baseline byte-identity is proven by snapshot
+  fixtures (`tests/fixtures/panel-baseline.bytes.txt`). Column widths in the
+  status-panel tables are content-aware (sized to measured cell content
+  clamped to `[minimum, preferred]`), so sparse columns collapse rather than
+  stretch to fill the terminal.
+
 ## 1a. Architecture direction matters as much as feature scope
 
 - Refactors must introduce **purposeful module boundaries**, not generic helper buckets.

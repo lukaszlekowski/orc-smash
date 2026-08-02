@@ -60,7 +60,7 @@ describe('Interactive registry selection', () => {
 
       expect(choiceMissing.disabled).toBe(true);
       expect(choiceMissing.value).toBe('plan');
-      expect(choiceMissing.name).toContain('\u001b[33m'); // Yellow
+      expect(choiceMissing.name).toContain('\u001b[93m'); // Rich orange
       expect(choiceMissing.name.replace(/\u001b\[\d+m/g, '')).toContain('Loop Plan (unavailable: target missing)');
 
       const choiceUnavailable = formatMenuChoice({
@@ -436,7 +436,7 @@ describe('promptCandidateSelection', () => {
           { label: 'Run audit loop', disabledReason: 'missing inputs: docs/dev/plan.md', availability: 'missing-inputs' },
           'audit'
         );
-        expect(missing.name).toContain('\u001b[33mRun audit loop (unavailable: missing inputs: docs/dev/plan.md)\u001b[39m');
+        expect(missing.name).toContain('\u001b[93mRun audit loop (unavailable: missing inputs: docs/dev/plan.md)\u001b[39m');
         expect(missing.value).toBe('audit');
         expect(missing.disabled).toBe(true);
       } finally {

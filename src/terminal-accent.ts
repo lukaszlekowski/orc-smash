@@ -1,97 +1,50 @@
-import chalk, { type ChalkInstance } from 'chalk';
 import type { PanelContext } from './status.js';
 import type { StepKind, StepStatus } from './state.js';
+import { resolveBorderColor, resolveStyle, type TextFormatter, type ThemeLocation } from './theme.js';
 
 export interface RoleAccent {
-  chalk: ChalkInstance;
+  chalk: TextFormatter;
   label: string;
 }
 
 export interface KindAccent {
-  chalk: ChalkInstance;
+  chalk: TextFormatter;
   label: string;
 }
 
 export interface StatusAccent {
-  chalk: ChalkInstance;
+  chalk: TextFormatter;
   label: string;
 }
 
-export type PanelBorderColor = 'cyan' | 'yellow' | 'green' | 'red' | 'blue';
+export type PanelBorderColor = string;
 
-const roleMap: Record<string, RoleAccent> = {
-  auditor: { chalk: chalk.cyan, label: 'auditor' },
-  planner: { chalk: chalk.yellow, label: 'planner' },
-  reviewer: { chalk: chalk.magenta, label: 'reviewer' },
-  implementer: { chalk: chalk.green, label: 'implementer' }
-};
+const KNOWN_ROLES = new Set(['auditor', 'planner', 'reviewer', 'implementer']);
 
-const defaultRoleAccent: RoleAccent = { chalk: chalk.gray, label: 'unknown' };
-
-export function roleAccent(role: string): RoleAccent {
-  return roleMap[role] ?? defaultRoleAccent;
+export function roleAccent(role: string, location: ThemeLocation = 'terminal-accent'): RoleAccent {
+  const normalized = KNOWN_ROLES.has(role) ? role : 'unknown';
+  return {
+    chalk: resolveStyle(`role.${normalized}`, location),
+    label: normalized,
+  };
 }
 
-const kindMap: Record<StepKind, KindAccent> = {
-  audit: { chalk: chalk.cyan, label: 'audit' },
-  'follow-up': { chalk: chalk.yellow, label: 'follow-up' },
-  implement: { chalk: chalk.green, label: 'implement' },
-  evaluate: { chalk: chalk.cyan, label: 'evaluate' },
-  repair: { chalk: chalk.yellow, label: 'repair' },
-  task: { chalk: chalk.green, label: 'task' },
-};
-
-export function kindAccent(kind: StepKind): KindAccent {
-  return kindMap[kind];
+export function kindAccent(kind: StepKind, location: ThemeLocation = 'terminal-accent'): KindAccent {
+  return {
+    chalk: resolveStyle(`kind.${kind}`, location),
+    label: kind,
+  };
 }
 
-const statusMap: Record<StepStatus, StatusAccent> = {
-  running: { chalk: chalk.yellow, label: 'running' },
-  failed: { chalk: chalk.red, label: 'failed' },
-  done: { chalk: chalk.gray, label: 'done' },
-  interrupted: { chalk: chalk.magenta, label: 'interrupted' }
-};
-
-export function statusAccent(status: StepStatus): StatusAccent {
-  return statusMap[status];
+export function statusAccent(status: StepStatus, location: ThemeLocation = 'terminal-accent'): StatusAccent {
+  return {
+    chalk: resolveStyle(`status.${status}`, location),
+    label: status,
+  };
 }
 
-export function panelBorderColor(ctx: PanelContext): PanelBorderColor {
-  if (ctx.inFlight?.status === 'failed') {
-    return 'red';
-  }
-
-  if (ctx.inFlight) {
-    const map: Record<StepKind, PanelBorderColor> = {
-      audit: 'cyan',
-      'follow-up': 'yellow',
-      implement: 'green',
-      evaluate: 'cyan',
-      repair: 'yellow',
-      task: 'green',
-    };
-    return map[ctx.inFlight.kind];
-  }
-
-  const relevantRows = ctx.timeline.filter(row => row.relevance !== 'unrelated' && row.relevance !== 'unclassified');
-  const last = relevantRows[relevantRows.length - 1]?.step;
-  if (last?.status === 'failed') {
-    return 'red';
-  }
-
-  if (last) {
-    const map: Record<StepKind, PanelBorderColor> = {
-      audit: 'cyan',
-      'follow-up': 'yellow',
-      implement: 'green',
-      evaluate: 'cyan',
-      repair: 'yellow',
-      task: 'green',
-    };
-    return map[last.kind] ?? 'blue';
-  }
-
-  return 'blue';
+export function panelBorderColor(ctx: PanelContext, location: ThemeLocation = 'status-panel'): PanelBorderColor {
+  return resolveBorderColor(ctx, location);
 }
 
 export type ResultState =
@@ -118,10 +71,6 @@ export type EmphasisState =
   | 'placeholder'
   | 'recommended'
   | 'warning';
-
-export type TextFormatter = (text: string) => string;
-
-const identityFn: TextFormatter = (text: string) => text;
 
 export function toResultState(value?: string | null): ResultState {
   if (!value) return 'valid';
@@ -152,71 +101,48 @@ export function toResultState(value?: string | null): ResultState {
   }
 }
 
-export function resultAccent(result: ResultState): TextFormatter {
-  switch (result) {
-    case 'accepted':
-    case 'completed':
-    case 'approved':
-      return chalk.green;
-    case 'retry':
-    case 'failed':
-    case 'rejected':
-      return chalk.red;
-    case 'blocked':
-    case 'unknown':
-    case 'interrupted':
-      return chalk.yellow;
-    case 'valid':
-      return identityFn;
-  }
+const RESULT_TOKENS: Record<ResultState, 'pass' | 'fail' | 'warn' | 'neutral'> = {
+  accepted: 'pass',
+  approved: 'pass',
+  completed: 'pass',
+  retry: 'fail',
+  failed: 'fail',
+  rejected: 'fail',
+  blocked: 'warn',
+  unknown: 'warn',
+  interrupted: 'warn',
+  valid: 'neutral',
+};
+
+export function resultAccent(result: ResultState, location: ThemeLocation = 'terminal-accent'): TextFormatter {
+  return resolveStyle(`result.${RESULT_TOKENS[result]}`, location);
 }
 
-export function availabilityAccent(availability: AvailabilityState): TextFormatter {
-  switch (availability) {
-    case 'available':
-      return identityFn;
-    case 'unavailable':
-      return chalk.dim;
-    case 'missing-inputs':
-      return chalk.yellow;
-  }
+export function availabilityAccent(availability: AvailabilityState, location: ThemeLocation = 'terminal-accent'): TextFormatter {
+  return resolveStyle(`availability.${availability}`, location);
 }
 
-export function emphasisAccent(emphasis: EmphasisState): TextFormatter {
-  switch (emphasis) {
-    case 'identity':
-      return chalk.bold.cyan;
-    case 'binding-identity':
-      return chalk.cyan;
-    case 'supporting':
-    case 'placeholder':
-      return chalk.dim;
-    case 'recommended':
-      return chalk.green;
-    case 'warning':
-      return chalk.yellow;
-  }
+export function emphasisAccent(emphasis: EmphasisState, location: ThemeLocation = 'terminal-accent'): TextFormatter {
+  return resolveStyle(`emphasis.${emphasis}`, location);
 }
 
-export function unclassifiedAccent(count: number): TextFormatter {
-  return count > 0 ? chalk.yellow : chalk.dim;
+export function unclassifiedAccent(count: number, location: ThemeLocation = 'terminal-accent'): TextFormatter {
+  return resolveStyle(`unclassified.${count > 0 ? 'attention' : 'idle'}`, location);
 }
 
-export function staleAccent(isStale: boolean): TextFormatter {
-  return isStale ? chalk.yellow : identityFn;
+export function staleAccent(isStale: boolean, location: ThemeLocation = 'terminal-accent'): TextFormatter {
+  return resolveStyle(`stale.${isStale ? 'stale' : 'fresh'}`, location);
 }
 
 export type EventLevel = 'FAIL' | 'WARN' | 'PASS' | 'INFO';
 
-export function eventLevelAccent(level: EventLevel): TextFormatter {
-  switch (level) {
-    case 'FAIL':
-      return chalk.red;
-    case 'WARN':
-      return chalk.yellow;
-    case 'PASS':
-      return chalk.green;
-    case 'INFO':
-      return chalk.cyan;
-  }
+const EVENT_TOKENS: Record<EventLevel, 'fail' | 'warn' | 'pass' | 'info'> = {
+  FAIL: 'fail',
+  WARN: 'warn',
+  PASS: 'pass',
+  INFO: 'info',
+};
+
+export function eventLevelAccent(level: EventLevel, location: ThemeLocation = 'log'): TextFormatter {
+  return resolveStyle(`log.${EVENT_TOKENS[level]}`, location);
 }

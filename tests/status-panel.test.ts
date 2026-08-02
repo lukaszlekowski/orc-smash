@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { renderStatusPanel } from '../src/status-panel.js';
-import { resolveTerminalWidth } from '../src/plain-render.js';
+import { renderPlainPanel, resolveTerminalWidth } from '../src/plain-render.js';
 import { roleAccent, panelBorderColor } from '../src/terminal-accent.js';
+import { initTheme, resolveStyle } from '../src/theme.js';
 import type { PanelContext } from '../src/status.js';
 import { roleForKind, type Step, type StepKind, type StepStatus } from '../src/state.js';
 import type { TimelineRow } from '../src/timeline-rows.js';
@@ -190,7 +193,7 @@ describe('renderStatusPanel — Active Step in-flight row (v9 audit Major #2 clo
 
   it('in-flight Role cell mirrors the border color for a live implement (implementer → green)', () => {
     const out = renderStatusPanel(makeContext({ inFlight: makeInFlight('implement') }));
-    const expectedRole = roleAccent('implementer').chalk('implementer');
+    const expectedRole = resolveStyle('role.implementer', 'status-panel')('implementer');
     expect(out).toContain(expectedRole);
   });
 
@@ -239,7 +242,7 @@ describe('renderStatusPanel — in-flight role read from context.inFlight.role',
       inFlight: makeInFlight('follow-up', 'running', 'implementer'),
       timeline: []
     }));
-    const expectedRole = roleAccent('implementer').chalk('implementer');
+    const expectedRole = resolveStyle('role.implementer', 'status-panel')('implementer');
     expect(out).toContain(expectedRole);
   });
 
@@ -589,5 +592,88 @@ describe('renderStatusPanel — unavailable progress capability', () => {
     expect(out).toContain('Live progress unavailable for this provider');
     expect(out).not.toContain('Tool calls:');
     expect(out).not.toContain('Progress:');
+  });
+});
+
+describe('renderStatusPanel — background fill vs truncation (AC7)', () => {
+  it('closes the implementer background before cli-table3 reaches the next column', () => {
+    const previous = process.env.COLUMNS;
+    process.env.COLUMNS = '40';
+    try {
+      const out = renderStatusPanel(makeContext({
+        timeline: [makeRow({
+          role: 'implementer', agent: 'fake', model: 'fake-model', status: 'done', artifactPath: '/x', mtime: 0,
+        })],
+      }));
+      const rowLine = out.split('\n').find(line => line.includes('fa'));
+      expect(rowLine).toBeDefined();
+      const line = rowLine!;
+      const nextColumn = line.indexOf('fa');
+      const backgroundOpen = line.indexOf('\u001B[42m');
+      const backgroundClose = line.indexOf('\u001B[49m', backgroundOpen);
+      expect(backgroundOpen).toBeGreaterThan(-1);
+      expect(backgroundClose).toBeGreaterThan(backgroundOpen);
+      expect(backgroundClose).toBeLessThan(nextColumn);
+    } finally {
+      if (previous === undefined) delete process.env.COLUMNS;
+      else process.env.COLUMNS = previous;
+    }
+  });
+});
+
+describe('AC4 / Gate A — step-1 baseline byte-identity snapshot', () => {
+  // The before/after proof the plan's Gate A names (MIN-4): render the status
+  // panel and the --plain timeline against the step-1 baseline theme fixture
+  // and compare byte-for-byte with the captured pre-feature renderer output.
+  const baselineTheme = join(__dirname, 'fixtures', 'theme.baseline.yaml');
+  const panelBaseline = readFileSync(join(__dirname, 'fixtures', 'panel-baseline.bytes.txt'), 'utf8');
+  const plainBaseline = readFileSync(join(__dirname, 'fixtures', 'plain-timeline-baseline.bytes.txt'), 'utf8');
+  const savedColumns = process.env.COLUMNS;
+
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1700000000000);
+    process.env.COLUMNS = '160';
+    initTheme(baselineTheme);
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+    initTheme();
+    if (savedColumns === undefined) delete process.env.COLUMNS;
+    else process.env.COLUMNS = savedColumns;
+  });
+
+  // The no-in-flight context matches the pre-feature capture exactly
+  // (deterministic: no Date.now() reads in the panel, fixed COLUMNS).
+  function makeBaselineContext(): PanelContext {
+    return {
+      projectRoot: '/p',
+      loopName: 'plan',
+      bindingKind: 'loop',
+      currentIteration: 1,
+      maxIterations: 5,
+      activeSkillRunner: { skillId: 'plan-audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash' },
+      resolvedRunners: [
+        { skillId: 'plan-audit', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash', role: 'auditor', phase: 'evaluate', effort: 'medium', sessionStrategy: 'resume-per-skill' },
+        { skillId: 'plan-follow-up', agent: 'fake', model: 'fake-model', role: 'planner', phase: 'repair', effort: null, sessionStrategy: 'fresh-per-invocation' },
+      ],
+      timeline: [
+        { relevance: 'current-chain', step: { kind: 'audit', role: 'auditor', agent: 'opencode', model: 'opencode-go/deepseek-v4-flash', version: 1, status: 'done', verdict: 'APPROVED', artifactPath: '/x/a.md', mtime: 1700000000000, durationMs: 65000, sessionId: 'sess_timeline_123' } },
+        { relevance: 'unrelated', step: { kind: 'follow-up', role: 'planner', agent: 'fake', model: 'fake-model', version: 2, status: 'done', outcome: 'patched', artifactPath: '/x/b.md', mtime: 1700000001000, durationMs: 30000, sessionId: 'sess_456' } },
+      ],
+      nextStepMessage: 'Run the plan audit',
+      inFlight: null,
+      latestVersion: 2,
+      readOnly: false,
+    };
+  }
+
+  it('renders the status panel byte-identical to the captured pre-feature output', () => {
+    expect(renderStatusPanel(makeBaselineContext())).toBe(panelBaseline);
+  });
+
+  it('renders the --plain timeline byte-identical to the captured pre-feature output', () => {
+    expect(renderPlainPanel(makeBaselineContext())).toBe(plainBaseline);
   });
 });

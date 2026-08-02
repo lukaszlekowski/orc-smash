@@ -1,14 +1,15 @@
 import boxen from 'boxen';
 import Table from 'cli-table3';
-import chalk from 'chalk';
 import { formatCompactId, formatDurationMs, formatModelDisplay, formatSessionId, type PanelContext, type ResolvedRunnerDisplay } from './status.js';
 import { resolveTerminalWidth } from './plain-render.js';
 import { formatToolCalls } from './run-event.js';
-import { roleAccent, statusAccent, panelBorderColor, resultAccent, toResultState, emphasisAccent } from './terminal-accent.js';
+import { roleAccent, resultAccent, toResultState } from './terminal-accent.js';
+import { resolveBorderColor, resolveStyle } from './theme.js';
 import type { TimelineRow } from './timeline-rows.js';
 import type { Step } from './state.js';
 
 const ANSI_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+const panelStyle = (token: string) => resolveStyle(token, 'status-panel');
 
 function strippedWidth(text: string): number {
   return text.replace(ANSI_PATTERN, '').length;
@@ -38,28 +39,47 @@ function tableChars(): Record<string, string> {
   };
 }
 
-function fitColumnWidths(preferred: number[], minimum: number[], available: number): number[] {
+/**
+ * Widest visible cell in each column across the header and all rows. ANSI color
+ * codes are stripped via `strippedWidth` so pre-colored row cells are measured
+ * by their visible width (header cells are plain, so it is a no-op there). The
+ * column count is derived from `head` (or the first row when there is no head),
+ * so the empty-head / empty-row table shapes work.
+ */
+function measureColumnWidths(head: string[], rows: string[][]): number[] {
+  const colCount = head.length || (rows[0]?.length ?? 0);
+  const widths = new Array<number>(colCount).fill(0);
+  for (let index = 0; index < colCount; index += 1) {
+    let width = strippedWidth(head[index] ?? '');
+    for (const row of rows) {
+      width = Math.max(width, strippedWidth(row[index] ?? ''));
+    }
+    widths[index] = width;
+  }
+  return widths;
+}
+
+/**
+ * Content-aware column widths. Each column is sized to its measured content,
+ * clamped to `[minimum, preferred]` — so a header never clips and an over-long
+ * cell stops at `preferred` (cli-table3 truncates the rest) — then the whole set
+ * is shrunk to fit `available`, which is what keeps a row from exceeding the
+ * panel. Unlike the old fixed layout, columns do not stretch to fill the
+ * terminal: a sparse column (e.g. an empty `Result`) collapses to its minimum
+ * instead of absorbing the slack.
+ */
+function fitColumnWidths(content: number[], preferred: number[], minimum: number[], available: number): number[] {
   const maxSum = Math.max(0, available - Math.max(0, preferred.length - 1));
-  const widths = minimum.map((value, index) => Math.min(value, preferred[index] ?? value));
+  const widths = content.map((value, index) => {
+    const lo = minimum[index] ?? value;
+    const hi = preferred[index] ?? value;
+    return Math.min(Math.max(value, lo), hi);
+  });
   while (widths.reduce((sum, width) => sum + width, 0) > maxSum) {
     const largest = widths.reduce((candidate, width, index) =>
       width > (widths[candidate] ?? 0) && width > 3 ? index : candidate, 0);
     if (widths[largest]! <= 3) break;
     widths[largest] = widths[largest]! - 1;
-  }
-  let remaining = Math.max(0, maxSum - widths.reduce((sum, width) => sum + width, 0));
-
-  while (remaining > 0) {
-    let grew = false;
-    for (let index = 0; index < widths.length && remaining > 0; index += 1) {
-      const target = preferred[index] ?? widths[index]!;
-      if (widths[index]! < target) {
-        widths[index] = widths[index]! + 1;
-        remaining -= 1;
-        grew = true;
-      }
-    }
-    if (!grew) break;
   }
   return widths;
 }
@@ -71,11 +91,19 @@ function renderAlignedTable(
   minimum: number[],
 ): string {
   const panelInnerWidth = boxInnerWidth();
-  const colWidths = fitColumnWidths(preferred, minimum, panelInnerWidth);
+  const colWidths = fitColumnWidths(measureColumnWidths(head, rows), preferred, minimum, panelInnerWidth);
+  // cli-table3 pads a styled head cell *before* wrapping it in the head style,
+  // so the padding of a `head: ['cyan']` header lives inside the SGR wrap.
+  // Pre-padding the header text inside the `panel.column_header` wrap
+  // reproduces that byte layout exactly (AC4 / Gate A byte-identity).
+  const styledHead = head.map((cell, index) => {
+    const width = colWidths[index] ?? cell.length;
+    return panelStyle('panel.column_header')(cell.padEnd(width));
+  });
   const table = new Table({
-    head,
+    head: styledHead,
     colWidths,
-    style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
+    style: { head: [], border: [], 'padding-left': 0, 'padding-right': 0 },
     chars: tableChars(),
     wordWrap: false,
   });
@@ -88,9 +116,9 @@ function renderAlignedTable(
   if (maxLineWidth(rendered) > panelInnerWidth) {
     const emergencyWidths = colWidths.map(width => Math.max(3, width - 1));
     const emergency = new Table({
-      head,
+      head: styledHead,
       colWidths: emergencyWidths,
-      style: { head: ['cyan'], border: [], 'padding-left': 0, 'padding-right': 0 },
+      style: { head: [], border: [], 'padding-left': 0, 'padding-right': 0 },
       chars: tableChars(),
       wordWrap: false,
     });
@@ -119,11 +147,11 @@ function renderRunConfiguration(runners: ResolvedRunnerDisplay[]): string {
 }
 
 export function renderStatusPanel(context: PanelContext): string {
-  const pName = emphasisAccent('identity')(context.projectRoot);
-  const lName = emphasisAccent('binding-identity')(context.loopName);
+  const pName = panelStyle('emphasis.identity')(context.projectRoot);
+  const lName = panelStyle('emphasis.binding-identity')(context.loopName);
   const panelTitle = resolveTerminalWidth() < 60
     ? ' ORC SMASH STATUS PANEL '
-    : emphasisAccent('identity')(' ORC SMASH STATUS PANEL ');
+    : panelStyle('emphasis.identity')(' ORC SMASH STATUS PANEL ');
 
   const iterationLabel = context.bindingKind === 'task' ? 'Execution' : 'Iteration';
   const iterationValue = context.readOnly
@@ -138,7 +166,7 @@ export function renderStatusPanel(context: PanelContext): string {
 
   let activeStr = 'None';
   if (context.activeSkillRunner) {
-    activeStr = emphasisAccent('identity')(
+    activeStr = panelStyle('emphasis.identity')(
       `${context.activeSkillRunner.skillId} (${context.activeSkillRunner.agent} · ${context.activeSkillRunner.model})`
     );
   }
@@ -146,15 +174,15 @@ export function renderStatusPanel(context: PanelContext): string {
   const contentLines: string[] = [
     `Project:          ${pName}`,
     `Loop:             ${lName}`,
-    `${iterationLabel}:        ${emphasisAccent('supporting')(iterationValue)}`,
+    `${iterationLabel}:        ${panelStyle('emphasis.supporting')(iterationValue)}`,
     `Active Runner:    ${activeStr}`,
-    `Next Step:        ${emphasisAccent('identity')(context.nextStepMessage)}`,
+    `Next Step:        ${panelStyle('emphasis.identity')(context.nextStepMessage)}`,
     `Latest version:   v${context.latestVersion}`
   ];
 
   if (context.resolvedRunners && context.resolvedRunners.length > 0) {
     contentLines.push('');
-    contentLines.push(emphasisAccent('identity')('Run configuration'));
+    contentLines.push(panelStyle('emphasis.identity')('Run configuration'));
     contentLines.push(renderRunConfiguration(context.resolvedRunners));
   }
 
@@ -169,13 +197,13 @@ export function renderStatusPanel(context: PanelContext): string {
           ? `fresh session (provider unsupported${pendingStr})`
           : `fresh session (no compatible session${pendingStr})`;
     contentLines.push('');
-    contentLines.push(emphasisAccent('identity')('Active invocation'));
+    contentLines.push(panelStyle('emphasis.identity')('Active invocation'));
     contentLines.push(`  ${active.skillId} v${active.version} — ${modeStr}`);
   }
 
   const timelineSection = renderTimelineSection(context);
   contentLines.push('');
-  contentLines.push(emphasisAccent('identity')('Timeline:'));
+  contentLines.push(panelStyle('emphasis.identity')('Timeline:'));
   contentLines.push(timelineSection);
 
   const inFlightSection = renderInFlightSection(context);
@@ -191,7 +219,7 @@ export function renderStatusPanel(context: PanelContext): string {
     padding: 1,
     margin: 0,
     borderStyle: 'round',
-    borderColor: panelBorderColor(context)
+    borderColor: resolveBorderColor(context, 'status-panel')
   });
 }
 
@@ -204,20 +232,20 @@ function renderInFlightSection(context: PanelContext): string | null {
   const elapsedStr = formatDurationMs(Date.now() - context.inFlight.startedAtMs);
 
   const detailLines = [
-    `${emphasisAccent('identity')('Active Step:')} ${emphasisAccent('supporting')(`(elapsed ${elapsedStr})`)}`,
-    `Role:             ${roleAccent(context.inFlight.role).chalk(context.inFlight.role)}`,
-    `Spawn:            ${emphasisAccent('identity')(context.inFlight.spawnLabel)}`
+    `${panelStyle('emphasis.identity')('Active Step:')} ${panelStyle('emphasis.supporting')(`(elapsed ${elapsedStr})`)}`,
+    `Role:             ${roleAccent(context.inFlight.role, 'status-panel').chalk(context.inFlight.role)}`,
+    `Spawn:            ${panelStyle('emphasis.identity')(context.inFlight.spawnLabel)}`
   ];
 
   if (context.inFlight.progressCapability === 'unavailable') {
     detailLines.push('Live progress unavailable for this provider');
   } else {
     if (context.inFlight.toolCallCount > 0) {
-      detailLines.push(`Tool calls:       ${emphasisAccent('identity')(formatToolCalls(context.inFlight.toolCallCount))}`);
+      detailLines.push(`Tool calls:       ${panelStyle('emphasis.identity')(formatToolCalls(context.inFlight.toolCallCount))}`);
     }
 
     if (context.inFlight.progressMessage) {
-      detailLines.push(`Progress:         ${emphasisAccent('identity')(context.inFlight.progressMessage)}`);
+      detailLines.push(`Progress:         ${panelStyle('emphasis.identity')(context.inFlight.progressMessage)}`);
     }
   }
 
@@ -259,18 +287,18 @@ function timelineCells(row: TimelineRow, marked: boolean): string[] {
       const display = result === 'blocked' ? `${result}${diagnosticSuffix(s)}` : result;
       resultStr = row.relevance === 'unrelated'
         ? display
-        : resultAccent(toResultState(result))(display);
+        : resultAccent(toResultState(result), 'status-panel')(display);
     }
   }
-  if (marked) resultStr += ` ${emphasisAccent('supporting')('*')}`;
+  if (marked) resultStr += ` ${panelStyle('emphasis.supporting')('*')}`;
 
   const isDimmed = row.relevance === 'unrelated' || row.relevance === 'unclassified';
-  const roleCell = isDimmed ? s.role : roleAccent(s.role).chalk(s.role);
+  const roleCell = isDimmed ? s.role : roleAccent(s.role, 'status-panel').chalk(s.role);
   const statusStr = row.relevance === 'unclassified'
     ? 'unclassified'
     : isDimmed
-      ? statusAccent(s.status).label
-      : statusAccent(s.status).chalk(statusAccent(s.status).label);
+      ? s.status
+      : panelStyle(`status.${s.status}`)(s.status);
   const cells = [
     String(s.version),
     roleCell,
@@ -286,21 +314,21 @@ function timelineCells(row: TimelineRow, marked: boolean): string[] {
     formatCompactId(s.inputFingerprint),
     formatCompactId(s.resultFingerprint),
   ];
-  return isDimmed ? cells.map(cell => chalk.dim(cell)) : cells;
+  return isDimmed ? cells.map(cell => panelStyle('panel.dim_row')(cell)) : cells;
 }
 
 function inFlightCells(context: PanelContext): string[] {
   const active = context.inFlight!;
   return [
     String(active.version),
-    roleAccent(active.role).chalk(active.role),
+    roleAccent(active.role, 'status-panel').chalk(active.role),
     active.agent,
     formatModelDisplay(active.model),
     active.effort ?? 'provider default',
     '—',
     formatDurationMs(Date.now() - active.startedAtMs),
     '—',
-    statusAccent(active.status).chalk(statusAccent(active.status).label),
+    panelStyle(`status.${active.status}`)(active.status),
     formatCompactId(active.artifactIdentity),
     formatCompactId(active.parentArtifactIdentity),
     formatCompactId(active.inputFingerprint),
@@ -354,7 +382,7 @@ function renderTimelineSection(context: PanelContext): string {
         context.inFlight?.inputFingerprint,
         context.inFlight?.resultFingerprint,
       );
-    return `${rowText}\n  ${chalk.dim(identity)}`;
+    return `${rowText}\n  ${panelStyle('panel.dim_row')(identity)}`;
   });
   return [table, ...rowBlocks].join('\n');
 }

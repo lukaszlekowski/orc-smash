@@ -1,6 +1,7 @@
 schemaVersion: 1
 roles:
   auditor: roles/auditor.md
+  researcher: roles/researcher.md
   planner: roles/planner.md
   reviewer: roles/reviewer.md
   implementer: roles/implementer.md
@@ -33,7 +34,7 @@ skills:
     runnerProfile: implement
   research-audit:
     file: skills/10-simple-research-audit/SKILL.md
-    role: auditor
+    role: researcher
     runnerProfile: audit
   research-follow-up:
     file: skills/11-simple-research-follow-up/SKILL.md
