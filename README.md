@@ -1,6 +1,10 @@
 # orc-smash
 
-*The name comes from **ORC**hestrator **RUN**.*
+---
+
+ORC SMASH - ORCHESTRATOR RUN
+
+---
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![node](https://img.shields.io/badge/node-22.14.0-brightgreen.svg)](./.nvmrc)
@@ -55,24 +59,66 @@ summary. Pick a stage to run it; transitions are always operator-confirmed.
 ## Usage
 
 ```bash
-# interactive menu with startup snapshot
-orc smash --project <path>
-
-# ad-hoc, non-interactive starts (--loop / --task / --pipeline are mutually exclusive)
-orc smash --project <path> --loop <loop-id>
-orc smash --project <path> --task <task-id>
-orc smash --project <path> --pipeline <pipeline-id>
-
-# operator status (no provider spawned)
-orc status --project <path> [--all] [--config <path>] [--theme <path>]
-
-# common flags
-orc smash --project <path> --plain                 # append-only event stream for CI/logs
-orc smash --project <path> --show-fingerprints     # lineage + input/result fingerprints
-orc smash --project <path> --theme <path>          # override the color theme
+orc smash -p <path>                       # interactive menu with startup snapshot
+orc smash -p <path> -l <loop-id>          # ad-hoc loop start
+orc smash -p <path> -t <task-id>          # ad-hoc task start
+orc smash -p <path> --pipeline <id>       # start a pipeline at its first stage
+orc smash -p <path> --plain               # append-only event stream for CI/logs
+orc status  -p <path> [-a] [--config <path>] [--theme <path>]
+orc ownership status  -p <path>           # read-only ownership diagnostics
+orc ownership release -p <path> [--yes]   # release retained admission
 ```
 
-**Runner overrides.** Global: `--agent`, `--model`, `--effort`. Per-skill (repeatable): `--runner skill=provider`, `--runner-model skill=model`, `--runner-effort skill=level`. Models are validated in their provider's own namespace; changing provider re-defaults its model. `--max-iterations` caps evaluator rounds (default `4`).
+`-p/--project` defaults to the current directory for `smash` and `status`; it is **required** for `orc ownership`. `--loop`, `--task`, and `--pipeline` are mutually exclusive. Run `orc --help` or `orc <command> --help` for the authoritative list.
+
+### Command reference
+
+#### `orc smash` — run a loop, task, or pipeline stage
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--project <path>` | `-p` | Target project (defaults to current directory) |
+| `--loop <name>` | `-l` | Run a loop ad hoc |
+| `--task <id>` | `-t` | Run a task ad hoc (excl. `--loop` / `--pipeline`) |
+| `--pipeline <id>` | — | Start a pipeline at its first stage |
+| `--agent <name>` | `-a` | Global provider override |
+| `--model <name>` | `-m` | Global model override |
+| `--effort <level>` | — | Global effort override |
+| `--max-iterations <n>` | `-i` | Max evaluator rounds (default `4`) |
+| `--runner <skill=agent>` | — | Per-skill provider override (repeatable) |
+| `--runner-model <skill=model>` | — | Per-skill model override (repeatable) |
+| `--runner-effort <skill=level>` | — | Per-skill effort override (repeatable) |
+| `--config <path>` | — | Config file (`orc-smash.yaml`) |
+| `--theme <path>` | — | Theme file (`theme.yaml`) |
+| `--plain` | — | Append-only event stream (no spinners/screen clears) |
+| `--show-fingerprints` | — | Lineage + input/result fingerprints |
+| `--debug-spawn` | — | Write spawn/process debug logs |
+| `--debug-spawn-file <path>` | — | Override the spawn debug log path |
+
+#### `orc status` — read-only project state
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--project <path>` | `-p` | Target project (defaults to current directory) |
+| `--all` | `-a` | Show artifacts across all loops |
+| `--show-fingerprints` | — | Lineage + input/result fingerprints |
+| `--config <path>` | — | Config file (`orc-smash.yaml`) |
+| `--theme <path>` | — | Theme file (`theme.yaml`) |
+
+> Note: `-a` means `--agent` on `smash` but `--all` on `status`.
+
+#### `orc ownership` — inspect or release retained run admission
+
+| Subcommand | Flags | Description |
+|------------|-------|-------------|
+| `status` | `-p, --project <path>` *(required)* | Read-only diagnostics; never signals or mutates state |
+| `release` | `-p, --project <path>` *(required)*, `--yes` | Release retained admission after verification; never kills processes |
+
+#### `orc supervisor-contract`
+
+Prints the runtime contract consumed by the `orc-smash-supervisor` LaunchAgent. No options.
+
+**Runner selection.** Models are validated in their provider's own namespace; changing provider re-defaults its model. Per-skill overrides (`--runner`, `--runner-model`, `--runner-effort`) take precedence over global ones (`-a`, `-m`, `--effort`).
 
 **Live panel.** The default panel shows nine columns — `version`, `role`, `agent`, `model`, `effort`, `result`, `time`, `session`, `status` — and uses an alternate screen. `--show-fingerprints` adds the `Artifact`, `Parent`, `Input FP`, and `Result FP` diagnostics (wide table on wide terminals, a compact line beneath each row on narrow ones). The choice is per invocation and is not persisted.
 
