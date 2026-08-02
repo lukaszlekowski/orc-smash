@@ -16,6 +16,7 @@ the safety and supervisor invariants that apply during the migration.
 ```text
 bin/orc.js
   └─ src/cli.ts
+      ├─ theme.ts ── config/theme.yaml
       ├─ commands/smash.ts ── config.ts ── manifest.ts
       │       ├─ runner.ts / continuation-runners.ts / runner-overrides.ts / interactive.ts
       │       ├─ loop.ts ── loops/binding-engine.ts
@@ -128,8 +129,11 @@ containing per-binding state summaries (latest evaluate/repair/task steps with
 provenance, missing inputs, unclassified counts), manifest-derived prompt contracts
 (`promptContracts`), eligible/unavailable pipeline candidates with typed reasons,
 and reducer-derived suggested loop reasons without re-scanning disk.
-`terminal-accent.ts` provides a single shared semantic styling
-source for results, availability, emphasis, roles, and lifecycle states.
+`terminal-accent.ts` provides the shared accent helpers (results,
+availability, emphasis, roles, lifecycle), delegating to `theme.ts`
+which resolves semantic tokens from `config/theme.yaml` with per-location
+overrides (`status-panel`, `terminal-accent`, `plain-timeline`, `log`).
+`--theme <path>` selects an alternate theme file.
 `project-snapshot-renderer.ts` renders `renderCompactSnapshot` (interactive header)
 and `renderDetailedSnapshot` (`orc status` and detailed view) from this view model
 without performing any filesystem reads or prompt content calls.
