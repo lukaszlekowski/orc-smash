@@ -33,6 +33,7 @@ coverage/
 /docs/dev/*
 !/docs/dev/plan.md
 !/docs/dev/research.md
+!/docs/dev/spec.md
 /temp-*
 .orc-smash/
 
