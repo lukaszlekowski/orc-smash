@@ -20,6 +20,7 @@ import type {
   OutputSpec,
   SkillSpec,
   TaskBinding,
+  V1Manifest,
 } from '../manifest.js';
 import { priorArtifactNone, resolvePriorArtifact, type PriorArtifactResolution } from '../binding-inputs.js';
 import { computeArtifactIdentity, computeInputFingerprint, mintRunContext, type RunContext } from '../pipeline-state.js';
@@ -176,7 +177,13 @@ export async function runBinding(
   }
   const context = options.runContext ?? mintRunContext({ mode: 'ad-hoc' });
   const version = allocateVersion(projectRoot, binding, history, runners, bindingKind);
-  const initial = initialRequest(bindingId, binding, bindingKind, history, version, config, context);
+  let initial: StepRequest | null;
+  try {
+    initial = initialRequest(bindingId, binding, bindingKind, history, version, config, context);
+  } catch (error: any) {
+    const message = error?.message ?? String(error);
+    return finish({ kind: 'unknown', message, artifactPath: lastPath }, 'unknown', message);
+  }
   let request: StepRequest | null = initial;
   let evaluationCount = 0;
   const providerCallCount = { value: 0 };
@@ -749,11 +756,30 @@ function buildMeta(params: {
     pipelineId: params.context.pipelineId,
     pipelineRunId: params.context.pipelineRunId,
     stageId: params.context.stageId,
+    priorBinding: params.context.priorBinding ?? undefined,
   };
 }
 
 function isPriorNone(prior: PriorArtifactResolution): prior is { kind: 'none' } {
   return 'kind' in prior;
+}
+
+function lookupPriorArtifact(
+  projectRoot: string,
+  manifest: V1Manifest,
+  parentArtifactIdentity: string,
+): PriorArtifactResolution {
+  const globalSnapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === parentArtifactIdentity);
+  if (!predStep) {
+    throw new Error(`adopted prior artifact '${parentArtifactIdentity}' not found.`);
+  }
+  const absPath = resolve(projectRoot, predStep.artifactPath);
+  try {
+    return resolvePriorArtifact(absPath, predStep.artifactIdentity!, readFileSync(absPath));
+  } catch (err: any) {
+    throw new Error(`failed to read adopted prior artifact '${parentArtifactIdentity}': ${err.message}`);
+  }
 }
 
 function providerFailureResult(result: RunResult): boolean {
@@ -772,16 +798,8 @@ function initialRequest(
   if (bindingKind === 'task') {
     const task = binding as TaskBinding;
     let priorArtifact = priorArtifactNone();
-    if (context.chainMode === 'stage-continuation' && context.parentArtifactIdentity) {
-      const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
-      const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
-      if (predStep) {
-        try {
-          priorArtifact = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
-        } catch {
-          priorArtifact = priorArtifactNone();
-        }
-      }
+    if (context.parentArtifactIdentity && (context.chainMode === 'stage-continuation' || context.chainMode === 'ad-hoc')) {
+      priorArtifact = lookupPriorArtifact(config.projectRoot, config.manifest, context.parentArtifactIdentity);
     }
     return {
       phase: 'task',
@@ -812,15 +830,7 @@ function initialRequest(
     if (context.chainMode === 'stage-continuation') {
       let prior = priorArtifactNone();
       if (context.parentArtifactIdentity) {
-        const globalSnapshot = scanGlobalSnapshot(config.projectRoot, config.manifest);
-        const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === context.parentArtifactIdentity);
-        if (predStep) {
-          try {
-            prior = resolvePriorArtifact(predStep.artifactPath, predStep.artifactIdentity!, readFileSync(predStep.artifactPath));
-          } catch {
-            prior = priorArtifactNone();
-          }
-        }
+        prior = lookupPriorArtifact(config.projectRoot, config.manifest, context.parentArtifactIdentity);
       }
       return {
         phase: 'evaluate',

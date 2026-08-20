@@ -62,6 +62,7 @@ export interface Step {
   effectiveEffort?: string;
   provider?: string;
   sessionStrategy?: string;
+  priorBinding?: 'adopted-interactive' | 'adopted-default' | 'adopted-explicit' | null;
 }
 
 export interface BindingInputAvailability {

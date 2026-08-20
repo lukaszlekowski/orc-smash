@@ -58,7 +58,12 @@ shown as advisory predecessor/successor context; the task remains runnable and
 does not consume or mutate pipeline state. The packaged `commit` task reuses
 this path and invokes the `50-simple-commit` skill through the selected
 provider. Git staging and commit creation belong to that agent skill, not to
-the harness.
+the harness. For non-first-stage tasks that declare pipeline predecessors (e.g. `create-plan`),
+ad-hoc execution supports adopting an eligible fresh predecessor artifact via interactive prompt,
+automatic newest-fresh default in non-interactive mode, or explicit `--prior <path>`. Structural
+lineage validation allows cross-chain parents for ad-hoc tasks when the parent is valid and
+completion-capable, stamping `priorBinding` into artifact provenance while preserving `null`
+pipeline fields.
 
 Configuration-owned role and skill definitions resolve from `manifestRoot`.
 Targets, named project inputs, and rendered output paths resolve from

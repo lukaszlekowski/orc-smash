@@ -699,4 +699,74 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
     expect(malformed?.unclassified).toBe(true);
     expect(malformed?.unclassifiedReason).toContain('is in a different pipeline/run/stage');
   });
+
+  it('18. classifies ad-hoc child artifact with a completion-capable cross-chain parent', () => {
+    const parentMeta = createValidMeta({
+      bindingId: 'loopA',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      chainId: 'parent-adhoc-chain',
+      chainMode: 'ad-hoc',
+      resultFingerprint: 'parent-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(parentMeta) + '# Evaluation\n\n## Decision\n\nAPPROVED\n');
+
+    const childMeta = createValidMeta({
+      bindingId: 'completedTask',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      loop: 'completedTask',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      chainId: 'child-adhoc-chain',
+      chainMode: 'ad-hoc',
+      parentArtifactIdentity: parentMeta.artifactIdentity,
+      priorBinding: 'adopted-interactive',
+      resultFingerprint: 'child-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/completed-task-v1-fake.md'), buildFrontMatter(childMeta) + '# Task Output\n\n## Outcome\n\nCOMPLETED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const child = snapshot.steps.find(s => s.artifactIdentity === childMeta.artifactIdentity);
+    expect(child?.unclassified).toBeFalsy();
+    expect(child?.parentArtifactIdentity).toBe(parentMeta.artifactIdentity);
+  });
+
+  it('19. declassifies ad-hoc child artifact when cross-chain parent is not completion-capable', () => {
+    const rejectedParentMeta = createValidMeta({
+      bindingId: 'loopA',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      chainId: 'parent-rejected-chain',
+      chainMode: 'ad-hoc',
+      resultFingerprint: 'parent-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/loopA-eval-v1-fake.md'), buildFrontMatter(rejectedParentMeta) + '# Evaluation\n\n## Decision\n\nREJECTED\n');
+
+    const childMeta = createValidMeta({
+      bindingId: 'completedTask',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      loop: 'completedTask',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      chainId: 'child-adhoc-chain',
+      chainMode: 'ad-hoc',
+      parentArtifactIdentity: rejectedParentMeta.artifactIdentity,
+      priorBinding: 'adopted-default',
+      resultFingerprint: 'child-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/completed-task-v1-fake.md'), buildFrontMatter(childMeta) + '# Task Output\n\n## Outcome\n\nCOMPLETED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const child = snapshot.steps.find(s => s.artifactIdentity === childMeta.artifactIdentity);
+    expect(child?.unclassified).toBe(true);
+    expect(child?.unclassifiedReason).toContain('not completion-capable');
+  });
 });

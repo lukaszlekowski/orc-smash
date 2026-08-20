@@ -158,4 +158,28 @@ Auditor: codex-gpt-5
     const drifted = readFileSync(tempFile, 'utf-8');
     expect(parseArtifactMetaClassified(drifted, { agent: 'fake', version: 1, kind: 'evaluate' }).status).toBe('unclassified');
   });
+
+  it('round-trips priorBinding metadata through front matter and classifies ad-hoc artifact with parent', () => {
+    const meta = makeV1ArtifactMeta({
+      bindingId: 'create-plan',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      version: 1,
+      chainMode: 'ad-hoc',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      parentArtifactIdentity: 'adopted-parent-identity',
+      priorBinding: 'adopted-interactive',
+    });
+    writeArtifactWithMeta(tempFile, '# Task Result\n', meta);
+    const written = readFileSync(tempFile, 'utf-8');
+    const parsed = parseArtifactMeta(written, { agent: 'fake', version: 1, kind: 'task' });
+    expect(parsed.priorBinding).toBe('adopted-interactive');
+    expect(parsed.parentArtifactIdentity).toBe('adopted-parent-identity');
+
+    const classified = parseArtifactMetaClassified(written, { agent: 'fake', version: 1, kind: 'task' });
+    expect(classified.status).toBe('classified');
+  });
 });

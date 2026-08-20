@@ -40,6 +40,8 @@ export type RunEvent =
   | (RunEventBase & { type: 'stage.blocked'; bindingId: string; bindingKind: string; diagnostics?: ContractDiagnostic[] })
   | (RunEventBase & { type: 'stage.incomplete'; bindingId: string; bindingKind: string; reason: string })
   | (RunEventBase & { type: 'stage.action'; action: string; phase: string })
+  | (RunEventBase & { type: 'prior.bound'; artifactIdentity: string; mode: string; freshness: string })
+  | (RunEventBase & { type: 'prior.unavailable'; reason: string })
   | (RunEventBase & { type: 'ownership.opened'; projectRoot: string })
   | (RunEventBase & { type: 'ownership.finalized'; success: boolean })
   | (RunEventBase & { type: 'ownership.lost'; reason?: string })

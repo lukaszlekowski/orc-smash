@@ -49,6 +49,7 @@ export interface ArtifactMeta {
   sessionStrategy?: string;
   effortStatus?: 'requested' | 'confirmed' | 'mismatch' | 'reported';
   effectiveEffort?: string;
+  priorBinding?: 'adopted-interactive' | 'adopted-default' | 'adopted-explicit';
   decisionCorrection?: DecisionCorrectionProvenance;
 }
 
@@ -247,7 +248,7 @@ export function parseArtifactMeta(
       'inputFingerprint', 'resultFingerprint', 'parentArtifactIdentity',
       'pipelineId', 'pipelineRunId', 'stageId', 'provider', 'effort',
       'sessionStrategy', 'step', 'effortStatus', 'effectiveEffort',
-      'decisionCorrection',
+      'decisionCorrection', 'priorBinding',
     ];
     for (const key of optionalKeys) {
       if (Object.prototype.hasOwnProperty.call(obj, key)) {

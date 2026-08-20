@@ -99,6 +99,10 @@ function fmtEvent(event: RunEvent): string {
       return `${ts} ${lvl} stage.incomplete binding=${quote(`${event.bindingKind}/${event.bindingId}`)} reason=${quote(event.reason)}`;
     case 'stage.action':
       return `${ts} ${lvl} stage.action action=${event.action} phase=${event.phase}`;
+    case 'prior.bound':
+      return `${ts} ${lvl} prior.bound artifactIdentity=${quote(event.artifactIdentity)} mode=${quote(event.mode)} freshness=${quote(event.freshness)}`;
+    case 'prior.unavailable':
+      return `${ts} ${lvl} prior.unavailable reason=${quote(event.reason)}`;
     case 'ownership.opened':
       return `${ts} ${lvl} ownership.opened projectRoot=${quote(event.projectRoot)}`;
     case 'ownership.finalized':

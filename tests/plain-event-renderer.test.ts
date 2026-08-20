@@ -29,11 +29,15 @@ describe('renderRunEvent — plain event renderer', () => {
       const warn = renderRunEvent(event({ type: 'warning', message: 'careful' }));
       const pass = renderRunEvent(event({ type: 'run.completed', result: 'accepted', outcome: 'ok' }));
       const info = renderRunEvent(event({ type: 'config.loaded', path: '/p/config/orc-smash.yaml' }));
-      for (const out of [fail, warn, pass, info]) {
+      const priorBound = renderRunEvent(event({ type: 'prior.bound', artifactIdentity: 'abc1234', mode: 'adopted-default', freshness: 'fresh' }));
+      const priorUnavailable = renderRunEvent(event({ type: 'prior.unavailable', reason: 'all candidate artifacts drifted' }));
+      for (const out of [fail, warn, pass, info, priorBound, priorUnavailable]) {
         expect(out).not.toMatch(/\u001b\[/);
       }
       expect(fail).toContain('error');
       expect(pass).toContain('run.completed');
+      expect(priorBound).toContain('prior.bound artifactIdentity=abc1234 mode=adopted-default freshness=fresh');
+      expect(priorUnavailable).toContain('prior.unavailable reason="all candidate artifacts drifted"');
     } finally {
       chalk.level = originalLevel;
     }

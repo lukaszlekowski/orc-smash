@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { sha256 } from './pipeline-state.js';
 import { patternToRegex } from './patterns.js';
@@ -68,6 +68,13 @@ function getGitWorktreeSnapshot(projectRoot: string, outputMatchers: RegExp[]): 
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim() === 'true';
     if (!isGit) return null;
+
+    const toplevel = execSync('git rev-parse --show-toplevel', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (realpathSync(toplevel) !== realpathSync(projectRoot)) return null;
 
     const head = execSync('git rev-parse HEAD', {
       cwd: projectRoot,

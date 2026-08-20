@@ -646,3 +646,199 @@ describe('planning-set publication recovery (Batch 8)', () => {
     expect(readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8')).toContain('## Outcome\n\nCOMPLETED');
   });
 });
+
+describe('ad-hoc prior adoption for create-plan task', () => {
+  beforeEach(() => {
+    makeProject({ research: '# Research\n\nInitial findings.\n' });
+  });
+
+  afterEach(() => {
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it('1. ad-hoc research loop (approved) -> ad-hoc create-plan (adopted-default)', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(research.success).toBe(true);
+
+    const { adHocPriorCandidates, resolveDefaultPrior } = await import('../../src/adhoc-prior.js');
+    const candidates = adHocPriorCandidates(project, config.manifest, 'create-plan');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.freshness).toBe('fresh');
+
+    const defaultPrior = resolveDefaultPrior(candidates);
+    expect(defaultPrior).not.toBeNull();
+
+    const createPlan = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({
+          mode: 'ad-hoc',
+          parentArtifactIdentity: defaultPrior!.artifactIdentity,
+          priorBinding: 'adopted-default',
+        }),
+      },
+    );
+    expect(createPlan.success).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/plan.md'))).toBe(true);
+    expect(existsSync(join(project, 'docs/dev/spec.md'))).toBe(true);
+
+    const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
+    expect(artifactContent).toContain('priorBinding: adopted-default');
+    expect(artifactContent).toContain('parentArtifactIdentity: ' + defaultPrior!.artifactIdentity);
+  });
+
+  it('2. ad-hoc create-plan with explicit --prior path binds adopted-explicit', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(research.success).toBe(true);
+
+    const { validateExplicitPrior } = await import('../../src/adhoc-prior.js');
+    const validation = validateExplicitPrior(project, config.manifest, 'create-plan', 'docs/dev/research-audit-v1-fake.md');
+    expect(validation.valid).toBe(true);
+    if (!validation.valid) throw new Error('Expected validation to be valid');
+
+    const createPlan = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({
+          mode: 'ad-hoc',
+          parentArtifactIdentity: validation.candidate.artifactIdentity,
+          priorBinding: 'adopted-explicit',
+        }),
+      },
+    );
+    expect(createPlan.success).toBe(true);
+
+    const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
+    expect(artifactContent).toContain('priorBinding: adopted-explicit');
+    expect(artifactContent).toContain('parentArtifactIdentity: ' + validation.candidate.artifactIdentity);
+  });
+
+  it('3. ad-hoc create-plan with modified research.md: drifted candidate results in unbound execution', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(research.success).toBe(true);
+
+    // Modify research.md -> drifts candidate
+    writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n\nModified after approval.\n');
+
+    const { adHocPriorCandidates, resolveDefaultPrior } = await import('../../src/adhoc-prior.js');
+    const candidates = adHocPriorCandidates(project, config.manifest, 'create-plan');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.freshness).toBe('drifted');
+    expect(resolveDefaultPrior(candidates)).toBeNull();
+
+    fakeAdapterState.taskOutcome = 'BLOCKED';
+    const createPlan = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({ mode: 'ad-hoc' }),
+      },
+    );
+    expect(createPlan.success).toBe(false);
+    expect(createPlan.outcome?.kind).toBe('blocked');
+
+    const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
+    expect(artifactContent).toContain('parentArtifactIdentity: null');
+  });
+
+  it('4. distinct unconsumed accepted ad-hoc research chains remain independently selectable', async () => {
+    const config = loadConfig(project);
+
+    // Chain 1: Accepted research v1
+    fakeAdapterState.verdicts = ['APPROVED'];
+    const r1 = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(r1.success).toBe(true);
+
+    // Chain 2: Second opinion / independent chain v2
+    fakeAdapterState.verdicts = ['APPROVED'];
+    const r2 = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      { ...options(), runContext: mintRunContext({ mode: 'ad-hoc' }) },
+    );
+    expect(r2.success).toBe(true);
+
+    const { adHocPriorCandidates } = await import('../../src/adhoc-prior.js');
+    const candidates = adHocPriorCandidates(project, config.manifest, 'create-plan');
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every(c => c.freshness === 'fresh')).toBe(true);
+
+    // Adopt the second candidate explicitly
+    const secondCandidate = candidates[1]!;
+    const createPlan = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({
+          mode: 'ad-hoc',
+          parentArtifactIdentity: secondCandidate.artifactIdentity,
+          priorBinding: 'adopted-interactive',
+        }),
+      },
+    );
+    expect(createPlan.success).toBe(true);
+
+    const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
+    expect(artifactContent).toContain('priorBinding: adopted-interactive');
+    expect(artifactContent).toContain('parentArtifactIdentity: ' + secondCandidate.artifactIdentity);
+  });
+});
+

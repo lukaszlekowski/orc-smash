@@ -77,7 +77,7 @@ export interface Candidate {
   };
 }
 
-function bindingForStage(manifest: V1Manifest, pipelineId: string, stageId: string): { bindingId: string; kind: 'loop' | 'task' } | null {
+export function bindingForStage(manifest: V1Manifest, pipelineId: string, stageId: string): { bindingId: string; kind: 'loop' | 'task' } | null {
   const pipeline = manifest.pipelines[pipelineId];
   const stage = pipeline?.stages.find(item => item.stageId === stageId);
   if (!stage) return null;
@@ -86,7 +86,7 @@ function bindingForStage(manifest: V1Manifest, pipelineId: string, stageId: stri
   return null;
 }
 
-function toApprovalStep(record: ArtifactRecord): ApprovalChainStep {
+export function toApprovalStep(record: ArtifactRecord): ApprovalChainStep {
   return {
     artifactIdentity: record.artifactIdentity,
     bindingKind: record.bindingKind,
@@ -127,7 +127,7 @@ function evidenceFrom(record: ArtifactRecord, pipelineId: string, stageId: strin
   };
 }
 
-function chainKey(record: ArtifactRecord): string {
+export function chainKey(record: ArtifactRecord): string {
   return `${record.pipelineId ?? 'null'}:${record.pipelineRunId ?? 'null'}:${record.stageId ?? 'null'}:${record.bindingKind}:${record.bindingId}:${record.chainId}`;
 }
 

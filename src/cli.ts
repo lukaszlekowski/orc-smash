@@ -44,6 +44,7 @@ export function buildProgram(): Command {
     .option('-l, --loop <loop-name>', 'Loop name to run (ad-hoc start)')
     .option('-t, --task <task-id>', 'Task ID to run (ad-hoc start, mutually exclusive with --loop and --pipeline)')
     .option('--pipeline <pipeline-id>', 'Pipeline ID to start at first stage')
+    .option('--prior <path>', 'Explicit predecessor artifact to adopt for an ad-hoc task')
     .option('-a, --agent <agent-name>', 'Global override for agent')
     .option('-m, --model <model-name>', 'Global override for model')
     .option('-i, --max-iterations <iterations>', 'Maximum evaluator iterations', '4')

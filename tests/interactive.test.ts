@@ -6,6 +6,7 @@ import {
   promptCandidateSelection,
   promptTaskDetailConfirmation,
   formatMenuChoice,
+  promptPriorAdoption,
 } from '../src/interactive.js';
 import { createProductionAdapterRegistry } from '../src/adapters/registry.js';
 import { createTestAdapterRegistry } from '../src/adapters/testing.js';
@@ -500,3 +501,68 @@ describe('promptTaskDetailConfirmation', () => {
     }));
   });
 });
+
+describe('promptPriorAdoption', () => {
+  const freshCandidate: import('../src/adhoc-prior.js').AdHocPriorCandidate = {
+    artifactIdentity: 'id-fresh-1',
+    artifactPath: 'docs/dev/research-audit-v1-fake.md',
+    bindingId: 'research',
+    chainId: 'chain-1',
+    chainMode: 'ad-hoc',
+    pipelineId: null,
+    pipelineRunId: null,
+    version: 1,
+    verdict: 'APPROVED',
+    mtime: 1000,
+    resultFingerprint: 'fp1',
+    targetFingerprintNow: 'fp1',
+    freshness: 'fresh',
+  };
+
+  const driftedCandidate: import('../src/adhoc-prior.js').AdHocPriorCandidate = {
+    artifactIdentity: 'id-drifted-2',
+    artifactPath: 'docs/dev/research-audit-v2-fake.md',
+    bindingId: 'research',
+    chainId: 'chain-2',
+    chainMode: 'ad-hoc',
+    pipelineId: null,
+    pipelineRunId: null,
+    version: 2,
+    verdict: 'APPROVED',
+    mtime: 2000,
+    resultFingerprint: 'fp2',
+    targetFingerprintNow: 'fp2-modified',
+    freshness: 'drifted',
+  };
+
+  it('renders candidates with fresh selectable and drifted disabled, and supports adopt choice', async () => {
+    vi.mocked(select).mockResolvedValueOnce('id-fresh-1');
+
+    const result = await promptPriorAdoption('create-plan', [freshCandidate, driftedCandidate]);
+    expect(result).toEqual({ kind: 'adopt', candidate: freshCandidate });
+
+    expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [
+        expect.objectContaining({ value: 'id-fresh-1', disabled: false }),
+        expect.objectContaining({ value: 'id-drifted-2', disabled: true }),
+        expect.objectContaining({ value: '__unbound__', disabled: false }),
+        expect.objectContaining({ value: '__cancel__', disabled: false }),
+      ],
+    }));
+  });
+
+  it('supports run unbound choice', async () => {
+    vi.mocked(select).mockResolvedValueOnce('__unbound__');
+
+    const result = await promptPriorAdoption('create-plan', [driftedCandidate]);
+    expect(result).toEqual({ kind: 'unbound' });
+  });
+
+  it('supports cancel choice', async () => {
+    vi.mocked(select).mockResolvedValueOnce('__cancel__');
+
+    const result = await promptPriorAdoption('create-plan', [freshCandidate]);
+    expect(result).toEqual({ kind: 'cancel' });
+  });
+});
+

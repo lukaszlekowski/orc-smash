@@ -80,6 +80,7 @@ orc ownership release -p <path> [--yes]   # release retained admission
 | `--project <path>` | `-p` | Target project (defaults to current directory) |
 | `--loop <name>` | `-l` | Run a loop ad hoc |
 | `--task <id>` | `-t` | Run a task ad hoc (excl. `--loop` / `--pipeline`) |
+| `--prior <path>` | — | Explicit prior artifact path for ad-hoc task adoption |
 | `--pipeline <id>` | — | Start a pipeline at its first stage |
 | `--agent <name>` | `-a` | Global provider override |
 | `--model <name>` | `-m` | Global model override |

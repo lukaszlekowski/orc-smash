@@ -11,10 +11,13 @@ export function sha256(input: string | Buffer): string {
 
 export type ChainMode = 'pipeline-start' | 'stage-continuation' | 'ad-hoc' | 'second-opinion';
 
+export type PriorBindingKind = 'adopted-interactive' | 'adopted-default' | 'adopted-explicit';
+
 /**
  * The identity context that flows through the executor for a single binding
  * invocation. Built once at entry (smashAction) and reused across within-loop
  * steps; advanced to a child context on stage continuation.
+ * Parent on ad-hoc = adopted prior.
  */
 export interface RunContext {
   pipelineId: string | null;
@@ -23,6 +26,7 @@ export interface RunContext {
   chainId: string;
   chainMode: ChainMode;
   parentArtifactIdentity: string | null;
+  priorBinding?: PriorBindingKind | null;
   /** Set when the context was created by `continueRunContext` – signals the
    *  executor to route through chain-history continuation logic rather than
    *  treating this as a fresh start of the given mode. */
@@ -39,6 +43,7 @@ export function mintRunContext(params: {
   pipelineRunId?: string;
   stageId?: string;
   parentArtifactIdentity?: string | null;
+  priorBinding?: PriorBindingKind | null;
 }): RunContext {
   const chainId = mintChainId();
   switch (params.mode) {
@@ -77,7 +82,8 @@ export function mintRunContext(params: {
         stageId: null,
         chainId,
         chainMode: 'ad-hoc',
-        parentArtifactIdentity: null,
+        parentArtifactIdentity: params.parentArtifactIdentity ?? null,
+        priorBinding: params.priorBinding ?? null,
       };
   }
 }
@@ -89,6 +95,7 @@ export function continueRunContext(params: {
   pipelineRunId: string | null;
   stageId: string | null;
   parentArtifactIdentity: string | null;
+  priorBinding?: PriorBindingKind | null;
 }): RunContext {
   return {
     pipelineId: params.pipelineId,
@@ -97,6 +104,7 @@ export function continueRunContext(params: {
     chainId: params.chainId,
     chainMode: params.chainMode,
     parentArtifactIdentity: params.parentArtifactIdentity,
+    priorBinding: params.priorBinding ?? null,
     continue: true,
   };
 }

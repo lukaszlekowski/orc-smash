@@ -10,6 +10,7 @@ import { availabilityAccent, emphasisAccent, type AvailabilityState } from './te
 import type { DecisionCorrectionDiagnostic } from './artifact-contract.js';
 import type { DecisionCorrectionChoice } from './loops/binding-engine.js';
 import type { CandidateSnapshotView } from './project-snapshot-view.js';
+import type { AdHocPriorCandidate } from './adhoc-prior.js';
 
 const terminalEmphasis = (state: Parameters<typeof emphasisAccent>[0]) => emphasisAccent(state, 'terminal-accent');
 const terminalAvailability = (state: Parameters<typeof availabilityAccent>[0]) => availabilityAccent(state, 'terminal-accent');
@@ -650,3 +651,58 @@ export async function promptDecisionCorrection(
     ? { kind: 'archive' }
     : { kind: 'correct', token: selected };
 }
+
+export type PriorAdoptionChoice =
+  | { kind: 'adopt'; candidate: AdHocPriorCandidate }
+  | { kind: 'unbound' }
+  | { kind: 'cancel' };
+
+/**
+ * Show predecessor candidate artifacts for ad-hoc task prior adoption.
+ */
+export async function promptPriorAdoption(
+  taskId: string,
+  candidates: AdHocPriorCandidate[],
+): Promise<PriorAdoptionChoice> {
+  const choices = candidates.map(c => {
+    const source = c.predecessorPipelineId
+      ? `pipeline: ${c.predecessorPipelineId}${c.pipelineRunId ? ` (${c.pipelineRunId.slice(0, 8)})` : ''}`
+      : 'ad-hoc';
+    const verdict = c.verdict ?? 'accepted';
+    const statusNote = c.freshness === 'fresh'
+      ? ''
+      : c.freshness === 'drifted'
+        ? ' (unavailable: target modified since acceptance)'
+        : ' (unavailable: missing fingerprint)';
+    const label = `Adopt ${c.artifactPath} (${verdict}, ${source})${statusNote}`;
+    return {
+      name: c.freshness === 'fresh' ? label : terminalAvailability('unavailable')(label),
+      value: c.artifactIdentity,
+      disabled: c.freshness !== 'fresh',
+    };
+  });
+
+  choices.push({
+    name: 'Run unbound without prior (the skill will BLOCK)',
+    value: '__unbound__',
+    disabled: false,
+  });
+
+  choices.push({
+    name: 'Cancel — back to Tasks',
+    value: '__cancel__',
+    disabled: false,
+  });
+
+  const picked = await select({
+    message: `Select an accepted predecessor artifact to adopt for ad-hoc task '${taskId}':`,
+    choices,
+  });
+
+  if (picked === '__cancel__') return { kind: 'cancel' };
+  if (picked === '__unbound__') return { kind: 'unbound' };
+  const matched = candidates.find(c => c.artifactIdentity === picked);
+  if (!matched) return { kind: 'unbound' };
+  return { kind: 'adopt', candidate: matched };
+}
+

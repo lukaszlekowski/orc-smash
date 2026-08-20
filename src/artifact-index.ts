@@ -9,6 +9,7 @@ import { computeArtifactIdentity } from './pipeline-state.js';
 import { artifactRecordFromStep, validateContinuationParent } from './pipeline-stage-state.js';
 import { reduceApprovalChain } from './approval-loop-state.js';
 import { readInterruptedMarker } from './interrupted-artifact.js';
+import { isArtifactCompletionCapable } from './adhoc-prior.js';
 
 const EXCLUDED_DIRS = new Set([
   '.git',
@@ -408,10 +409,28 @@ export function scanGlobalSnapshot(
       // Same-chain artifacts must point to their immediate predecessor. A
       // stage-continuation root is validated against the predecessor stage
       // above and begins a new chain.
+      // An ad-hoc artifact with a cross-chain parent is validated against the
+      // adopted predecessor artifact (must exist, be classified + contractValid,
+      // and completion-capable for its binding).
       if (step.parentArtifactIdentity !== null && step.chainMode !== 'stage-continuation') {
         const parentId = step.parentArtifactIdentity;
         const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
-        if (!parent || parent.chainId !== step.chainId) {
+        if (!parent) {
+          invalidReason = `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
+        } else if (parent.chainId === step.chainId) {
+          // Same chain: valid
+        } else if (step.chainMode === 'ad-hoc') {
+          // Cross-chain parent on ad-hoc: parent must be contractValid and completion-capable
+          if (!parent.contractValid) {
+            invalidReason = `Adopted cross-chain parent artifact '${parentId}' has invalid contract.`;
+          } else {
+            const allArtifactRecords = steps.map(artifactRecordFromStep);
+            const parentRecord = artifactRecordFromStep(parent);
+            if (!isArtifactCompletionCapable(parentRecord, allArtifactRecords)) {
+              invalidReason = `Adopted cross-chain parent artifact '${parentId}' is not completion-capable for its binding.`;
+            }
+          }
+        } else {
           invalidReason = `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
         }
       }
@@ -445,13 +464,14 @@ export function scanGlobalSnapshot(
       const lineageValid = index === 0
         ? current.chainMode === 'stage-continuation'
           ? typeof current.parentArtifactIdentity === 'string'
-          : current.parentArtifactIdentity === null
+          : current.chainMode === 'ad-hoc'
+            ? current.parentArtifactIdentity === null || typeof current.parentArtifactIdentity === 'string'
+            : current.parentArtifactIdentity === null
         : current.parentArtifactIdentity === chain[index - 1]!.artifactIdentity;
       if (!lineageValid) {
         markUnclassified(current, 'Chain lineage invalid: parent artifact identity mismatch.');
       }
     }
-
   }
 
   // Approval reduction is intentionally one pass after structural lineage:

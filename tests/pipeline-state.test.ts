@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { expectedPredecessor } from '../src/pipeline-state.js';
+import { expectedPredecessor, mintRunContext, continueRunContext } from '../src/pipeline-state.js';
 import { completionEvidenceForStage, eligibleNextStages, pipelineStageCandidates, type ArtifactRecord } from '../src/pipeline-stage-state.js';
 import type { V1Manifest } from '../src/manifest.js';
 
@@ -499,3 +499,44 @@ describe('pipeline run identity and eligibility', () => {
     })]);
   });
 });
+
+describe('mintRunContext and continueRunContext ad-hoc parent adoption', () => {
+  it('mints ad-hoc context with parentArtifactIdentity and priorBinding while preserving null pipeline fields', () => {
+    const ctx = mintRunContext({
+      mode: 'ad-hoc',
+      parentArtifactIdentity: 'parent-123',
+      priorBinding: 'adopted-default',
+    });
+    expect(ctx.chainMode).toBe('ad-hoc');
+    expect(ctx.pipelineId).toBeNull();
+    expect(ctx.pipelineRunId).toBeNull();
+    expect(ctx.stageId).toBeNull();
+    expect(ctx.parentArtifactIdentity).toBe('parent-123');
+    expect(ctx.priorBinding).toBe('adopted-default');
+    expect(typeof ctx.chainId).toBe('string');
+  });
+
+  it('defaults parentArtifactIdentity and priorBinding to null when omitted in ad-hoc mode', () => {
+    const ctx = mintRunContext({ mode: 'ad-hoc' });
+    expect(ctx.chainMode).toBe('ad-hoc');
+    expect(ctx.parentArtifactIdentity).toBeNull();
+    expect(ctx.priorBinding).toBeNull();
+  });
+
+  it('continues run context preserving priorBinding and continue flag', () => {
+    const continued = continueRunContext({
+      chainId: 'chain-1',
+      chainMode: 'ad-hoc',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      parentArtifactIdentity: 'parent-123',
+      priorBinding: 'adopted-interactive',
+    });
+    expect(continued.continue).toBe(true);
+    expect(continued.chainMode).toBe('ad-hoc');
+    expect(continued.parentArtifactIdentity).toBe('parent-123');
+    expect(continued.priorBinding).toBe('adopted-interactive');
+  });
+});
+

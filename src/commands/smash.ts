@@ -17,8 +17,15 @@ import {
   promptTaskDetailConfirmation,
   promptStatusAcknowledgement,
   promptRunners,
+  promptPriorAdoption,
   type TaskDetailView,
 } from '../interactive.js';
+import {
+  adHocPriorCandidates,
+  resolveDefaultPrior,
+  validateExplicitPrior,
+  predecessorBindingsForTask,
+} from '../adhoc-prior.js';
 import { collectRunnerOverrides, collectEffortOverrides, type RunnerOverrideMap } from '../runner-overrides.js';
 import { createProductionAdapterRegistry, type AgentRegistry } from '../adapters/registry.js';
 import { setActiveProjectRoot, setActiveRunEventSink, quarantineInterruptedResume } from '../interrupted-artifact.js';
@@ -51,6 +58,7 @@ export interface SmashOptions {
   loop?: string;
   task?: string;
   pipeline?: string;
+  prior?: string;
   config?: string;
   agent?: string;
   model?: string;
@@ -121,6 +129,10 @@ function selectedFromOptions(manifest: V1Manifest, options: SmashOptions): { sel
     return { error: '--loop, --task, and --pipeline are mutually exclusive.' };
   }
 
+  if (options.prior && (options.loop || options.pipeline)) {
+    return { error: '--prior is mutually exclusive with --loop and --pipeline.' };
+  }
+
   if (options.pipeline) {
     const result = selectedFromPipeline(manifest, options.pipeline);
     if (!result) return { error: `pipeline '${options.pipeline}' not found or has no valid first stage.` };
@@ -128,9 +140,14 @@ function selectedFromOptions(manifest: V1Manifest, options: SmashOptions): { sel
   }
   if (options.task) {
     const binding = manifest.tasks?.[options.task];
-    return binding
-      ? { selected: { kind: 'task', id: options.task, binding } }
-      : { error: `task '${options.task}' not found in manifest.` };
+    if (!binding) return { error: `task '${options.task}' not found in manifest.` };
+    if (options.prior) {
+      const preds = predecessorBindingsForTask(manifest, options.task);
+      if (preds.length === 0) {
+        return { error: `task '${options.task}' has no pipeline predecessors; --prior is not applicable.` };
+      }
+    }
+    return { selected: { kind: 'task', id: options.task, binding } };
   }
   if (options.loop) {
     const binding = manifest.loops[options.loop];
@@ -272,9 +289,65 @@ async function resolveSmashRunSetup(
     return { retry: true };
   }
 
-  const resolvedRunContext = runContext ?? (options.pipeline
-    ? mintRunContext({ mode: 'pipeline-start', pipelineId: options.pipeline, stageId: pipelineStageId })
-    : mintRunContext({ mode: 'ad-hoc' }));
+  let resolvedRunContext = runContext;
+  if (!resolvedRunContext) {
+    if (options.pipeline) {
+      resolvedRunContext = mintRunContext({ mode: 'pipeline-start', pipelineId: options.pipeline, stageId: pipelineStageId });
+    } else if (selected.kind === 'task') {
+      if (options.prior) {
+        const validation = validateExplicitPrior(projectRoot, config.manifest, selected.id, options.prior);
+        if (!validation.valid) {
+          const message = validation.error;
+          options.output.error(`Error: ${message}`);
+          return { errorResult: { exitCode: 1, message } };
+        }
+        resolvedRunContext = mintRunContext({
+          mode: 'ad-hoc',
+          parentArtifactIdentity: validation.candidate.artifactIdentity,
+          priorBinding: 'adopted-explicit',
+        });
+        options.output.emit(makeRunEvent({
+          type: 'prior.bound',
+          atMs: Date.now(),
+          artifactIdentity: validation.candidate.artifactIdentity,
+          mode: 'adopted-explicit',
+          freshness: validation.candidate.freshness,
+        }));
+      } else {
+        const preds = predecessorBindingsForTask(config.manifest, selected.id);
+        if (preds.length > 0) {
+          const candidates = adHocPriorCandidates(projectRoot, config.manifest, selected.id);
+          const defaultPrior = resolveDefaultPrior(candidates);
+          if (defaultPrior) {
+            resolvedRunContext = mintRunContext({
+              mode: 'ad-hoc',
+              parentArtifactIdentity: defaultPrior.artifactIdentity,
+              priorBinding: 'adopted-default',
+            });
+            options.output.emit(makeRunEvent({
+              type: 'prior.bound',
+              atMs: Date.now(),
+              artifactIdentity: defaultPrior.artifactIdentity,
+              mode: 'adopted-default',
+              freshness: defaultPrior.freshness,
+            }));
+          } else {
+            resolvedRunContext = mintRunContext({ mode: 'ad-hoc' });
+            const reason = candidates.length === 0 ? 'no candidate artifacts for predecessor binding' : 'all candidate artifacts drifted';
+            options.output.emit(makeRunEvent({
+              type: 'prior.unavailable',
+              atMs: Date.now(),
+              reason,
+            }));
+          }
+        } else {
+          resolvedRunContext = mintRunContext({ mode: 'ad-hoc' });
+        }
+      }
+    } else {
+      resolvedRunContext = mintRunContext({ mode: 'ad-hoc' });
+    }
+  }
 
   if (selected.kind === 'loop') {
     const snapshot = scanGlobalSnapshot(projectRoot, config.manifest);
@@ -586,6 +659,52 @@ async function runInteractiveBindingSelection(
           ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
         }
 
+        if (ctxRunContext.chainMode === 'ad-hoc') {
+          if (options.prior) {
+            const validation = validateExplicitPrior(projectRoot, manifest, selectedTaskId, options.prior);
+            if (!validation.valid) {
+              options.output.error(`Error: ${validation.error}`);
+              return { kind: 'exit', reason: validation.error };
+            }
+            ctxRunContext = mintRunContext({
+              mode: 'ad-hoc',
+              parentArtifactIdentity: validation.candidate.artifactIdentity,
+              priorBinding: 'adopted-explicit',
+            });
+            options.output.emit(makeRunEvent({
+              type: 'prior.bound',
+              atMs: Date.now(),
+              artifactIdentity: validation.candidate.artifactIdentity,
+              mode: 'adopted-explicit',
+              freshness: validation.candidate.freshness,
+            }));
+          } else {
+            const candidates = adHocPriorCandidates(projectRoot, manifest, selectedTaskId);
+            if (candidates.length >= 1) {
+              const adoptionChoice = await promptPriorAdoption(selectedTaskId, candidates);
+              if (adoptionChoice.kind === 'cancel') {
+                continue;
+              }
+              if (adoptionChoice.kind === 'adopt') {
+                ctxRunContext = mintRunContext({
+                  mode: 'ad-hoc',
+                  parentArtifactIdentity: adoptionChoice.candidate.artifactIdentity,
+                  priorBinding: 'adopted-interactive',
+                });
+                options.output.emit(makeRunEvent({
+                  type: 'prior.bound',
+                  atMs: Date.now(),
+                  artifactIdentity: adoptionChoice.candidate.artifactIdentity,
+                  mode: 'adopted-interactive',
+                  freshness: adoptionChoice.candidate.freshness,
+                }));
+              } else {
+                ctxRunContext = mintRunContext({ mode: 'ad-hoc' });
+              }
+            }
+          }
+        }
+
         taskSelectionResult = { selectedTaskId, taskBinding, runContext: ctxRunContext };
         break;
       }
@@ -877,6 +996,17 @@ export async function smashAction(options: SmashOptions): Promise<CommandResult>
         );
         if (!finalEligible) {
           const message = 'Selected pipeline stage lost eligibility before provider execution.';
+          options.output.error(`Error: ${message}`);
+          return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'eligibility-lost' });
+        }
+      }
+
+      // Pre-spawn re-validation gate for adopted ad-hoc priors.
+      if (setup.bindingKind === 'task' && setup.runContext?.chainMode === 'ad-hoc' && setup.runContext.parentArtifactIdentity) {
+        const finalCandidates = adHocPriorCandidates(projectRoot, setup.config.manifest, setup.bindingId);
+        const matched = finalCandidates.find(c => c.artifactIdentity === setup.runContext!.parentArtifactIdentity);
+        if (!matched || matched.freshness !== 'fresh') {
+          const message = 'Adopted prior artifact lost eligibility before provider execution (drifted or declassified).';
           options.output.error(`Error: ${message}`);
           return finish({ exitCode: 1, message }, { success: false, verdict: 'unknown', errorKind: 'eligibility-lost' });
         }

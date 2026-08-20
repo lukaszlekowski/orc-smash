@@ -9,7 +9,7 @@ import type { RunEvent } from '../src/run-event.js';
 import type { PanelContext } from '../src/status.js';
 import { createTempDir, removeTempDir } from './helpers/fs.js';
 import { createMockOutput } from './helpers/mock-output.js';
-import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation, promptDecisionCorrection, promptStatusAcknowledgement } from '../src/interactive.js';
+import { promptLoopSelect, promptMaxIterations, promptPostRunRecovery, promptTopLevelMenu, promptLoopSubmenu, promptPipelineLaunchContext, promptRunners, promptCandidateSelection, promptTaskMenu, promptTaskDetailConfirmation, promptDecisionCorrection, promptStatusAcknowledgement, promptPriorAdoption } from '../src/interactive.js';
 import { terminateOwnedRuntimes } from '../src/owned-runtime-registry.js';
 import { getProcessStartTime, getProcessCommand } from '../src/process-identity.js';
 import { loadConfig } from '../src/config.js';
@@ -33,6 +33,7 @@ vi.mock('../src/interactive.js', () => {
     promptTaskDetailConfirmation: vi.fn(),
     promptDecisionCorrection: vi.fn(),
     promptStatusAcknowledgement: vi.fn(),
+    promptPriorAdoption: vi.fn(),
   };
 });
 
@@ -58,8 +59,8 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
         const outputPath = resolve(input.cwd, match[1].trim());
         mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
         if (input.kind === 'task') {
-          if (input.prompt.includes('# Skill: 50-simple-commit')) {
-            writeFileSync(outputPath, '# Commit Evidence\n\n## Outcome\n\nCOMPLETED\n');
+          if (input.prompt.includes('# Skill: 50-simple-commit') || input.prompt.includes('# Skill: 23-simple-create-plan') || input.prompt.includes('# Skill: 24-simple-create-spec')) {
+            writeFileSync(outputPath, '# Task Evidence\n\n## Outcome\n\nCOMPLETED\n');
           } else {
             writeFileSync(outputPath,
               '# Implementation Evidence Ledger\n\n' +
@@ -1417,6 +1418,249 @@ describe('generic smash dispatch', () => {
       expect(events.some(e => e.type === 'input.missing')).toBe(true);
       expect(events.some(e => e.type === 'runner.resolved')).toBe(false);
       expect(events.some(e => e.type === 'ownership.opened')).toBe(false);
+      expect(adapter.run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ad-hoc prior adoption via --task and --prior', () => {
+    it('1. default-bind happy path: emits prior.bound event and binds parent on non-interactive --task', async () => {
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n');
+      const testConfig = loadConfig(project);
+      const fp = captureBindingResultFingerprint(project, testConfig.manifest.loops.research.target, testConfig.manifest.loops.research.files, testConfig.manifest);
+
+      const researchMeta = makeV1ArtifactMeta({
+        bindingId: 'research',
+        kind: 'evaluate',
+        step: 'evaluate',
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        chainId: 'research-chain-1',
+        chainMode: 'ad-hoc',
+        resultFingerprint: fp,
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/research-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        researchMeta,
+      );
+
+      const events: RunEvent[] = [];
+      const testOutput = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        task: 'create-plan',
+        agent: 'opencode',
+        model: MODEL,
+        output: testOutput,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      const boundEvent = events.find(e => e.type === 'prior.bound');
+      expect(boundEvent).toBeDefined();
+      expect((boundEvent as any)?.artifactIdentity).toBe(researchMeta.artifactIdentity);
+      expect((boundEvent as any)?.mode).toBe('adopted-default');
+
+      const planArtifact = readFileSync(join(project, 'docs/dev/create-plan-v1-opencode.md'), 'utf8');
+      expect(planArtifact).toContain('parentArtifactIdentity: ' + researchMeta.artifactIdentity);
+      expect(planArtifact).toContain('priorBinding: adopted-default');
+    });
+
+    it('2. zero-fresh candidates: emits prior.unavailable event and runs unbound', async () => {
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n');
+      const testConfig = loadConfig(project);
+      const fp = captureBindingResultFingerprint(project, testConfig.manifest.loops.research.target, testConfig.manifest.loops.research.files, testConfig.manifest);
+
+      const researchMeta = makeV1ArtifactMeta({
+        bindingId: 'research',
+        kind: 'evaluate',
+        step: 'evaluate',
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        chainId: 'research-chain-1',
+        chainMode: 'ad-hoc',
+        resultFingerprint: fp,
+      });
+      writeArtifactWithMeta(
+        join(project, 'docs/dev/research-audit-v1-opencode.md'),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        researchMeta,
+      );
+
+      // Modify research.md so candidate is drifted
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Drifted Research\n');
+
+      const events: RunEvent[] = [];
+      const testOutput = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        task: 'create-plan',
+        agent: 'opencode',
+        model: MODEL,
+        output: testOutput,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      const unavailEvent = events.find(e => e.type === 'prior.unavailable');
+      expect(unavailEvent).toBeDefined();
+      expect((unavailEvent as any)?.reason).toContain('drifted');
+
+      const planArtifact = readFileSync(join(project, 'docs/dev/create-plan-v1-opencode.md'), 'utf8');
+      expect(planArtifact).toContain('parentArtifactIdentity: null');
+    });
+
+    it('3. --prior happy path: adopts validated specified path', async () => {
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n');
+      const testConfig = loadConfig(project);
+      const fp = captureBindingResultFingerprint(project, testConfig.manifest.loops.research.target, testConfig.manifest.loops.research.files, testConfig.manifest);
+
+      const researchMeta = makeV1ArtifactMeta({
+        bindingId: 'research',
+        kind: 'evaluate',
+        step: 'evaluate',
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        chainId: 'research-chain-1',
+        chainMode: 'ad-hoc',
+        resultFingerprint: fp,
+      });
+      const priorRel = 'docs/dev/research-audit-v1-opencode.md';
+      writeArtifactWithMeta(
+        join(project, priorRel),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        researchMeta,
+      );
+
+      const events: RunEvent[] = [];
+      const testOutput = createMockOutput({ emit: (e: RunEvent) => events.push(e) });
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        task: 'create-plan',
+        prior: priorRel,
+        agent: 'opencode',
+        model: MODEL,
+        output: testOutput,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(0);
+      const boundEvent = events.find(e => e.type === 'prior.bound');
+      expect(boundEvent).toBeDefined();
+      expect((boundEvent as any)?.mode).toBe('adopted-explicit');
+
+      const planArtifact = readFileSync(join(project, 'docs/dev/create-plan-v1-opencode.md'), 'utf8');
+      expect(planArtifact).toContain('parentArtifactIdentity: ' + researchMeta.artifactIdentity);
+      expect(planArtifact).toContain('priorBinding: adopted-explicit');
+    });
+
+    it('4. --prior invalid combinations and mismatches fail closed with uncalled provider', async () => {
+      const adapter1 = scriptedAdapter();
+      const res1 = await smashAction({
+        project,
+        loop: 'plan',
+        prior: 'docs/dev/some-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter1),
+      } as any);
+      expect(res1.exitCode).toBe(1);
+      expect(res1.message).toContain('--prior is mutually exclusive with --loop and --pipeline.');
+      expect(adapter1.run).not.toHaveBeenCalled();
+
+      const adapter2 = scriptedAdapter();
+      const res2 = await smashAction({
+        project,
+        task: 'commit',
+        prior: 'docs/dev/some-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter2),
+      } as any);
+      expect(res2.exitCode).toBe(1);
+      expect(res2.message).toContain("task 'commit' has no pipeline predecessors; --prior is not applicable.");
+      expect(adapter2.run).not.toHaveBeenCalled();
+
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n');
+      const adapter3 = scriptedAdapter();
+      const res3 = await smashAction({
+        project,
+        task: 'create-plan',
+        prior: 'docs/dev/nonexistent-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter3),
+      } as any);
+      expect(res3.exitCode).toBe(1);
+      expect(res3.message).toContain("Specified --prior artifact 'docs/dev/nonexistent-audit.md' does not exist.");
+      expect(adapter3.run).not.toHaveBeenCalled();
+    });
+
+    it('5. pre-spawn re-validation: target modification drifts prior before spawn and halts before provider run', async () => {
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research\n');
+      const testConfig = loadConfig(project);
+      const fp = captureBindingResultFingerprint(project, testConfig.manifest.loops.research.target, testConfig.manifest.loops.research.files, testConfig.manifest);
+
+      const researchMeta = makeV1ArtifactMeta({
+        bindingId: 'research',
+        kind: 'evaluate',
+        step: 'evaluate',
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        chainId: 'research-chain-1',
+        chainMode: 'ad-hoc',
+        resultFingerprint: fp,
+      });
+      const priorRel = 'docs/dev/research-audit-v1-opencode.md';
+      writeArtifactWithMeta(
+        join(project, priorRel),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        researchMeta,
+      );
+
+      // In interactive menu: candidate is selected, then drifted before spawn
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('create-plan');
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
+      vi.mocked(promptRunners).mockResolvedValueOnce({
+        '23-simple-create-plan': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
+      });
+      vi.mocked(promptPriorAdoption).mockImplementationOnce(async () => {
+        // Drift the target between selection and spawn!
+        writeFileSync(join(project, 'docs/dev/research.md'), '# Research Drifted\n');
+        return {
+          kind: 'adopt',
+          candidate: {
+            artifactIdentity: researchMeta.artifactIdentity!,
+            artifactPath: priorRel,
+            bindingId: 'research',
+            chainId: 'research-chain-1',
+            chainMode: 'ad-hoc',
+            pipelineId: null,
+            pipelineRunId: null,
+            version: 1,
+            verdict: 'APPROVED',
+            mtime: Date.now(),
+            resultFingerprint: fp,
+            targetFingerprintNow: fp,
+            freshness: 'fresh',
+          },
+        };
+      });
+
+      const adapter = scriptedAdapter();
+      const result = await smashAction({
+        project,
+        output,
+        createAdapterRegistry: () => registry(adapter),
+      } as any);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('Adopted prior artifact lost eligibility before provider execution');
       expect(adapter.run).not.toHaveBeenCalled();
     });
   });
