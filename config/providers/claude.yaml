@@ -1,8 +1,10 @@
-defaultModel: glm-5.2[1m]
+defaultModel: glm-5.3[1m]
 defaultEffort: max
 models:
+  - glm-5.3[1m]
   - glm-5.2[1m]
   - glm-4.7
 modelEfforts:
+  glm-5.3[1m]: [high, max]
   glm-5.2[1m]: [high, max]
   glm-4.7: [high, max]

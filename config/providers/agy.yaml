@@ -1,6 +1,7 @@
-defaultModel: gemini-3.6-flash
+defaultModel: gemini-3.7-flash
 defaultEffort: high
 models:
+  - gemini-3.7-flash
   - gemini-3.6-flash
   - gemini-3.5-flash
   - gemini-3.1-pro
@@ -8,6 +9,7 @@ models:
   - claude-opus-4-6-thinking
   - gpt-oss-120b-medium
 modelEfforts:
+  gemini-3.7-flash: [low, medium, high]
   gemini-3.6-flash: [low, medium, high]
   gemini-3.5-flash: [low, medium, high]
   gemini-3.1-pro: [low, high]
