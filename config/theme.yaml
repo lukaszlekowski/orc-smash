@@ -1,21 +1,47 @@
 # Rich palette. All tunable color values live in this file.
+#
+# How this file is chosen:
+#   --theme <path> flag  >  <projectRoot>/.theme.yaml  >  this packaged file.
+#   A project .theme.yaml only needs the tokens it overrides; everything
+#   else falls back to `defaults` below.
+#
+# Style vocabulary (the only keys allowed per token):
+#   fg, bg                        foreground / background color
+#   bold, dim, underline, inverse modifiers
+#   {}                            empty spec = plain default terminal text
+#
+# Color values: a palette name from `colors:` below (e.g. `teal`), a chalk
+# builtin (`red`, `greenBright`, `gray`, ...), or `#rrggbb` hex.
+#
+# Validation is strict: an unknown token or unknown color name fails at load
+# with a typed error instead of silently falling back.
+
+# Named palette. Tokens reference these by name — change a value once and
+# every token using it follows.
 colors:
-  teal: '#2ec4b6'
-  amber: '#f4b942'
-  orange: '#ff8c42'
-  red: '#ef476f'
-  green: '#06d6a0'
-  purple: '#9b5de5'
-  blue: '#3a86ff'
-  gray: '#9aa0a6'
+  teal: "#2ec4b6"
+  amber: "#f4b942"
+  orange: "#ff8c42"
+  red: "#ef476f"
+  green: "#06d6a0"
+  purple: "#9b5de5"
+  blue: "#3a86ff"
+  gray: "#9aa0a6"
 
 defaults:
-  role.auditor: { fg: teal }
-  role.planner: { fg: amber }
+  # ---- Roles: the role shown next to skills and bindings (task menu rows,
+  #      snapshot header, status panel). `role.unknown` covers any role not
+  #      declared in the manifest.
+  role.auditor: { fg: teal }        # evaluates research/plan/review targets
+  role.planner: { fg: amber }       # follow-up and create-plan/spec skills
   role.reviewer: { fg: purple }
   role.implementer: { fg: green }
   role.unknown: { fg: gray }
 
+  # ---- Step kinds: the evaluate/repair/task label on artifacts, timeline
+  #      rows, and panel borders. Pairs share a color on purpose:
+  #      evaluate ~ audit (teal), repair ~ follow-up (amber), task ~
+  #      implement (green).
   kind.audit: { fg: teal }
   kind.follow-up: { fg: amber }
   kind.implement: { fg: green }
@@ -23,51 +49,91 @@ defaults:
   kind.repair: { fg: amber }
   kind.task: { fg: green }
 
-  status.running: { fg: amber }
+  # ---- Step status in timelines and the panel.
+  status.running: { fg: amber }     # provider invocation in flight
   status.failed: { fg: red }
-  status.done: { fg: gray }
+  status.done: { fg: gray }         # finished, no longer attention-worthy
   status.interrupted: { fg: purple }
 
+  # ---- Outcome accents (verdicts, summaries).
   result.pass: { fg: green }
   result.fail: { fg: red }
   result.warn: { fg: orange }
-  result.neutral: {}
+  result.neutral: {}                # deliberate no-op
 
+  # ---- Menu-item availability.
+  #      unavailable   = greyed-out, not selectable (disabled menu entries,
+  #                      e.g. drifted prior-adoption candidates). Dim only —
+  #                      the lighter of the two menu greys.
+  #      missing-inputs = orange: task/loop entries whose declared project
+  #                      files are absent, and their "Missing inputs: ..."
+  #                      reason lines in the snapshot.
   availability.available: {}
   availability.unavailable: { dim: true }
   availability.missing-inputs: { fg: orange }
 
+  # ---- Inline emphasis inside labels and rows.
+  #      identity          artifact identity hashes in candidate labels
+  #                        ("Identity: abc123...")
+  #      binding-identity  binding ids in labels ("loop/research", "Binding/
+  #                        Phase: ...")
+  #      supporting        the bracketed run metadata after artifact rows:
+  #                        [agent / model, effort: ..., session: ...]
+  #      placeholder       placeholder / empty-state text
+  #      recommended       the recommended menu-entry marker
+  #      warning           inline warnings
   emphasis.identity: { fg: orange, bold: true }
   emphasis.binding-identity: { fg: teal }
-  emphasis.supporting: { fg: gray, dim: true }
-  emphasis.placeholder: { fg: gray, dim: true }
+  emphasis.supporting: { fg: gray }
+  emphasis.placeholder: { fg: gray }
   emphasis.recommended: { fg: green }
   emphasis.warning: { fg: orange }
 
+  # ---- Unclassified artifact counts ("Unclassified: N file(s)" in the
+  #      snapshot). attention when N > 0 (something failed provenance or
+  #      contract validation and blocks continuation), idle when N = 0.
   unclassified.attention: { fg: orange }
-  unclassified.idle: { fg: gray, dim: true }
+  unclassified.idle: { fg: gray }
 
+  # ---- Freshness of pipeline continuation candidates: stale = the binding's
+  #      target/declared files changed since the artifact was written
+  #      (target-fingerprint drift), fresh = fingerprints still match.
   stale.stale: { fg: orange }
   stale.fresh: {}
 
+  # ---- Status panel chrome.
+  #      column_header  panel column titles
+  #      dim_row        de-emphasized rows inside the panel
+  #      border.*       the panel's border color, keyed by the in-flight
+  #                     step's kind (or the last relevant timeline step when
+  #                     idle; `failed` wins whenever it applies).
   panel.column_header: { fg: teal }
   panel.dim_row: { dim: true }
   # Keep the stage-specific border names stable; the default border gains orange.
-  panel.border.failed: { fg: red }
+  panel.border.failed: { fg: red }        # a step failed (in flight or last)
   panel.border.audit: { fg: cyan }
   panel.border.evaluate: { fg: cyan }
   panel.border.follow-up: { fg: yellow }
   panel.border.repair: { fg: yellow }
   panel.border.implement: { fg: green }
   panel.border.task: { fg: green }
-  panel.border.default: { fg: orange }
+  panel.border.default: { fg: orange }    # nothing in flight / no relevant row
 
+  # ---- Log line severities.
   log.fail: { fg: red }
   log.warn: { fg: orange }
   log.pass: { fg: green }
   log.info: { fg: teal }
 
+# Per-surface overrides. Any token above can be restyled for one surface;
+# resolution is surface[token] ?? defaults[token]. Surfaces:
+#   status-panel     the boxen status panel (`Display pipeline and project state`)
+#   terminal-accent  interactive menus and the compact snapshot header
+#   plain-timeline   --plain output
+#   log              log lines
 status-panel:
+  # Example override: the implementer role renders as a black-on-green bold
+  # badge inside the panel while staying plain green everywhere else.
   role.implementer: { bg: green, fg: black, bold: true }
 terminal-accent: {}
 plain-timeline: {}
