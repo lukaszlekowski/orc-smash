@@ -4,7 +4,7 @@
 [36m│[39m   Loop:             [36mplan[39m                                                                                                                                     [36m│[39m
 [36m│[39m   Iteration:        [2m1/5[22m                                                                                                                                      [36m│[39m
 [36m│[39m   Active Runner:    [1m[36mplan-audit (opencode · opencode-go/deepseek-v4-flash)[39m[22m                                                                                    [36m│[39m
-[36m│[39m   Next Step:        [1m[36mRun the plan audit[39m[22m                                                                                                                       [36m│[39m
+[36m│[39m   Next Step:        [32mRun the plan audit[39m                                                                                                                       [36m│[39m
 [36m│[39m   Latest version:   v2                                                                                                                                       [36m│[39m
 [36m│[39m                                                                                                                                                              [36m│[39m
 [36m│[39m   [1m[36mRun configuration[39m[22m                                                                                                                                          [36m│[39m

@@ -28,6 +28,7 @@ export const THEME_TOKENS = [
   'unclassified.attention', 'unclassified.idle',
   'stale.stale', 'stale.fresh',
   'panel.column_header', 'panel.dim_row',
+  'panel.title', 'panel.section_header', 'panel.telemetry',
   'panel.border.failed', 'panel.border.audit', 'panel.border.evaluate',
   'panel.border.follow-up', 'panel.border.repair', 'panel.border.implement',
   'panel.border.task', 'panel.border.default',

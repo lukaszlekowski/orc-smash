@@ -86,7 +86,7 @@ defaults:
   #      placeholder       placeholder / empty-state text
   #      recommended       the recommended menu-entry marker
   #      warning           inline warnings
-  emphasis.identity: { fg: teal, bold: true }
+  emphasis.identity: { fg: teal }
   emphasis.binding-identity: { fg: teal }
   emphasis.supporting: { fg: gray }
   emphasis.placeholder: { fg: gray }
@@ -106,11 +106,19 @@ defaults:
   stale.fresh: {}
 
   # ---- Status panel chrome.
-  #      column_header  panel column titles
-  #      dim_row        de-emphasized rows inside the panel
-  #      border.*       the panel's border color, keyed by the in-flight
-  #                     step's kind (or the last relevant timeline step when
-  #                     idle; `failed` wins whenever it applies).
+  #      title           the centered ORC SMASH STATUS PANEL title
+  #      section_header  "Run configuration" / "Active invocation" / "Timeline:"
+  #      telemetry       in-flight detail values: Active Step, Spawn, Tool
+  #                      calls, Progress — deliberately plain; state color
+  #                      belongs to the timeline's result/status cells
+  #      column_header   panel column titles
+  #      dim_row         de-emphasized rows inside the panel
+  #      border.*        the panel's border color, keyed by the in-flight
+  #                      step's kind (or the last relevant timeline step when
+  #                      idle; `failed` wins whenever it applies).
+  panel.title: { fg: teal, bold: true }
+  panel.section_header: { fg: teal, bold: true }
+  panel.telemetry: {}
   panel.column_header: { fg: teal }
   panel.dim_row: { dim: true }
   # Keep the stage-specific border names stable; the default border gains orange.
@@ -139,6 +147,9 @@ status-panel:
   # Example override: the implementer role renders as a black-on-green bold
   # badge inside the panel while staying plain green everywhere else.
   role.implementer: { bg: green, fg: black, bold: true }
-terminal-accent: {}
+terminal-accent:
+  # Menus keep identity hashes bold; the panel renders identity values at
+  # normal weight (see defaults.emphasis.identity).
+  emphasis.identity: { fg: teal, bold: true }
 plain-timeline: {}
 log: {}

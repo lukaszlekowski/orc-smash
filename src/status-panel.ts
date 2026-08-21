@@ -151,7 +151,7 @@ export function renderStatusPanel(context: PanelContext): string {
   const lName = panelStyle('emphasis.binding-identity')(context.loopName);
   const panelTitle = resolveTerminalWidth() < 60
     ? ' ORC SMASH STATUS PANEL '
-    : panelStyle('emphasis.identity')(' ORC SMASH STATUS PANEL ');
+    : panelStyle('panel.title')(' ORC SMASH STATUS PANEL ');
 
   const iterationLabel = context.bindingKind === 'task' ? 'Execution' : 'Iteration';
   const iterationValue = context.readOnly
@@ -176,13 +176,13 @@ export function renderStatusPanel(context: PanelContext): string {
     `Loop:             ${lName}`,
     `${iterationLabel}:        ${panelStyle('emphasis.supporting')(iterationValue)}`,
     `Active Runner:    ${activeStr}`,
-    `Next Step:        ${panelStyle('emphasis.identity')(context.nextStepMessage)}`,
+    `Next Step:        ${panelStyle('emphasis.recommended')(context.nextStepMessage)}`,
     `Latest version:   v${context.latestVersion}`
   ];
 
   if (context.resolvedRunners && context.resolvedRunners.length > 0) {
     contentLines.push('');
-    contentLines.push(panelStyle('emphasis.identity')('Run configuration'));
+    contentLines.push(panelStyle('panel.section_header')('Run configuration'));
     contentLines.push(renderRunConfiguration(context.resolvedRunners));
   }
 
@@ -197,13 +197,13 @@ export function renderStatusPanel(context: PanelContext): string {
           ? `fresh session (provider unsupported${pendingStr})`
           : `fresh session (no compatible session${pendingStr})`;
     contentLines.push('');
-    contentLines.push(panelStyle('emphasis.identity')('Active invocation'));
+    contentLines.push(panelStyle('panel.section_header')('Active invocation'));
     contentLines.push(`  ${active.skillId} v${active.version} — ${modeStr}`);
   }
 
   const timelineSection = renderTimelineSection(context);
   contentLines.push('');
-  contentLines.push(panelStyle('emphasis.identity')('Timeline:'));
+  contentLines.push(panelStyle('panel.section_header')('Timeline:'));
   contentLines.push(timelineSection);
 
   const inFlightSection = renderInFlightSection(context);
@@ -232,20 +232,20 @@ function renderInFlightSection(context: PanelContext): string | null {
   const elapsedStr = formatDurationMs(Date.now() - context.inFlight.startedAtMs);
 
   const detailLines = [
-    `${panelStyle('emphasis.identity')('Active Step:')} ${panelStyle('emphasis.supporting')(`(elapsed ${elapsedStr})`)}`,
+    `${panelStyle('panel.telemetry')('Active Step:')} ${panelStyle('emphasis.supporting')(`(elapsed ${elapsedStr})`)}`,
     `Role:             ${roleAccent(context.inFlight.role, 'status-panel').chalk(context.inFlight.role)}`,
-    `Spawn:            ${panelStyle('emphasis.identity')(context.inFlight.spawnLabel)}`
+    `Spawn:            ${panelStyle('panel.telemetry')(context.inFlight.spawnLabel)}`
   ];
 
   if (context.inFlight.progressCapability === 'unavailable') {
     detailLines.push('Live progress unavailable for this provider');
   } else {
     if (context.inFlight.toolCallCount > 0) {
-      detailLines.push(`Tool calls:       ${panelStyle('emphasis.identity')(formatToolCalls(context.inFlight.toolCallCount))}`);
+      detailLines.push(`Tool calls:       ${panelStyle('panel.telemetry')(formatToolCalls(context.inFlight.toolCallCount))}`);
     }
 
     if (context.inFlight.progressMessage) {
-      detailLines.push(`Progress:         ${panelStyle('emphasis.identity')(context.inFlight.progressMessage)}`);
+      detailLines.push(`Progress:         ${panelStyle('panel.telemetry')(context.inFlight.progressMessage)}`);
     }
   }
 

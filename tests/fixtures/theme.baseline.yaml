@@ -41,6 +41,13 @@ defaults:
   emphasis.recommended: { fg: green }
   emphasis.warning: { fg: yellow }
 
+  # The panel split (title / section_header / telemetry) reproduces the former
+  # emphasis.identity bytes so the baseline capture stays comparable; only the
+  # Next Step line legitimately changes (emphasis.identity -> recommended).
+  panel.title: { fg: cyan, bold: true }
+  panel.section_header: { fg: cyan, bold: true }
+  panel.telemetry: { fg: cyan, bold: true }
+
   unclassified.attention: { fg: yellow }
   unclassified.idle: { dim: true }
 
