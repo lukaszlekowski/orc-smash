@@ -764,7 +764,7 @@ function isPriorNone(prior: PriorArtifactResolution): prior is { kind: 'none' } 
   return 'kind' in prior;
 }
 
-function lookupPriorArtifact(
+function lookupAdoptedPriorArtifact(
   projectRoot: string,
   manifest: V1Manifest,
   parentArtifactIdentity: string,
@@ -779,6 +779,22 @@ function lookupPriorArtifact(
     return resolvePriorArtifact(absPath, predStep.artifactIdentity!, readFileSync(absPath));
   } catch (err: any) {
     throw new Error(`failed to read adopted prior artifact '${parentArtifactIdentity}': ${err.message}`);
+  }
+}
+
+function lookupStageContinuationPrior(
+  projectRoot: string,
+  manifest: V1Manifest,
+  parentArtifactIdentity: string,
+): PriorArtifactResolution {
+  const globalSnapshot = scanGlobalSnapshot(projectRoot, manifest);
+  const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === parentArtifactIdentity);
+  if (!predStep) return priorArtifactNone();
+  const absPath = resolve(projectRoot, predStep.artifactPath);
+  try {
+    return resolvePriorArtifact(absPath, predStep.artifactIdentity!, readFileSync(absPath));
+  } catch {
+    return priorArtifactNone();
   }
 }
 
@@ -798,8 +814,12 @@ function initialRequest(
   if (bindingKind === 'task') {
     const task = binding as TaskBinding;
     let priorArtifact = priorArtifactNone();
-    if (context.parentArtifactIdentity && (context.chainMode === 'stage-continuation' || context.chainMode === 'ad-hoc')) {
-      priorArtifact = lookupPriorArtifact(config.projectRoot, config.manifest, context.parentArtifactIdentity);
+    if (context.parentArtifactIdentity) {
+      if (context.chainMode === 'ad-hoc') {
+        priorArtifact = lookupAdoptedPriorArtifact(config.projectRoot, config.manifest, context.parentArtifactIdentity);
+      } else if (context.chainMode === 'stage-continuation') {
+        priorArtifact = lookupStageContinuationPrior(config.projectRoot, config.manifest, context.parentArtifactIdentity);
+      }
     }
     return {
       phase: 'task',
@@ -830,7 +850,7 @@ function initialRequest(
     if (context.chainMode === 'stage-continuation') {
       let prior = priorArtifactNone();
       if (context.parentArtifactIdentity) {
-        prior = lookupPriorArtifact(config.projectRoot, config.manifest, context.parentArtifactIdentity);
+        prior = lookupStageContinuationPrior(config.projectRoot, config.manifest, context.parentArtifactIdentity);
       }
       return {
         phase: 'evaluate',

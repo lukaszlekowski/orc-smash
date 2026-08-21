@@ -657,6 +657,18 @@ export type PriorAdoptionChoice =
   | { kind: 'unbound' }
   | { kind: 'cancel' };
 
+function formatRelativeAge(mtimeMs: number): string {
+  const diffMs = Math.max(0, Date.now() - mtimeMs);
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
 /**
  * Show predecessor candidate artifacts for ad-hoc task prior adoption.
  */
@@ -669,12 +681,13 @@ export async function promptPriorAdoption(
       ? `pipeline: ${c.predecessorPipelineId}${c.pipelineRunId ? ` (${c.pipelineRunId.slice(0, 8)})` : ''}`
       : 'ad-hoc';
     const verdict = c.verdict ?? 'accepted';
+    const age = formatRelativeAge(c.mtime);
     const statusNote = c.freshness === 'fresh'
       ? ''
       : c.freshness === 'drifted'
         ? ' (unavailable: target modified since acceptance)'
         : ' (unavailable: missing fingerprint)';
-    const label = `Adopt ${c.artifactPath} (${verdict}, ${source})${statusNote}`;
+    const label = `Adopt ${c.artifactPath} (${verdict}, ${age}, ${source})${statusNote}`;
     return {
       name: c.freshness === 'fresh' ? label : terminalAvailability('unavailable')(label),
       value: c.artifactIdentity,

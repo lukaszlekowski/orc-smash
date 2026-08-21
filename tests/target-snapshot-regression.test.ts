@@ -99,4 +99,26 @@ describe('Target Snapshot Worktree Regression (m1)', () => {
     const snapshotAfterDelete = captureTargetSnapshot(testDir, { kind: 'worktree', path: '.' }, manifest);
     expect(snapshotAfterDelete).toContain('deleted.md');
   });
+
+  it('falls back to directory walk when projectRoot is a subdirectory of a git repository', () => {
+    // 1. Initialize git repo at root
+    execSync('git init', { cwd: testDir });
+    execSync('git config user.name "Test"', { cwd: testDir });
+    execSync('git config user.email "test@example.com"', { cwd: testDir });
+
+    // 2. Create subdirectory projectRoot
+    const subProjectDir = join(testDir, 'subproject');
+    mkdirSync(subProjectDir, { recursive: true });
+    writeFileSync(join(subProjectDir, 'source.txt'), 'hello from subproject');
+
+    // 3. Run captureTargetSnapshot with subProjectDir as projectRoot
+    const snapshot = captureTargetSnapshot(subProjectDir, { kind: 'worktree', path: '.' }, manifest);
+
+    // Verify it is a directory walk snapshot, not a git-toplevel snapshot
+    expect(snapshot).toMatch(/^worktree\n/);
+    expect(snapshot).not.toContain('worktree:git');
+    expect(snapshot).not.toContain('head:');
+    expect(snapshot).toContain('source.txt');
+    expect(snapshot).toContain('file:');
+  });
 });

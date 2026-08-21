@@ -544,4 +544,47 @@ describe('generic per-step continuity', () => {
       fakeAdapter.capabilities.resumeSession = original;
     }
   });
+
+  it('stage-continuation falls back to priorArtifactNone when parent artifact is not found in snapshot', async () => {
+    const config = loadConfig(workspace);
+    const prompts: string[] = [];
+    vi.spyOn(fakeAdapter, 'run').mockImplementation(async (input) => {
+      prompts.push(input.prompt);
+      const outputMatch = input.prompt.match(/Output path:\s*([^\r\n]+)/i);
+      if (outputMatch?.[1]) {
+        const absolute = resolve(input.cwd, outputMatch[1].trim());
+        mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
+        writeFileSync(absolute, '## Verdict\n\nAPPROVED\n');
+      }
+      return { stdout: 'done', exitCode: 0, sessionId: 'session-a' };
+    });
+
+    const result = await runLoop(
+      workspace,
+      'review',
+      config.manifest.loops.review!,
+      config,
+      {
+        review: { agent: 'fake', model: 'fake-model' },
+        'review-follow-up': { agent: 'fake', model: 'fake-model' },
+      },
+      {
+        maxIterations: 1,
+        registry: createTestAdapterRegistry(),
+        output,
+        interactive: false,
+        runContext: mintRunContext({
+          mode: 'stage-continuation',
+          pipelineId: 'default',
+          pipelineRunId: 'run-missing-parent',
+          stageId: 'review',
+          parentArtifactIdentity: 'nonexistent-parent-identity-12345',
+        }),
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Prior artifact: none');
+  });
 });

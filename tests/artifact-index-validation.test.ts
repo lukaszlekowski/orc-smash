@@ -733,6 +733,7 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
     const child = snapshot.steps.find(s => s.artifactIdentity === childMeta.artifactIdentity);
     expect(child?.unclassified).toBeFalsy();
     expect(child?.parentArtifactIdentity).toBe(parentMeta.artifactIdentity);
+    expect(child?.priorBinding).toBe('adopted-interactive');
   });
 
   it('19. declassifies ad-hoc child artifact when cross-chain parent is not completion-capable', () => {
@@ -768,5 +769,29 @@ describe('Artifact Index and Pipeline Lineage Structural Validation (C1)', () =>
     const child = snapshot.steps.find(s => s.artifactIdentity === childMeta.artifactIdentity);
     expect(child?.unclassified).toBe(true);
     expect(child?.unclassifiedReason).toContain('not completion-capable');
+  });
+
+  it('20. declassifies ad-hoc child artifact when adopted prior parent is missing or unclassified with distinct reason', () => {
+    const childMeta = createValidMeta({
+      bindingId: 'completedTask',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      loop: 'completedTask',
+      pipelineId: null,
+      pipelineRunId: null,
+      stageId: null,
+      chainId: 'child-adhoc-chain',
+      chainMode: 'ad-hoc',
+      parentArtifactIdentity: 'nonexistent-prior-identity',
+      priorBinding: 'adopted-default',
+      resultFingerprint: 'child-state',
+    });
+    writeFileSync(join(testDir, 'docs/dev/completed-task-v1-fake.md'), buildFrontMatter(childMeta) + '# Task Output\n\n## Outcome\n\nCOMPLETED\n');
+
+    const snapshot = scanGlobalSnapshot(testDir, manifest);
+    const child = snapshot.steps.find(s => s.artifactIdentity === childMeta.artifactIdentity);
+    expect(child?.unclassified).toBe(true);
+    expect(child?.unclassifiedReason).toContain("Adopted prior artifact 'nonexistent-prior-identity' not found or unclassified.");
   });
 });

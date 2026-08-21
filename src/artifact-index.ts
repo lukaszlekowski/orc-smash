@@ -307,6 +307,7 @@ export function scanGlobalSnapshot(
         decisionCorrection: meta.decisionCorrection,
         provider,
         contract: patternInfo.contract.type as any,
+        priorBinding: meta.priorBinding,
       };
 
       const classification = classifiedMeta;
@@ -416,7 +417,9 @@ export function scanGlobalSnapshot(
         const parentId = step.parentArtifactIdentity;
         const parent = steps.find(s => s.artifactIdentity === parentId && !s.unclassified);
         if (!parent) {
-          invalidReason = `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
+          invalidReason = step.chainMode === 'ad-hoc'
+            ? `Adopted prior artifact '${parentId}' not found or unclassified.`
+            : `Same-chain parent artifact '${parentId}' not found or has mismatched chainId.`;
         } else if (parent.chainId === step.chainId) {
           // Same chain: valid
         } else if (step.chainMode === 'ad-hoc') {

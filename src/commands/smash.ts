@@ -259,6 +259,9 @@ async function resolveSmashRunSetup(
     if (selection.kind === 'exit') {
       return { exitSignal: true, message: selection.reason };
     }
+    if (selection.kind === 'error') {
+      return { errorResult: { exitCode: 1, message: selection.message } };
+    }
     if (selection.kind === 'retry') {
       return { retry: true };
     }
@@ -346,6 +349,18 @@ async function resolveSmashRunSetup(
       }
     } else {
       resolvedRunContext = mintRunContext({ mode: 'ad-hoc' });
+    }
+  }
+
+  if (options.prior) {
+    const isAdHocTaskWithPreds =
+      selected.kind === 'task' &&
+      resolvedRunContext?.chainMode === 'ad-hoc' &&
+      predecessorBindingsForTask(config.manifest, selected.id).length > 0;
+    if (!isAdHocTaskWithPreds) {
+      const msg = '--prior requires an ad-hoc task with pipeline predecessors; the selected binding is not eligible.';
+      options.output.error(`Error: ${msg}`);
+      return { errorResult: { exitCode: 1, message: msg } };
     }
   }
 
@@ -518,6 +533,7 @@ export function resolveBindingForSuggested(
 type InteractiveSelectionResult =
   | { kind: 'selected'; selected: SelectedBinding; runContext?: RunContext; pipelineStageId?: string; candidate?: SuggestedStageAction; continuationDefaults?: Map<string, RunnerPreselection>; continuationSteps?: Step[]; continuationChainId?: string }
   | { kind: 'exit'; reason: string }
+  | { kind: 'error'; message: string }
   | { kind: 'retry' }
   | { kind: 'display' };
 
@@ -664,7 +680,7 @@ async function runInteractiveBindingSelection(
             const validation = validateExplicitPrior(projectRoot, manifest, selectedTaskId, options.prior);
             if (!validation.valid) {
               options.output.error(`Error: ${validation.error}`);
-              return { kind: 'exit', reason: validation.error };
+              return { kind: 'error', message: validation.error };
             }
             ctxRunContext = mintRunContext({
               mode: 'ad-hoc',

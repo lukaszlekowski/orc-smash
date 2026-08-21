@@ -75,6 +75,17 @@ itself.
   behavior; the harness does not run `git add`/`git commit`, verify commit
   contents, or treat pipeline approval as Git authorization. Its completion
   artifact is durable task evidence and may remain uncommitted.
+- **Ad-hoc prior-artifact adoption**: non-first-stage tasks running ad hoc
+  (e.g. `create-plan`) can adopt an eligible fresh predecessor artifact via
+  the interactive picker (`promptPriorAdoption`), an automatic newest-fresh
+  default in non-interactive mode, or explicit `--prior <path>`. Structural
+  lineage allows cross-chain parents for ad-hoc tasks when the parent is
+  classified, `contractValid`, and completion-capable, stamping `priorBinding`
+  (`adopted-interactive` | `adopted-default` | `adopted-explicit`) into
+  provenance while keeping pipeline fields `null`. Freshness is mandatory across
+  all paths; drifted candidates cannot be bound and drift/mismatch fails closed
+  before provider invocation. Adoption does not consume pipeline edges or modify
+  pipeline state.
 
 - `orc smash` and `orc status` accept the default-off, run-scoped
   `--show-fingerprints` presentation flag. Without it, the live timeline shows

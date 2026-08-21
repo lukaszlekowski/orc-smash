@@ -543,7 +543,7 @@ describe('promptPriorAdoption', () => {
 
     expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
       choices: [
-        expect.objectContaining({ value: 'id-fresh-1', disabled: false }),
+        expect.objectContaining({ value: 'id-fresh-1', disabled: false, name: expect.stringMatching(/Adopt docs\/dev\/research-audit-v1-fake\.md \(APPROVED, \d+[smhd] ago, ad-hoc\)/) }),
         expect.objectContaining({ value: 'id-drifted-2', disabled: true }),
         expect.objectContaining({ value: '__unbound__', disabled: false }),
         expect.objectContaining({ value: '__cancel__', disabled: false }),

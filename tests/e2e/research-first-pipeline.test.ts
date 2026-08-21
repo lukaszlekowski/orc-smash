@@ -1,11 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runLoop, runTask, type LoopOptions } from '../../src/loop.js';
 import type { LoopReturn } from '../../src/loops/runtime.js';
 import { loadConfig, type Config } from '../../src/config.js';
-import { fakeAdapterState } from '../../src/adapters/fake.js';
+import { fakeAdapter, fakeAdapterState } from '../../src/adapters/fake.js';
 import { createTestAdapterRegistry } from '../../src/adapters/testing.js';
 import { createMockOutput } from '../helpers/mock-output.js';
 import { allPipelineCandidates, pipelineSuggestions } from '../../src/next-step.js';
@@ -700,6 +700,19 @@ describe('ad-hoc prior adoption for create-plan task', () => {
     const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
     expect(artifactContent).toContain('priorBinding: adopted-default');
     expect(artifactContent).toContain('parentArtifactIdentity: ' + defaultPrior!.artifactIdentity);
+    expect(artifactContent).toContain('chainMode: ad-hoc');
+    expect(artifactContent).toContain('pipelineId: null');
+    expect(artifactContent).toContain('pipelineRunId: null');
+    expect(artifactContent).toContain('stageId: null');
+
+    const planFile = readFileSync(join(project, 'docs/dev/plan.md'), 'utf8');
+    const specFile = readFileSync(join(project, 'docs/dev/spec.md'), 'utf8');
+    expect(planFile).toContain('sourceKind: accepted-research');
+    expect(specFile).toContain('sourceKind: accepted-research');
+    expect(planFile).toContain('sourceArtifactIdentity: ' + join(project, 'docs/dev/research-audit-v1-fake.md'));
+    expect(specFile).toContain('sourceArtifactIdentity: ' + join(project, 'docs/dev/research-audit-v1-fake.md'));
+    expect(planFile).toContain('sourceDigest:');
+    expect(specFile).toContain('sourceDigest:');
   });
 
   it('2. ad-hoc create-plan with explicit --prior path binds adopted-explicit', async () => {
@@ -839,6 +852,116 @@ describe('ad-hoc prior adoption for create-plan task', () => {
     const artifactContent = readFileSync(join(project, 'docs/dev/create-plan-v1-fake.md'), 'utf8');
     expect(artifactContent).toContain('priorBinding: adopted-interactive');
     expect(artifactContent).toContain('parentArtifactIdentity: ' + secondCandidate.artifactIdentity);
+  });
+
+  it('5. pipeline research APPROVED -> ad-hoc create-plan adopts the pipeline-stamped artifact -> completes; pipeline edge remains eligible', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    // Run research in pipeline mode
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      { ...options(), runContext: mintRunContext({ mode: 'pipeline-start', pipelineId: 'research-first', stageId: 'research' }) },
+    );
+    expect(research.success).toBe(true);
+
+    // Check pipeline suggestions before ad-hoc create-plan
+    const suggestionsBefore = pipelineSuggestions(project, config.manifest);
+    expect(suggestionsBefore).toHaveLength(1);
+    expect(suggestionsBefore[0]!.predecessorStageId).toBe('research');
+    expect(suggestionsBefore[0]!.successorStageId).toBe('create-plan');
+    expect(suggestionsBefore[0]!.reason).toBe('eligible');
+
+    const { adHocPriorCandidates, resolveDefaultPrior } = await import('../../src/adhoc-prior.js');
+    const candidates = adHocPriorCandidates(project, config.manifest, 'create-plan');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.freshness).toBe('fresh');
+
+    const defaultPrior = resolveDefaultPrior(candidates);
+    expect(defaultPrior).not.toBeNull();
+
+    // Run create-plan in ad-hoc mode adopting the pipeline artifact
+    const createPlan = await runTask(
+      project,
+      'create-plan',
+      config.manifest.tasks?.['create-plan']!,
+      config,
+      runners(),
+      {
+        ...options(),
+        runContext: mintRunContext({
+          mode: 'ad-hoc',
+          parentArtifactIdentity: defaultPrior!.artifactIdentity,
+          priorBinding: 'adopted-default',
+        }),
+      },
+    );
+    expect(createPlan.success).toBe(true);
+
+    // Verify that the pipeline edge remains eligible and is NOT consumed
+    const suggestionsAfter = pipelineSuggestions(project, config.manifest);
+    expect(suggestionsAfter).toHaveLength(1);
+    expect(suggestionsAfter[0]!.predecessorStageId).toBe('research');
+    expect(suggestionsAfter[0]!.successorStageId).toBe('create-plan');
+    expect(suggestionsAfter[0]!.reason).toBe('eligible');
+
+    const allCandidates = allPipelineCandidates(project, config.manifest);
+    const edge = allCandidates.find(c => c.predecessorStageId === 'research' && c.successorStageId === 'create-plan');
+    expect(edge?.reason).not.toBe('exact-edge-consumed');
+    expect(edge?.reason).toBe('eligible');
+  });
+
+  it('6. adopted parent removed pre-run -> typed unknown stop in engine', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(research.success).toBe(true);
+
+    const { adHocPriorCandidates } = await import('../../src/adhoc-prior.js');
+    const candidates = adHocPriorCandidates(project, config.manifest, 'create-plan');
+    expect(candidates).toHaveLength(1);
+    const priorCandidate = candidates[0]!;
+
+    // Delete the adopted prior artifact before runTask
+    rmSync(resolve(project, priorCandidate.artifactPath));
+
+    const runSpy = vi.spyOn(fakeAdapter, 'run');
+    try {
+      const createPlan = await runTask(
+        project,
+        'create-plan',
+        config.manifest.tasks?.['create-plan']!,
+        config,
+        runners(),
+        {
+          ...options(),
+          runContext: mintRunContext({
+            mode: 'ad-hoc',
+            parentArtifactIdentity: priorCandidate.artifactIdentity,
+            priorBinding: 'adopted-explicit',
+          }),
+        },
+      );
+
+      expect(createPlan.success).toBe(false);
+      expect(createPlan.outcome?.kind).toBe('unknown');
+      expect(createPlan.message).toContain(`adopted prior artifact '${priorCandidate.artifactIdentity}' not found`);
+      expect(runSpy).not.toHaveBeenCalled();
+    } finally {
+      runSpy.mockRestore();
+    }
   });
 });
 

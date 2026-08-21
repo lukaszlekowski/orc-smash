@@ -1597,6 +1597,91 @@ describe('generic smash dispatch', () => {
       expect(res3.exitCode).toBe(1);
       expect(res3.message).toContain("Specified --prior artifact 'docs/dev/nonexistent-audit.md' does not exist.");
       expect(adapter3.run).not.toHaveBeenCalled();
+
+      // Interactive loop selection with --prior
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('start-loop');
+      vi.mocked(promptLoopSelect).mockResolvedValueOnce('plan');
+      vi.mocked(promptLoopSubmenu).mockResolvedValueOnce('start-fresh-loop');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
+      const adapter4 = scriptedAdapter();
+      const res4 = await smashAction({
+        project,
+        prior: 'docs/dev/some-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter4),
+      } as any);
+      expect(res4.exitCode).toBe(1);
+      expect(res4.message).toContain('--prior requires an ad-hoc task with pipeline predecessors; the selected binding is not eligible.');
+      expect(adapter4.run).not.toHaveBeenCalled();
+
+      // Interactive task selection without predecessors with --prior
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('commit' as any);
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
+      const adapter5 = scriptedAdapter();
+      const res5 = await smashAction({
+        project,
+        prior: 'docs/dev/some-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter5),
+      } as any);
+      expect(res5.exitCode).toBe(1);
+      expect(res5.message).toContain("Task 'commit' has no pipeline predecessors; --prior is not applicable.");
+      expect(adapter5.run).not.toHaveBeenCalled();
+
+      // Interactive task selection with non-existent --prior fails closed with exit code 1
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('create-plan' as any);
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
+      const adapter5b = scriptedAdapter();
+      const res5b = await smashAction({
+        project,
+        prior: 'docs/dev/nonexistent-audit.md',
+        output,
+        createAdapterRegistry: () => registry(adapter5b),
+      } as any);
+      expect(res5b.exitCode).toBe(1);
+      expect(res5b.message).toContain("Specified --prior artifact 'docs/dev/nonexistent-audit.md' does not exist.");
+      expect(adapter5b.run).not.toHaveBeenCalled();
+
+      // Interactive task selection with drifted --prior fails closed with exit code 1
+      const testConfig = loadConfig(project);
+      const fp = captureBindingResultFingerprint(project, testConfig.manifest.loops.research.target, testConfig.manifest.loops.research.files, testConfig.manifest);
+      const researchMeta = makeV1ArtifactMeta({
+        bindingId: 'research',
+        kind: 'evaluate',
+        step: 'evaluate',
+        version: 1,
+        agent: 'opencode',
+        provider: 'opencode',
+        chainId: 'research-chain-1',
+        chainMode: 'ad-hoc',
+        resultFingerprint: fp,
+      });
+      const priorRel = 'docs/dev/research-audit-v1-opencode.md';
+      writeArtifactWithMeta(
+        join(project, priorRel),
+        '# Evaluation\n\n## Verdict\n\nAPPROVED\n',
+        researchMeta,
+      );
+      // Drift the research target
+      writeFileSync(join(project, 'docs/dev/research.md'), '# Research Drifted\n');
+
+      vi.mocked(promptTopLevelMenu).mockResolvedValueOnce('run-task');
+      vi.mocked(promptTaskMenu).mockResolvedValueOnce('create-plan');
+      vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
+      vi.mocked(promptPipelineLaunchContext).mockResolvedValueOnce({ kind: 'ad-hoc' } as any);
+
+      const adapter6 = scriptedAdapter();
+      const res6 = await smashAction({
+        project,
+        prior: priorRel,
+        output,
+        createAdapterRegistry: () => registry(adapter6),
+      } as any);
+      expect(res6.exitCode).toBe(1);
+      expect(res6.message).toContain('drifted');
+      expect(adapter6.run).not.toHaveBeenCalled();
     });
 
     it('5. pre-spawn re-validation: target modification drifts prior before spawn and halts before provider run', async () => {

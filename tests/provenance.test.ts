@@ -182,4 +182,24 @@ Auditor: codex-gpt-5
     const classified = parseArtifactMetaClassified(written, { agent: 'fake', version: 1, kind: 'task' });
     expect(classified.status).toBe('classified');
   });
+
+  it('rejects ad-hoc artifact claiming pipeline identity with cause-specific reason', () => {
+    const meta = makeV1ArtifactMeta({
+      bindingId: 'create-plan',
+      bindingKind: 'task',
+      kind: 'task',
+      step: 'task',
+      version: 1,
+      chainMode: 'ad-hoc',
+      pipelineId: 'default',
+      pipelineRunId: 'run-1',
+      stageId: 'plan',
+    });
+    writeArtifactWithMeta(tempFile, '# Task Result\n', meta);
+    const written = readFileSync(tempFile, 'utf-8');
+    const classified = parseArtifactMetaClassified(written, { agent: 'fake', version: 1, kind: 'task' });
+    expect(classified.status).toBe('unclassified');
+    if (classified.status !== 'unclassified') throw new Error('Expected unclassified');
+    expect(classified.reason).toContain('ad-hoc artifacts must not claim pipeline identity.');
+  });
 });
