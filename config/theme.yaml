@@ -32,8 +32,8 @@ defaults:
   # ---- Roles: the role shown next to skills and bindings (task menu rows,
   #      snapshot header, status panel). `role.unknown` covers any role not
   #      declared in the manifest.
-  role.auditor: { fg: teal }        # evaluates research/plan/review targets
-  role.planner: { fg: amber }       # follow-up and create-plan/spec skills
+  role.auditor: { fg: teal } # evaluates research/plan/review targets
+  role.planner: { fg: amber } # follow-up and create-plan/spec skills
   role.reviewer: { fg: purple }
   role.implementer: { fg: green }
   role.unknown: { fg: gray }
@@ -50,27 +50,31 @@ defaults:
   kind.task: { fg: green }
 
   # ---- Step status in timelines and the panel.
-  status.running: { fg: amber }     # provider invocation in flight
+  status.running: { fg: amber } # provider invocation in flight
   status.failed: { fg: red }
-  status.done: { fg: gray }         # finished, no longer attention-worthy
+  status.done: { fg: gray } # finished, no longer attention-worthy
   status.interrupted: { fg: purple }
 
   # ---- Outcome accents (verdicts, summaries).
   result.pass: { fg: green }
   result.fail: { fg: red }
   result.warn: { fg: orange }
-  result.neutral: {}                # deliberate no-op
+  result.neutral: {} # deliberate no-op
 
-  # ---- Menu-item availability.
-  #      unavailable   = greyed-out, not selectable (disabled menu entries,
-  #                      e.g. drifted prior-adoption candidates). Dim only —
-  #                      the lighter of the two menu greys.
-  #      missing-inputs = orange: task/loop entries whose declared project
-  #                      files are absent, and their "Missing inputs: ..."
-  #                      reason lines in the snapshot.
+  # ---- Menu-item availability. These tokens fully own how disabled menu
+  #      rows look: the themedSelect wrapper in src/interactive.ts
+  #      neutralizes the component's own disabled styling (its dim wrapper
+  #      and '- ' prefix); the component's ' (disabled)' suffix remains and
+  #      renders plain. An empty spec here now genuinely means full
+  #      brightness for a disabled row.
+  #      unavailable    = not selectable (no eligible state, e.g. no in-progress
+  #                       chain, drifted prior-adoption candidates)
+  #      missing-inputs = task/loop entries whose declared project files are
+  #                       absent, and their "Missing inputs: ..." reason lines
+  #                       in the snapshot.
   availability.available: {}
-  availability.unavailable: { dim: true }
-  availability.missing-inputs: { fg: orange }
+  availability.unavailable: { fg: gray, dim: true }
+  availability.missing-inputs: { fg: red }
 
   # ---- Inline emphasis inside labels and rows.
   #      identity          artifact identity hashes in candidate labels
@@ -82,7 +86,7 @@ defaults:
   #      placeholder       placeholder / empty-state text
   #      recommended       the recommended menu-entry marker
   #      warning           inline warnings
-  emphasis.identity: { fg: orange, bold: true }
+  emphasis.identity: { fg: teal, bold: true }
   emphasis.binding-identity: { fg: teal }
   emphasis.supporting: { fg: gray }
   emphasis.placeholder: { fg: gray }
@@ -110,14 +114,14 @@ defaults:
   panel.column_header: { fg: teal }
   panel.dim_row: { dim: true }
   # Keep the stage-specific border names stable; the default border gains orange.
-  panel.border.failed: { fg: red }        # a step failed (in flight or last)
+  panel.border.failed: { fg: red } # a step failed (in flight or last)
   panel.border.audit: { fg: cyan }
   panel.border.evaluate: { fg: cyan }
   panel.border.follow-up: { fg: yellow }
   panel.border.repair: { fg: yellow }
   panel.border.implement: { fg: green }
   panel.border.task: { fg: green }
-  panel.border.default: { fg: orange }    # nothing in flight / no relevant row
+  panel.border.default: { fg: orange } # nothing in flight / no relevant row
 
   # ---- Log line severities.
   log.fail: { fg: red }

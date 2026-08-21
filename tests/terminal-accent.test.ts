@@ -147,7 +147,7 @@ describe('terminal-accent accent map', () => {
     const origLevel = chalk.level;
     chalk.level = 1;
     try {
-      expect(emphasisAccent('identity')('x')).toBe('\u001B[1m\u001B[93mx\u001B[39m\u001B[22m');
+      expect(emphasisAccent('identity')('x')).toBe('\u001B[1m\u001B[36mx\u001B[39m\u001B[22m');
       expect(emphasisAccent('binding-identity')('x')).toBe('\u001B[36mx\u001B[39m');
     } finally {
       chalk.level = origLevel;

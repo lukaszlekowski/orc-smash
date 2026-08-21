@@ -5,6 +5,7 @@ import {
   promptRunners,
   promptCandidateSelection,
   promptTaskDetailConfirmation,
+  promptTopLevelMenu,
   formatMenuChoice,
   promptPriorAdoption,
 } from '../src/interactive.js';
@@ -49,7 +50,7 @@ describe('Interactive registry selection', () => {
     vi.clearAllMocks();
   });
 
-  it('Inquirer disabled-choice fixture: missing-inputs is yellow vs unavailable is dim at chalk.level = 1, preserving value/disabled/default', () => {
+  it('Inquirer disabled-choice fixture: missing-inputs is red vs unavailable is gray+dim (single dim layer) at chalk.level = 1, preserving value/disabled/default', () => {
     const origLevel = chalk.level;
     chalk.level = 1;
     try {
@@ -61,7 +62,7 @@ describe('Interactive registry selection', () => {
 
       expect(choiceMissing.disabled).toBe(true);
       expect(choiceMissing.value).toBe('plan');
-      expect(choiceMissing.name).toContain('\u001b[93m'); // Rich orange
+      expect(choiceMissing.name).toContain('\u001b[31m'); // red (packaged theme)
       expect(choiceMissing.name.replace(/\u001b\[\d+m/g, '')).toContain('Loop Plan (unavailable: target missing)');
 
       const choiceUnavailable = formatMenuChoice({
@@ -72,7 +73,9 @@ describe('Interactive registry selection', () => {
 
       expect(choiceUnavailable.disabled).toBe(true);
       expect(choiceUnavailable.value).toBe('unsupported-resume');
-      expect(choiceUnavailable.name).toContain('\u001b[2m'); // Dim
+      // one dim layer + bright-black gray: the token owns the look; the
+      // themedSelect pad guarantees no component dim stacks on top.
+      expect(choiceUnavailable.name).toBe('\u001b[2m\u001b[90mResume per skill (unavailable: agent does not support session resumption)\u001b[39m\u001b[22m');
       expect(choiceUnavailable.name.replace(/\u001b\[\d+m/g, '')).toContain('Resume per skill (unavailable: agent does not support session resumption)');
     } finally {
       chalk.level = origLevel;
@@ -355,13 +358,13 @@ describe('promptCandidateSelection', () => {
 
     const result = await promptCandidateSelection([candidate]);
 
-    expect(vi.mocked(select)).toHaveBeenCalledWith({
+    expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
       message: 'Select a pipeline stage to advance (runner selection happens before execution):',
       choices: [
         { name: candidate.label, value: expectedKey },
         { name: 'Cancel (Go back)', value: 'cancel' }
       ]
-    });
+    }));
     expect(result).toEqual(candidate);
   });
 
@@ -428,7 +431,7 @@ describe('promptCandidateSelection', () => {
           { label: 'Run implement task', disabledReason: 'No provider configured', availability: 'unavailable' },
           'implement'
         );
-        expect(unavail.name).toContain('\u001b[2mRun implement task (unavailable: No provider configured)\u001b[22m');
+        expect(unavail.name).toBe('\u001b[2m\u001b[90mRun implement task (unavailable: No provider configured)\u001b[39m\u001b[22m');
         expect(unavail.value).toBe('implement');
         expect(unavail.disabled).toBe(true);
 
@@ -437,7 +440,7 @@ describe('promptCandidateSelection', () => {
           { label: 'Run audit loop', disabledReason: 'missing inputs: docs/dev/plan.md', availability: 'missing-inputs' },
           'audit'
         );
-        expect(missing.name).toContain('\u001b[93mRun audit loop (unavailable: missing inputs: docs/dev/plan.md)\u001b[39m');
+        expect(missing.name).toContain('\u001b[31mRun audit loop (unavailable: missing inputs: docs/dev/plan.md)\u001b[39m');
         expect(missing.value).toBe('audit');
         expect(missing.disabled).toBe(true);
       } finally {
@@ -495,10 +498,32 @@ describe('promptTaskDetailConfirmation', () => {
 
     expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
       choices: [
-        { name: 'Continue', value: 'run', disabled: true },
+        expect.objectContaining({
+          value: 'run',
+          disabled: true,
+          name: expect.stringContaining('Continue (unavailable: Missing project input: file: planPath=docs/dev/plan.md)'),
+        }),
         { name: 'Cancel — back to Tasks', value: 'back', disabled: false },
       ],
     }));
+  });
+});
+
+describe('themedSelect disabled-row styling', () => {
+  it('replaces the component disabled style with a plain cursor-column pad', async () => {
+    vi.mocked(select).mockResolvedValueOnce('a');
+
+    await promptTopLevelMenu([
+      { id: 'a', label: 'Start loop', group: 'start-loop', availability: 'available' },
+    ] as never);
+
+    const arg = vi.mocked(select).mock.calls.at(-1)![0] as {
+      theme?: { style?: { disabled?: (text: string) => string } };
+    };
+    expect(typeof arg.theme?.style?.disabled).toBe('function');
+    // Aligns with enabled rows (cursor column + separator space), adds no dim
+    // and no '- ' prefix: color/dim ownership stays with the theme tokens.
+    expect(arg.theme!.style!.disabled!('Start loop (disabled)')).toBe('  Start loop (disabled)');
   });
 });
 

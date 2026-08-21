@@ -282,8 +282,8 @@ describe('Exhaustive Surface Coverage & State-by-Surface ANSI Matrix (Major 5 / 
 
     const availabilityCases: Array<{ avail: AvailabilityState; colorCheck: (s: string) => boolean }> = [
       { avail: 'available', colorCheck: (s) => !s.includes('\u001b[31m') && !s.includes('\u001b[33m') },
-      { avail: 'unavailable', colorCheck: (s) => s.includes('\u001b[2m') },
-      { avail: 'missing-inputs', colorCheck: (s) => s.includes('\u001b[93m') },
+      { avail: 'unavailable', colorCheck: (s) => s.includes('\u001b[2m') && s.includes('\u001b[90m') }, // gray+dim, token-owned
+      { avail: 'missing-inputs', colorCheck: (s) => s.includes('\u001b[31m') },
     ];
 
     for (const { avail, colorCheck } of availabilityCases) {

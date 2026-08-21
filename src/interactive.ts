@@ -1,4 +1,4 @@
-import { select, input } from '@inquirer/prompts';
+import { select as inquirerSelect, input } from '@inquirer/prompts';
 import type { Config } from './config.js';
 import { isValidEffortForModel, isValidModelForAgent, resolveRunner, type ResolvedRunner } from './runner.js';
 import type { AgentRegistry } from './adapters/registry.js';
@@ -14,6 +14,27 @@ import type { AdHocPriorCandidate } from './adhoc-prior.js';
 
 const terminalEmphasis = (state: Parameters<typeof emphasisAccent>[0]) => emphasisAccent(state, 'terminal-accent');
 const terminalAvailability = (state: Parameters<typeof availabilityAccent>[0]) => availabilityAccent(state, 'terminal-accent');
+
+/**
+ * Single ownership point for how disabled menu rows are rendered. The
+ * component default wraps disabled rows in dim and prefixes '- ', which
+ * stacks with (and overrides) the availability tokens; replacing it with a
+ * plain two-space pad neutralizes both so theme.yaml fully owns the
+ * disabled-row look. The padding is required for alignment: enabled rows
+ * render as `${cursor} ${name}` but the component omits the cursor column
+ * for disabled rows, letting its default '- ' prefix occupy it. The
+ * component still appends its ' (disabled)' suffix, rendered plain.
+ */
+export function themedSelect(config: {
+  message: string;
+  choices: Array<{ name: string; value: string; disabled?: boolean | string }>;
+  default?: string;
+}): Promise<string> {
+  return inquirerSelect({
+    ...config,
+    theme: { style: { disabled: (text: string) => `  ${text}` } },
+  } as Parameters<typeof inquirerSelect>[0]) as Promise<string>;
+}
 
 export function formatMenuChoice<T extends { label: string; disabledReason?: string; recommended?: boolean; availability?: AvailabilityState }>(
   item: T,
@@ -39,7 +60,7 @@ export function formatMenuChoice<T extends { label: string; disabledReason?: str
 }
 
 export async function promptLoopSelect(loops: string[], defaultLoop: string): Promise<string> {
-  return select({
+  return themedSelect({
     message: 'Select a loop to run:',
     choices: loops.map(l => ({ name: l, value: l })),
     default: defaultLoop
@@ -53,7 +74,7 @@ export async function promptLoopSelect(loops: string[], defaultLoop: string): Pr
  * their reason. Returns the selected action id.
  */
 export async function promptTopLevelMenu(actions: TopMenuAction[]): Promise<string> {
-  return select({
+  return themedSelect({
     message: 'What would you like to do?',
     choices: actions.map(a => formatMenuChoice(a, a.id)),
   });
@@ -65,7 +86,7 @@ export async function promptTopLevelMenu(actions: TopMenuAction[]): Promise<stri
  */
 export async function promptLoopSubmenu(items: LoopSubmenuItem[]): Promise<string> {
   const recommended = items.find(i => i.recommended && !i.disabledReason);
-  return select({
+  return themedSelect({
     message: 'What would you like to do?',
     choices: items.map(i => formatMenuChoice(i, i.id)),
     default: recommended?.id ?? items.find(i => !i.disabledReason)?.id ?? items[0]!.id,
@@ -78,7 +99,7 @@ export async function promptLoopSubmenu(items: LoopSubmenuItem[]): Promise<strin
 export async function promptTaskMenu(tasks: TaskMenuItem[]): Promise<string> {
   const choices = tasks.map(t => formatMenuChoice(t, t.taskId));
   choices.push({ name: 'Back to main menu', value: 'back', disabled: false });
-  return select({
+  return themedSelect({
     message: 'Select a task to run:',
     choices,
   });
@@ -118,12 +139,22 @@ export async function promptTaskDetailConfirmation(detail: TaskDetailView): Prom
   }
   console.log('');
 
+  const missing = detail.missingInputs ?? [];
   const choices = [
-    { name: 'Continue', value: 'run', disabled: Boolean(detail.missingInputs && detail.missingInputs.length > 0) },
+    formatMenuChoice(
+      {
+        label: 'Continue',
+        availability: missing.length > 0 ? 'missing-inputs' : 'available',
+        disabledReason: missing.length > 0
+          ? `Missing project input${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}`
+          : undefined,
+      },
+      'run',
+    ),
     { name: 'Cancel — back to Tasks', value: 'back', disabled: false },
   ];
 
-  return select({
+  return themedSelect({
     message: `Confirm execution of task '${detail.taskId}':`,
     choices,
   }) as Promise<'run' | 'back'>;
@@ -133,7 +164,7 @@ export async function promptTaskDetailConfirmation(detail: TaskDetailView): Prom
  * Prompt for acknowledgement after displaying persistent project/pipeline state.
  */
 export async function promptStatusAcknowledgement(): Promise<void> {
-  await select({
+  await themedSelect({
     message: 'Press Enter to return to main menu',
     choices: [{ name: 'Back to main menu', value: 'back' }],
   });
@@ -156,7 +187,7 @@ export async function promptPipelineLaunchContext(
     ...contexts.map(ctx => ({ name: ctx.label, value: `pipeline:${ctx.pipelineId}:${ctx.stageId}` })),
   ];
 
-  const selected = await select({
+  const selected = await themedSelect({
     message: `'${bindingId}' is the first stage in one or more pipelines. How would you like to launch?`,
     choices,
     default: 'ad-hoc',
@@ -388,7 +419,7 @@ export async function promptRunners(
       const firstLabel = preselection.source === 'chain'
         ? `Use chain runner${sessionText}`
         : `Use configured runner (configured profile${preselection.fallbackReason ? ` — no compatible chain runner: ${preselection.fallbackReason}` : ''})`;
-      selection = await select({
+      selection = await themedSelect({
         message: `Choose runner configuration for skill '${skillId}':`,
         choices: [
           formatMenuChoice({ label: firstLabel, recommended: true }, 'use-default'),
@@ -408,7 +439,7 @@ export async function promptRunners(
     if (selection === 'effort-only') {
       const levels = effortChoices(resolved.agent, resolved.model, config, agentRegistry);
       const currentEffort = resolved.effort ?? 'default';
-      const pickedEffort = await select({
+      const pickedEffort = await themedSelect({
         message: `Select effort for agent '${resolved.agent}' (skill '${skillId}') — provider/model unchanged:`,
         choices: levels,
         default: currentEffort,
@@ -440,7 +471,7 @@ export async function promptRunners(
       }
     }
 
-    const agent = await select({
+    const agent = await themedSelect({
       message: `Select agent for skill '${skillId}':`,
       choices: selectableAgents.map(a => ({ name: a, value: a })),
       default: promptDefaultAgent
@@ -458,7 +489,7 @@ export async function promptRunners(
       defaultModelSelection = models[0] || 'custom';
     }
 
-    let selectedModel = await select({
+    let selectedModel = await themedSelect({
       message: `Select model for agent '${agent}' (skill '${skillId}'):`,
       choices: modelChoices,
       default: defaultModelSelection
@@ -479,7 +510,7 @@ export async function promptRunners(
     const adapter = agentRegistry.adapters.get(agent);
     let selectedEffort: string | undefined;
     const selectedEffortChoices = effortChoices(agent, selectedModel, config, agentRegistry);
-    const pickedEffort = await select({
+    const pickedEffort = await themedSelect({
       message: `Select effort for agent '${agent}' (skill '${skillId}'):`,
       choices: selectedEffortChoices,
       default: 'default',
@@ -501,7 +532,7 @@ export async function promptRunners(
         formatMenuChoice({ label: 'Resume per skill (reuse last session)' }, 'resume-per-skill')
       );
     }
-    const pickedSession = await select({
+    const pickedSession = await themedSelect({
       message: `Select session strategy for agent '${agent}' (skill '${skillId}'):`,
       choices: sessionChoices,
       default: 'fresh-per-invocation',
@@ -572,7 +603,7 @@ export async function promptCandidateSelection(
   });
   choices.push({ name: 'Cancel (Go back)', value: 'cancel' });
 
-  const picked = await select({
+  const picked = await themedSelect({
     message: 'Select a pipeline stage to advance (runner selection happens before execution):',
     choices,
   });
@@ -592,7 +623,7 @@ export async function promptIterationExtension(
   roundsUsed: number,
   providerCalls: number,
 ): Promise<ExtensionChoice> {
-  const result = await select({
+  const result = await themedSelect({
     message: `Iteration budget exhausted: Round ${roundsUsed}/${currentBudget} - provider calls ${providerCalls}. What would you like to do?`,
     choices: [
       { name: `Extend budget by 3 (new total: ${currentBudget + 3})`, value: 'extend-3' },
@@ -617,14 +648,14 @@ export async function promptIterationExtension(
 }
 
 export async function promptPostRunRecovery(): Promise<'menu' | 'exit'> {
-  return select({
+  return themedSelect({
     message: 'Run finished. What would you like to do next?',
     choices: [
       { name: 'Return to selection menu', value: 'menu' },
       { name: 'Exit', value: 'exit' },
     ],
     default: 'menu'
-  });
+  }) as Promise<'menu' | 'exit'>;
 }
 
 /** Operator authority for a qualified one-line decision correction. */
@@ -639,7 +670,7 @@ export async function promptDecisionCorrection(
     console.log(`  ${terminalEmphasis('supporting')(`Presentation-only suggestion: ${request.suggestedToken} (not selected automatically)`)}`);
   }
 
-  const selected = await select({
+  const selected = await themedSelect({
     message: 'Choose the exact canonical decision token, or archive unchanged and stop:',
     choices: [
       { name: `Use ${request.acceptedToken}`, value: request.acceptedToken },
@@ -709,7 +740,7 @@ export async function promptPriorAdoption(
     disabled: false,
   });
 
-  const picked = await select({
+  const picked = await themedSelect({
     message: `Select an accepted predecessor artifact to adopt for ad-hoc task '${taskId}':`,
     choices,
   });
