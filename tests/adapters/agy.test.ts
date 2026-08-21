@@ -77,7 +77,7 @@ function makeAdapter(
 }
 
 describe('agy adapter — command construction and capabilities', () => {
-  it('builds a fresh write with explicit workspace binding, unique capture, and no CLI timeout', () => {
+  it('builds a fresh write with explicit workspace binding, unique capture, and print-timeout', () => {
     captureDirectory = join(tmpdir(), `orc-agy-build-${Date.now()}`);
     mkdirSync(captureDirectory, { recursive: true });
     const adapter = createAgyAdapter({ captureDirectory });
@@ -92,13 +92,18 @@ describe('agy adapter — command construction and capabilities', () => {
       '--new-project',
     ]);
     expect(first.args).toContain('--dangerously-skip-permissions');
-    expect(first.args.some((arg) => /timeout/i.test(arg))).toBe(false);
+    expect(first.args).toContain('--print-timeout');
+    expect(first.args[first.args.indexOf('--print-timeout') + 1]).toBe('1h');
     expect(first.args).not.toContain('--project');
     expect(first.args).not.toContain('--conversation');
     expect(first.args[ first.args.indexOf('--log-file') + 1 ]).toMatch(/^\/.*agy-capture-.*\.log$/);
     expect(first.args[ first.args.indexOf('--log-file') + 1 ]).not.toBe(
       second.args[ second.args.indexOf('--log-file') + 1 ],
     );
+
+    const configuredAdapter = createAgyAdapter({ captureDirectory, defaultTimeoutMs: 600000 });
+    const configuredBuild = configuredAdapter.buildRun({ ...baseInput, effort: 'low' });
+    expect(configuredBuild.args[configuredBuild.args.indexOf('--print-timeout') + 1]).toBe('600000ms');
   });
 
   it('builds a resumed write with the exact project/conversation pair and no --continue', () => {

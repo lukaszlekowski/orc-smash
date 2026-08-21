@@ -194,8 +194,8 @@ describe('Adapter arguments builders', () => {
     ]);
     expect(build.args).toContain('--log-file');
     expect(build.args).toContain('--dangerously-skip-permissions');
-    // Timeout is harness-owned via spawnAgentProcess lifecycle options; no CLI flag.
-    expect(build.args.some((a) => /timeout/i.test(a))).toBe(false);
+    expect(build.args).toContain('--print-timeout');
+    expect(build.args[build.args.indexOf('--print-timeout') + 1]).toBe('1h');
     rmSync(captureDirectory, { recursive: true, force: true });
   });
 

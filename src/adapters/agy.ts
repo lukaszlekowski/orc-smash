@@ -193,6 +193,10 @@ export function createAgyAdapter(opts: CreateAgyAdapterOptions = {}): AgentAdapt
       args.push('--new-project');
     }
 
+    const timeoutMs = resolveAgyTimeoutMs({ defaultTimeoutMs });
+    const printTimeout = timeoutMs > 0 ? `${timeoutMs}ms` : '1h';
+    args.push('--print-timeout', printTimeout);
+
     args.push('--log-file', captureLogPath, '--dangerously-skip-permissions');
     return { command: 'agy', args };
   };
