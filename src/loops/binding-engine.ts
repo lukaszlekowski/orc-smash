@@ -770,9 +770,16 @@ function lookupAdoptedPriorArtifact(
   parentArtifactIdentity: string,
 ): PriorArtifactResolution {
   const globalSnapshot = scanGlobalSnapshot(projectRoot, manifest);
-  const predStep = globalSnapshot.steps.find(s => s.artifactIdentity === parentArtifactIdentity);
+  // Bind only classified, contract-valid predecessors: an unclassified or
+  // contract-invalid parent (tampered identity or failed body contract) must
+  // stop the run rather than feed the provider a discredited prior.
+  const predStep = globalSnapshot.steps.find(s =>
+    s.artifactIdentity === parentArtifactIdentity
+    && !s.unclassified
+    && s.contractValid !== false,
+  );
   if (!predStep) {
-    throw new Error(`adopted prior artifact '${parentArtifactIdentity}' not found.`);
+    throw new Error(`adopted prior artifact '${parentArtifactIdentity}' not found or unclassified.`);
   }
   const absPath = resolve(projectRoot, predStep.artifactPath);
   try {

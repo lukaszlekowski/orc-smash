@@ -336,7 +336,9 @@ async function resolveSmashRunSetup(
             }));
           } else {
             resolvedRunContext = mintRunContext({ mode: 'ad-hoc' });
-            const reason = candidates.length === 0 ? 'no candidate artifacts for predecessor binding' : 'all candidate artifacts drifted';
+            const reason = candidates.length === 0
+              ? 'no candidate artifacts for predecessor binding'
+              : 'no fresh candidate artifact (drifted or missing predecessor inputs)';
             options.output.emit(makeRunEvent({
               type: 'prior.unavailable',
               atMs: Date.now(),

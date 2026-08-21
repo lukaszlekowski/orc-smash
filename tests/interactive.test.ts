@@ -564,5 +564,31 @@ describe('promptPriorAdoption', () => {
     const result = await promptPriorAdoption('create-plan', [freshCandidate]);
     expect(result).toEqual({ kind: 'cancel' });
   });
+
+  it('renders a missing-input candidate as disabled with a distinct reason', async () => {
+    vi.mocked(select).mockResolvedValueOnce('__cancel__');
+
+    const missingInputCandidate: import('../src/adhoc-prior.js').AdHocPriorCandidate = {
+      ...freshCandidate,
+      artifactIdentity: 'id-missing-input-3',
+      freshness: 'missing-input',
+      targetFingerprintNow: null,
+    };
+
+    const result = await promptPriorAdoption('create-plan', [missingInputCandidate]);
+    expect(result).toEqual({ kind: 'cancel' });
+
+    expect(vi.mocked(select)).toHaveBeenCalledWith(expect.objectContaining({
+      choices: [
+        expect.objectContaining({
+          value: 'id-missing-input-3',
+          disabled: true,
+          name: expect.stringContaining('(unavailable: predecessor inputs missing)'),
+        }),
+        expect.objectContaining({ value: '__unbound__', disabled: false }),
+        expect.objectContaining({ value: '__cancel__', disabled: false }),
+      ],
+    }));
+  });
 });
 

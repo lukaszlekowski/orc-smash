@@ -56,6 +56,7 @@ describe('ad-hoc prior resolution (src/adhoc-prior.ts)', () => {
       secondaryResearch: {
         type: 'approval-loop',
         target: { path: 'docs/dev/secondary.md', kind: 'file' },
+        files: { extraPath: 'docs/dev/extra.md' },
         inputs: [],
         evaluate: {
           skill: 'research',
@@ -196,6 +197,33 @@ describe('ad-hoc prior resolution (src/adhoc-prior.ts)', () => {
     rmSync(join(testDir, 'docs/dev/research.md'));
     candidates = adHocPriorCandidates(testDir, manifest, 'create-plan');
     expect(candidates[0]!.freshness).toBe('drifted');
+  });
+
+  it('classifies a predecessor with missing declared file inputs as missing-input, not drifted', () => {
+    writeFileSync(join(testDir, 'docs/dev/secondary.md'), '# Secondary Research\n');
+    writeFileSync(join(testDir, 'docs/dev/extra.md'), '# Extra Dependency\n');
+    const fp = captureBindingResultFingerprint(testDir, manifest.loops.secondaryResearch.target, manifest.loops.secondaryResearch.files, manifest);
+
+    const meta = makeV1ArtifactMeta({
+      bindingId: 'secondaryResearch',
+      kind: 'evaluate',
+      step: 'evaluate',
+      version: 1,
+      chainId: 'chain-secondary',
+      chainMode: 'ad-hoc',
+      resultFingerprint: fp,
+    });
+    writeFileSync(join(testDir, 'docs/dev/secondary-audit-v1-fake.md'), buildFrontMatter(meta) + '# Audit\n\n## Decision\n\nAPPROVED\n');
+
+    // Remove a declared file input: the composite fingerprint can no longer be
+    // recomputed at all, which is a missing input, not target drift.
+    rmSync(join(testDir, 'docs/dev/extra.md'));
+
+    const candidates = adHocPriorCandidates(testDir, manifest, 'create-plan');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.freshness).toBe('missing-input');
+    expect(candidates[0]!.targetFingerprintNow).toBeNull();
+    expect(resolveDefaultPrior(candidates)).toBeNull();
   });
 
   it('resolveDefaultPrior returns the newest fresh candidate or null when all are drifted', () => {

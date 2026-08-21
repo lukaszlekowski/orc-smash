@@ -25,7 +25,7 @@ export interface AdHocPriorCandidate {
   mtime: number;
   resultFingerprint: string;
   targetFingerprintNow: string | null;
-  freshness: 'fresh' | 'drifted' | 'missing-fingerprint';
+  freshness: 'fresh' | 'drifted' | 'missing-fingerprint' | 'missing-input';
   predecessorPipelineId?: string;
   predecessorStageId?: string;
 }
@@ -164,7 +164,7 @@ export function adHocPriorCandidates(
       : manifest.tasks?.[artifact.bindingId];
 
     let targetFingerprintNow: string | null = null;
-    let freshness: 'fresh' | 'drifted' | 'missing-fingerprint' = 'missing-fingerprint';
+    let freshness: AdHocPriorCandidate['freshness'] = 'missing-fingerprint';
 
     if (predBindingDef) {
       try {
@@ -177,8 +177,11 @@ export function adHocPriorCandidates(
           freshness = 'drifted';
         }
       } catch {
+        // A declared predecessor input is missing: the composite fingerprint
+        // cannot be recomputed at all. Distinct from drift (recomputable but
+        // different) and from a missing stamped resultFingerprint.
         targetFingerprintNow = null;
-        freshness = 'drifted';
+        freshness = 'missing-input';
       }
     }
 

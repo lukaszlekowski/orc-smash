@@ -686,7 +686,9 @@ export async function promptPriorAdoption(
       ? ''
       : c.freshness === 'drifted'
         ? ' (unavailable: target modified since acceptance)'
-        : ' (unavailable: missing fingerprint)';
+        : c.freshness === 'missing-input'
+          ? ' (unavailable: predecessor inputs missing)'
+          : ' (unavailable: missing fingerprint)';
     const label = `Adopt ${c.artifactPath} (${verdict}, ${age}, ${source})${statusNote}`;
     return {
       name: c.freshness === 'fresh' ? label : terminalAvailability('unavailable')(label),

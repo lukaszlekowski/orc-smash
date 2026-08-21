@@ -963,5 +963,56 @@ describe('ad-hoc prior adoption for create-plan task', () => {
       runSpy.mockRestore();
     }
   });
+
+  it('7. adopted parent unclassified pre-run (tampered verdict) -> typed unknown stop in engine', async () => {
+    const config = loadConfig(project);
+    fakeAdapterState.verdicts = ['APPROVED'];
+
+    const research = await runLoop(
+      project,
+      'research',
+      config.manifest.loops.research,
+      config,
+      runners(),
+      options(),
+    );
+    expect(research.success).toBe(true);
+
+    const { adHocPriorCandidates } = await import('../../src/adhoc-prior.js');
+    const priorCandidate = adHocPriorCandidates(project, config.manifest, 'create-plan')[0]!;
+    expect(priorCandidate).toBeTruthy();
+
+    // Tamper the accepted verdict after the fact: the identity still verifies,
+    // but the decision contract no longer classifies, so the artifact is
+    // unclassified at scan time and must not be bindable.
+    const auditPath = resolve(project, priorCandidate.artifactPath);
+    writeFileSync(auditPath, readFileSync(auditPath, 'utf8').replace('APPROVED', 'TAMPERED'));
+
+    const runSpy = vi.spyOn(fakeAdapter, 'run');
+    try {
+      const createPlan = await runTask(
+        project,
+        'create-plan',
+        config.manifest.tasks?.['create-plan']!,
+        config,
+        runners(),
+        {
+          ...options(),
+          runContext: mintRunContext({
+            mode: 'ad-hoc',
+            parentArtifactIdentity: priorCandidate.artifactIdentity,
+            priorBinding: 'adopted-explicit',
+          }),
+        },
+      );
+
+      expect(createPlan.success).toBe(false);
+      expect(createPlan.outcome?.kind).toBe('unknown');
+      expect(createPlan.message).toContain(`adopted prior artifact '${priorCandidate.artifactIdentity}' not found or unclassified`);
+      expect(runSpy).not.toHaveBeenCalled();
+    } finally {
+      runSpy.mockRestore();
+    }
+  });
 });
 
