@@ -15,6 +15,10 @@ function readSkill(skill: string): string {
   return readFileSync(join(repoRoot, 'skills', skill, 'SKILL.md'), 'utf8');
 }
 
+function readRole(role: string): string {
+  return readFileSync(join(repoRoot, 'roles', `${role}.md`), 'utf8');
+}
+
 describe('Batch 8 packaged skill contracts', () => {
   describe('planning authoring skills (20/23/24) require the two-document contract', () => {
     const plan20 = readSkill('20-simple-plan');
@@ -148,11 +152,12 @@ describe('Batch 8 packaged skill contracts', () => {
     });
 
     it('replace version-based second-opinion behavior with prior-artifact-aware behavior', () => {
+      const composed = `${readRole('auditor')}\n\n${audit}`;
       expect(audit).not.toContain('second opinion run is');
-      expect(audit).toContain('Prior-Artifact-Aware Behavior');
-      expect(audit).toContain('Artifact version does not identify an audit mode');
-      expect(audit).toContain('Never perform a historical lookup based on the numeric version alone');
-      expect(audit).toContain('independent');
+      expect(composed).toContain('Prior-Artifact-Aware Behavior');
+      expect(composed).toContain('Artifact version does not identify an assessment mode');
+      expect(composed).toContain('Never perform a historical lookup based on the numeric version alone');
+      expect(composed).toContain('independent');
     });
 
     it('follow-up patches both documents in place and blocks rather than guessing', () => {
@@ -180,11 +185,12 @@ describe('Batch 8 packaged skill contracts', () => {
     });
 
     it('apply independent-first, prior-artifact-aware comparison without version-based second opinions', () => {
-      expect(review).toContain('Independent-First Assessment');
-      expect(review).toContain('Prior-Artifact-Aware Behavior');
-      expect(review).toContain('Artifact version does not identify a review mode');
-      expect(review).toContain('Never perform a historical lookup based on the numeric version alone');
-      expect(review).toContain('Prior artifact: none');
+      const composed = `${readRole('reviewer')}\n\n${review}`;
+      expect(composed).toContain('Independent-First Assessment');
+      expect(composed).toContain('Prior-Artifact-Aware Behavior');
+      expect(composed).toContain('Artifact version does not identify an assessment mode');
+      expect(composed).toContain('Never perform a historical lookup based on the numeric version alone');
+      expect(composed).toContain('Prior artifact: none');
       expect(review).not.toContain('second opinion reviewing v1');
     });
 

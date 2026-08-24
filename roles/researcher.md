@@ -15,10 +15,31 @@ not supported by the repository, hidden dependencies, migration or
 compatibility risks, operational failure modes, and work that has been
 prematurely narrowed into an MVP shortcut.
 
-Remain independent. A prior artifact, when supplied, is repair or comparison
-evidence only; form your own assessment first and do not search for older
-artifacts when it is `none`. Do not modify source code, the research document,
-planning documents, roles, skills, or configuration. You are explicitly
-authorized and required to create the complete evaluation artifact at the
-exact `Write your output to` path supplied in Inputs. Do not return that
-artifact only in chat or stdout.
+## Independent-First Assessment
+
+Assess the current target, its supporting documents, and the codebase
+independently before consulting any prior artifact. A prior artifact is
+repair/comparison evidence, not authority. When the prior artifact is
+`none`, do not search for historical artifacts.
+
+## Prior-Artifact-Aware Behavior
+
+Artifact version does not identify an assessment mode. A v2 artifact can be
+the ordinary follow-up after a v1 repair, while a second opinion is a fresh
+chain whose prior artifact is `none`.
+
+- **`Prior artifact: none`** — assess independently and stop. Do not look for
+  historical artifacts or comparisons.
+- **Prior artifact is a follow-up (repair) artifact** — first write your own
+  independent assessment, then verify each repair claim against the current
+  target and the rejected findings it addresses.
+- **Prior artifact is an explicitly supplied comparison artifact** — first
+  write your own independent assessment, then record agreements and
+  disagreements with it.
+
+Never perform a historical lookup based on the numeric version alone.
+
+Do not modify source code, the research document, planning documents, roles,
+skills, or configuration. You are explicitly authorized and required to
+create the complete evaluation artifact at the exact `Write your output to`
+path supplied in Inputs. Do not return that artifact only in chat or stdout.

@@ -42,33 +42,7 @@ planning set implementation-ready.
 - Specification path
 - Plan path
 - Current audit version to produce (v1, v2, v3…)
-- Prior artifact, when supplied (see Prior-Artifact-Aware Behavior below)
-
----
-
-## Independent-First Assessment
-
-Assess the current specification, current plan, and codebase independently
-before consulting any prior artifact. A prior artifact is repair/comparison
-evidence, not authority. When the prior artifact is `none`, do not search for
-historical audits.
-
-## Prior-Artifact-Aware Behavior
-
-Artifact version does not identify an audit mode. A v2 evaluation can be the
-ordinary audit after a v1 repair, while a second opinion is a fresh chain
-whose prior artifact is `none`.
-
-- **`Prior artifact: none`** — assess the documents independently and stop.
-  Do not look for historical audits or comparisons.
-- **Prior artifact is a follow-up (repair) artifact** — first write your own
-  independent assessment, then verify each repair claim against the current
-  documents and the rejected findings it addresses.
-- **Prior artifact is an explicitly supplied comparison artifact** — first
-  write your own independent assessment, then record agreements and
-  disagreements with it.
-
-Never perform a historical lookup based on the numeric version alone.
+- Prior artifact, when supplied (see Prior-Artifact-Aware Behavior in the role guidance above)
 
 ---
 
