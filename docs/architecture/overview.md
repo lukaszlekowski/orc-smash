@@ -56,7 +56,7 @@ The chooser rescans at each menu boundary. The selected snapshot supplies any
 eligible pipeline continuations to the confirmation screen, where they are
 shown as advisory predecessor/successor context; the task remains runnable and
 does not consume or mutate pipeline state. The packaged `commit` task reuses
-this path and invokes the `50-simple-commit` skill through the selected
+this path and invokes the `commit` skill through the selected
 provider. Git staging and commit creation belong to that agent skill, not to
 the harness. For non-first-stage tasks that declare pipeline predecessors (e.g. `create-plan`),
 ad-hoc execution supports adopting an eligible fresh predecessor artifact via interactive prompt,

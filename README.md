@@ -181,7 +181,7 @@ loops:                       # an approval loop = evaluate (+ optional repair)
 
 tasks:                       # a one-off, operator-controlled binding
   implement:
-    skill: 30-simple-implement
+    skill: implement
     target: { path: ".", kind: worktree }
     files: { specPath: docs/dev/spec.md, planPath: docs/dev/plan.md }
     output:

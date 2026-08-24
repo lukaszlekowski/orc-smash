@@ -34,10 +34,10 @@ function runners(): Record<string, { agent: string; model: string }> {
   return {
     'research-audit': { agent: 'fake', model: 'fake-model' },
     'research-follow-up': { agent: 'fake', model: 'fake-model' },
-    '23-simple-create-plan': { agent: 'fake', model: 'fake-model' },
+    'create-plan': { agent: 'fake', model: 'fake-model' },
     'plan-audit': { agent: 'fake', model: 'fake-model' },
     'plan-follow-up': { agent: 'fake', model: 'fake-model' },
-    '30-simple-implement': { agent: 'fake', model: 'fake-model' },
+    'implement': { agent: 'fake', model: 'fake-model' },
     review: { agent: 'fake', model: 'fake-model' },
     'review-follow-up': { agent: 'fake', model: 'fake-model' },
   };

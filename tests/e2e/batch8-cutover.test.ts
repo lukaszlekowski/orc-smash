@@ -20,11 +20,11 @@ const output = createMockOutput();
 
 function runners(): Record<string, { agent: string; model: string }> {
   return {
-    '23-simple-create-plan': { agent: 'fake', model: 'fake-model' },
-    '24-simple-create-spec': { agent: 'fake', model: 'fake-model' },
+    'create-plan': { agent: 'fake', model: 'fake-model' },
+    'create-spec': { agent: 'fake', model: 'fake-model' },
     'plan-audit': { agent: 'fake', model: 'fake-model' },
     'plan-follow-up': { agent: 'fake', model: 'fake-model' },
-    '30-simple-implement': { agent: 'fake', model: 'fake-model' },
+    'implement': { agent: 'fake', model: 'fake-model' },
   };
 }
 
@@ -40,7 +40,7 @@ function options() {
 /** The pre-Batch-8 implement binding shape: planPath only, no specPath. */
 function legacyImplementBinding(): TaskBinding {
   return {
-    skill: '30-simple-implement',
+    skill: 'implement',
     target: { path: '.', kind: 'worktree' },
     files: { planPath: 'docs/dev/plan.md' },
     inputs: [
@@ -283,7 +283,7 @@ describe('Batch 8 cutover: blocked first slice, create-spec migration, joint app
     );
     expect(secondImpl.success).toBe(true);
     expect(secondImpl.outcome?.kind).toBe('completed');
-    const secondPrompt = [...capturedPrompts].reverse().find(prompt => prompt.includes('# Skill: 30-simple-implement'))!;
+    const secondPrompt = [...capturedPrompts].reverse().find(prompt => prompt.includes('# Skill: implement'))!;
     expect(secondPrompt).toContain(`Specification document: ${resolve(project, 'docs/dev/spec.md')}`);
     expect(secondPrompt).toContain(`Implementation plan document: ${resolve(project, 'docs/dev/plan.md')}`);
     const secondStep = scanGlobalSnapshot(project, config.manifest).steps
@@ -296,11 +296,11 @@ describe('Batch 8 cutover: blocked first slice, create-spec migration, joint app
 
     // Zero nested provider runs: exactly one call per harness invocation.
     expect(providerCalls).toEqual([
-      '30-simple-implement', // first blocked slice
-      '24-simple-create-spec', // migration
-      '24-simple-create-spec', // idempotent evidence rerun
+      'implement', // first blocked slice
+      'create-spec', // migration
+      'create-spec', // idempotent evidence rerun
       'plan-audit', // joint approval
-      '30-simple-implement', // second slice
+      'implement', // second slice
     ]);
   }, 20_000);
 

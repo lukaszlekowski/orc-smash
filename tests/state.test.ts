@@ -69,7 +69,7 @@ describe('generic artifact index', () => {
         bindingId: 'implement',
         bindingKind: 'task',
         kind: 'task',
-        skill: '30-simple-implement',
+        skill: 'implement',
         role: 'implementer',
         target: '.',
       }),

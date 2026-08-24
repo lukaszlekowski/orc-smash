@@ -24,11 +24,11 @@ skills:
     file: skills/42-simple-review-follow-up/SKILL.md
     role: implementer
     runnerProfile: follow-up
-  30-simple-implement:
+  implement:
     file: skills/30-simple-implement/SKILL.md
     role: implementer
     runnerProfile: implement
-  50-simple-commit:
+  commit:
     file: skills/50-simple-commit/SKILL.md
     role: committer
     runnerProfile: implement
@@ -40,11 +40,11 @@ skills:
     file: skills/11-simple-research-follow-up/SKILL.md
     role: planner
     runnerProfile: follow-up
-  23-simple-create-plan:
+  create-plan:
     file: skills/23-simple-create-plan/SKILL.md
     role: planner
     runnerProfile: follow-up
-  24-simple-create-spec:
+  create-spec:
     file: skills/24-simple-create-spec/SKILL.md
     role: planner
     runnerProfile: follow-up
@@ -118,7 +118,7 @@ loops:
 
 tasks:
   create-plan:
-    skill: 23-simple-create-plan
+    skill: create-plan
     target: { path: ".", kind: worktree }
     files:
       researchPath: docs/dev/research.md
@@ -132,7 +132,7 @@ tasks:
       pattern: "docs/dev/create-plan-v{version}-{provider}.md"
       contract: completion-artifact
   create-spec:
-    skill: 24-simple-create-spec
+    skill: create-spec
     target: { path: ".", kind: worktree }
     files:
       planPath: docs/dev/plan.md
@@ -144,7 +144,7 @@ tasks:
       pattern: "docs/dev/create-spec-v{version}-{provider}.md"
       contract: completion-artifact
   implement:
-    skill: 30-simple-implement
+    skill: implement
     target: { path: ".", kind: worktree }
     files:
       specPath: docs/dev/spec.md
@@ -160,7 +160,7 @@ tasks:
       contract: required-artifact
       validator: implement-ledger
   commit:
-    skill: 50-simple-commit
+    skill: commit
     target: { path: ".", kind: worktree }
     inputs:
       - { source: target }

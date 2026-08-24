@@ -457,7 +457,7 @@ describe('promptTaskDetailConfirmation', () => {
 
     const result = await promptTaskDetailConfirmation({
       taskId: 'commit',
-      skillId: '50-simple-commit',
+      skillId: 'commit',
       role: 'committer',
       skillPath: 'skills/50-simple-commit/SKILL.md',
       targetPath: '.',
@@ -487,7 +487,7 @@ describe('promptTaskDetailConfirmation', () => {
 
     await promptTaskDetailConfirmation({
       taskId: 'commit',
-      skillId: '50-simple-commit',
+      skillId: 'commit',
       role: 'committer',
       skillPath: 'skills/50-simple-commit/SKILL.md',
       targetPath: '.',

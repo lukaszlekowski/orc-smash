@@ -58,7 +58,7 @@ describe('generic one-off task execution', () => {
       'implement',
       task,
       config,
-      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { 'implement': { agent: 'fake', model: 'fake-model' } },
       taskOptions(config),
     );
 
@@ -93,7 +93,7 @@ describe('generic one-off task execution', () => {
       'implement',
       task,
       config,
-      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { 'implement': { agent: 'fake', model: 'fake-model' } },
       taskOptions(config),
     );
 
@@ -130,7 +130,7 @@ describe('generic one-off task execution', () => {
       'implement',
       task,
       config,
-      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { 'implement': { agent: 'fake', model: 'fake-model' } },
       { ...taskOptions(config), output: blockedOutput },
     );
 
@@ -190,7 +190,7 @@ describe('generic one-off task execution', () => {
       'implement',
       task,
       config,
-      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { 'implement': { agent: 'fake', model: 'fake-model' } },
       taskOptions(config),
     );
     expect(result.success).toBe(true);
@@ -226,7 +226,7 @@ describe('generic one-off task execution', () => {
       'implement',
       task,
       config,
-      { '30-simple-implement': { agent: 'fake', model: 'fake-model' } },
+      { 'implement': { agent: 'fake', model: 'fake-model' } },
       { ...taskOptions(config), output: capturedOutput },
     );
 
@@ -511,7 +511,7 @@ describe('generic one-off task execution', () => {
       chainMode: 'ad-hoc',
       kind: 'task',
       version: 1,
-      skill: '30-simple-implement',
+      skill: 'implement',
       agent: 'codex',
       model: 'codex-gpt-5',
       effort: 'high',

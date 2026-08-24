@@ -72,7 +72,7 @@ describe('generic engine integration', () => {
   it('runs the configured implementation task once', async () => {
     const config = loadConfig(project);
     const result = await runTask(project, 'implement', config.manifest.tasks!.implement!, config, {
-      '30-simple-implement': { agent: 'fake', model: 'fake-model' },
+      'implement': { agent: 'fake', model: 'fake-model' },
     }, {
       maxIterations: 4,
       registry: createTestAdapterRegistry(),

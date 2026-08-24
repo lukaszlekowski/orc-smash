@@ -8,7 +8,7 @@ const skill = readFileSync(resolve(repoRoot, 'skills/50-simple-commit/SKILL.md')
 const normalizedRole = role.toLowerCase().replace(/\s+/g, ' ');
 const normalizedSkill = skill.toLowerCase().replace(/\s+/g, ' ');
 
-describe('50-simple-commit safety contract', () => {
+describe('commit skill safety contract', () => {
   it('defines the committer role as packaging existing operator changes', () => {
     expect(role).toContain('one responsibility');
     expect(role).toContain('existing working-tree changes');

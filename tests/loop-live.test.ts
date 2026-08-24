@@ -324,7 +324,7 @@ describe('loop-level live region — implement loop (v9 audit Major #2 closure)'
     fakeAdapterState.delayMs = 50;
 
     await runTask(tempWorkspace, 'implement', config.manifest.tasks!.implement!, config, {
-      '30-simple-implement': { agent: 'fake', model: 'fake-model' }
+      'implement': { agent: 'fake', model: 'fake-model' }
     }, {
       maxIterations: 1,
       registry,

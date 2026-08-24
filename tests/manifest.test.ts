@@ -18,12 +18,12 @@ describe('v1 manifest contract', () => {
     expect(manifest.tasks?.commit).toBeDefined();
     expect(manifest.tasks?.['create-plan']).toBeDefined();
     expect(manifest.tasks?.['create-spec']).toBeDefined();
-    expect(manifest.skills['24-simple-create-spec']).toEqual({
+    expect(manifest.skills['create-spec']).toEqual({
       file: 'skills/24-simple-create-spec/SKILL.md',
       role: 'planner',
       runnerProfile: 'follow-up',
     });
-    expect(manifest.skills['50-simple-commit']).toEqual({
+    expect(manifest.skills['commit']).toEqual({
       file: 'skills/50-simple-commit/SKILL.md',
       role: 'committer',
       runnerProfile: 'implement',

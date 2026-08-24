@@ -196,9 +196,9 @@ describe('Prompt Composer', () => {
 
     // Implementation task: specPath then planPath, in declared order.
     const implementPrompt = composePrompt(
-      '30-simple-implement',
+      'implement',
       config.manifest.roles.implementer,
-      config.manifest.skills['30-simple-implement']!.file,
+      config.manifest.skills['implement']!.file,
       config.manifest.tasks.implement.inputs,
       {
         projectRoot: tempDir,

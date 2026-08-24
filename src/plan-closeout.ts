@@ -12,7 +12,7 @@ export interface CloseoutSignal {
    * entry but NEVER force `status: 'blocked'`. Per the v5-audit M1 fix,
    * the only `blocked` trigger is low confidence — a documented deviation
    * is a normal post-implementation artifact, not a workflow-terminating
-   * failure signal (the `30-simple-implement` skill only mandates
+   * failure signal (the `implement` skill only mandates
    * `blocked` on `< 0.95` confidence; minor documented deviations are
    * not declared terminal by the skill).
    */
@@ -22,7 +22,7 @@ export interface CloseoutSignal {
 /**
  * Below this confidence value the closeout status is 'blocked' rather than
  * 'done'. Exported so the contract test in Step 12 can pin the threshold.
- * `30-simple-implement` requires the implementer to "State overall
+ * `implement` requires the implementer to "State overall
  * confidence that the implementation matches the spec" — and requires the
  * implementer to STOP and mark the run blocked if that value is below
  * 0.95 (Pre-Implementation Check: "If confidence < 0.95, stop and list the

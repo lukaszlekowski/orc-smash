@@ -7,9 +7,9 @@ describe('F7 top-level menu', () => {
   const manifestWithEverything: V1Manifest = {
     schemaVersion: 1,
     roles: { implementer: 'roles/impl.md' },
-    skills: { '30-simple-implement': { file: 'skills/impl.md', role: 'implementer', runnerProfile: 'default' } },
+    skills: { 'implement': { file: 'skills/impl.md', role: 'implementer', runnerProfile: 'default' } },
     loops: { plan: {} as any, review: {} as any },
-    tasks: { implement: { skill: '30-simple-implement', target: { path: '.', kind: 'file' }, inputs: [], output: { pattern: 'out.md', contract: 'required-artifact' } } },
+    tasks: { implement: { skill: 'implement', target: { path: '.', kind: 'file' }, inputs: [], output: { pattern: 'out.md', contract: 'required-artifact' } } },
     pipelines: { default: { stages: [{ stageId: 'plan', loop: 'plan' }] } },
   };
 
@@ -47,7 +47,7 @@ describe('F7 top-level menu', () => {
     const taskItems = buildTaskMenu(manifestWithEverything);
     expect(taskItems).toHaveLength(1);
     expect(taskItems[0]!.taskId).toBe('implement');
-    expect(taskItems[0]!.skillId).toBe('30-simple-implement');
+    expect(taskItems[0]!.skillId).toBe('implement');
     expect(taskItems[0]!.role).toBe('implementer');
   });
 

@@ -59,7 +59,7 @@ function scriptedAdapter(decisions: string[] = ['APPROVED']): AgentAdapter {
         const outputPath = resolve(input.cwd, match[1].trim());
         mkdirSync(join(input.cwd, 'docs/dev'), { recursive: true });
         if (input.kind === 'task') {
-          if (input.prompt.includes('# Skill: 50-simple-commit') || input.prompt.includes('# Skill: 23-simple-create-plan') || input.prompt.includes('# Skill: 24-simple-create-spec')) {
+          if (input.prompt.includes('# Skill: commit') || input.prompt.includes('# Skill: create-plan') || input.prompt.includes('# Skill: create-spec')) {
             writeFileSync(outputPath, '# Task Evidence\n\n## Outcome\n\nCOMPLETED\n');
           } else {
             writeFileSync(outputPath,
@@ -1145,7 +1145,7 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptCandidateSelection).mockImplementationOnce((candidates) => Promise.resolve(candidates[0] || null));
       vi.mocked(promptRunners).mockImplementationOnce(async () => {
         writeFileSync(planPath, '# Plan changed after confirmation\n');
-        return { '30-simple-implement': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' } };
+        return { 'implement': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' } };
       });
       vi.mocked(promptMaxIterations).mockResolvedValueOnce(4);
       vi.mocked(promptPostRunRecovery).mockResolvedValueOnce('exit');
@@ -1712,7 +1712,7 @@ describe('generic smash dispatch', () => {
       vi.mocked(promptTaskMenu).mockResolvedValueOnce('create-plan');
       vi.mocked(promptTaskDetailConfirmation).mockResolvedValueOnce('run');
       vi.mocked(promptRunners).mockResolvedValueOnce({
-        '23-simple-create-plan': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
+        'create-plan': { agent: 'opencode', model: MODEL, agentSource: 'interactive', modelSource: 'interactive' },
       });
       vi.mocked(promptPriorAdoption).mockImplementationOnce(async () => {
         // Drift the target between selection and spawn!

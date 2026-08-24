@@ -60,7 +60,7 @@ describe('generic status snapshot', () => {
         bindingId: 'implement',
         bindingKind: 'task',
         kind: 'task',
-        skill: '30-simple-implement',
+        skill: 'implement',
         role: 'implementer',
         target: '.',
         inputFingerprint: 'in-1',

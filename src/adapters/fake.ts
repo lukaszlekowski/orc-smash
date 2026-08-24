@@ -250,7 +250,7 @@ function fakeTelemetry(): Pick<RunResult, 'effectiveModel' | 'effectiveEffort'> 
 }
 
 /**
- * Simulate the `23-simple-create-plan` / `24-simple-create-spec` protocol for
+ * Simulate the `create-plan` / `create-spec` protocol for
  * deterministic tests. Returns 'blocked' | 'completed' | 'interrupted'.
  */
 export function simulatePlanningSetTask(
@@ -532,7 +532,7 @@ export const fakeAdapter: AgentAdapter = {
     const isTask = input.kind === 'task';
     // Existing implementation-task compatibility remains intentionally scoped
     // to the test adapter; the new configurable seams below are generic.
-    const isImplement = input.skillId === '30-simple-implement' || /impl-v\d+-/.test(relativePath);
+    const isImplement = input.skillId === 'implement' || /impl-v\d+-/.test(relativePath);
 
 
     const emitStart = () => {
@@ -623,13 +623,13 @@ export const fakeAdapter: AgentAdapter = {
           ...fakeTelemetry(),
         };
       }
-    const isPlanningSet = input.skillId === '23-simple-create-plan' || input.skillId === '24-simple-create-spec';
+    const isPlanningSet = input.skillId === 'create-plan' || input.skillId === 'create-spec';
       if (isTask) {
         if (relativePath && fakeAdapterState.writeVerdictFile) {
           if (isPlanningSet && fakeAdapterState.taskOutcome !== 'BLOCKED' && relativePath) {
             const outcome = simulatePlanningSetTask(
               input.cwd,
-              input.skillId === '23-simple-create-plan' ? 'create-plan' : 'create-spec',
+              input.skillId === 'create-plan' ? 'create-plan' : 'create-spec',
               input.prompt,
               relativePath,
             );
@@ -739,11 +739,11 @@ export const fakeAdapter: AgentAdapter = {
 
     if (isTask) {
       if (relativePath && fakeAdapterState.writeVerdictFile) {
-        const isPlanningSet = input.skillId === '23-simple-create-plan' || input.skillId === '24-simple-create-spec';
+        const isPlanningSet = input.skillId === 'create-plan' || input.skillId === 'create-spec';
         if (isPlanningSet && fakeAdapterState.taskOutcome !== 'BLOCKED' && relativePath) {
           const outcome = simulatePlanningSetTask(
             input.cwd,
-            input.skillId === '23-simple-create-plan' ? 'create-plan' : 'create-spec',
+            input.skillId === 'create-plan' ? 'create-plan' : 'create-spec',
             input.prompt,
             relativePath,
           );

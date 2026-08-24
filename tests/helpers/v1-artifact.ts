@@ -46,7 +46,7 @@ export function makeV1ArtifactMeta(
 
   const partialMeta = {
     loop: bindingId,
-    skill: overrides.skill ?? (kind === 'task' ? '30-simple-implement' : 'plan-audit'),
+    skill: overrides.skill ?? (kind === 'task' ? 'implement' : 'plan-audit'),
     role: overrides.role ?? (kind === 'task' ? 'implementer' : 'auditor'),
     version,
     agent,
