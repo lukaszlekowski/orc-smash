@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-25
+
+### Added
+- Ad-hoc non-first-stage tasks can adopt an eligible, fresh predecessor
+  artifact: choose it interactively, accept the newest eligible default in
+  non-interactive mode, or provide it explicitly with `--prior <path>`.
+- Added current Z.ai models to the provider model catalogue.
+
+### Changed
+- Renamed packaged numeric skill keys to readable plain IDs such as
+  `create-plan`, `create-spec`, `implement`, and `commit`.
+- Consolidated prior-artifact guidance in the assessment roles and refined
+  status-panel semantic theme tokens.
+
+### Fixed
+- Fail closed before provider invocation when an adopted prior artifact is
+  tampered, structurally ineligible, stale, or missing a declared input;
+  diagnostics distinguish missing input from target drift.
+- Configure AGY CLI print timeout so long-running invocations remain visible.
+- Apply disabled menu-row styling through the semantic theme configuration.
+
 ## [1.0.0] - 2026-08-02
 
 ### Added
