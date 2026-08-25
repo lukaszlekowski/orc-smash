@@ -6,7 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.0.1] - 2026-08-25
+## [1.1.1] - 2026-08-25
+
+### Fixed
+- Align GitHub Actions pnpm setup with the package-manager declaration and
+  upgrade the action runtime to Node 24.
+
+## [1.1.0] - 2026-08-25
 
 ### Added
 - Ad-hoc non-first-stage tasks can adopt an eligible, fresh predecessor
