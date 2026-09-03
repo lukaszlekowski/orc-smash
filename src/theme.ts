@@ -25,6 +25,7 @@ export const THEME_TOKENS = [
   'availability.available', 'availability.unavailable', 'availability.missing-inputs',
   'emphasis.identity', 'emphasis.binding-identity', 'emphasis.supporting',
   'emphasis.placeholder', 'emphasis.recommended', 'emphasis.warning',
+  'emphasis.target',
   'unclassified.attention', 'unclassified.idle',
   'stale.stale', 'stale.fresh',
   'panel.column_header', 'panel.dim_row',

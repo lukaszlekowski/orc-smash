@@ -14,6 +14,14 @@ const terminalResult = (state: Parameters<typeof resultAccent>[0]) => resultAcce
 const terminalUnclassified = (count: number) => unclassifiedAccent(count, 'terminal-accent');
 const terminalStale = (isStale: boolean) => staleAccent(isStale, 'terminal-accent');
 
+/** Target tag for a binding header: green path when found, red when missing. */
+const targetTag = (binding: { targetPath: string; targetStatus?: 'available' | 'missing' }): string => {
+  if (!binding.targetPath) return '';
+  return binding.targetStatus === 'missing'
+    ? ` (${terminalAvailability('missing-inputs')(`target: ${binding.targetPath} - missing`)})`
+    : ` (target: ${terminalEmphasis('target')(binding.targetPath)})`;
+};
+
 /** Render the compact startup project snapshot for the interactive header. */
 export function renderCompactSnapshot(view: ProjectSnapshotView): string {
   const pipelinesStr = view.pipelines.length > 0
@@ -31,8 +39,7 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
   ];
 
   for (const b of view.bindings) {
-    const targetInfo = b.targetPath ? ` (target: ${b.targetPath})` : '';
-    lines.push(`  [${b.bindingKind}] ${terminalEmphasis('binding-identity')(b.bindingId)}${targetInfo}`);
+    lines.push(`  [${b.bindingKind}] ${terminalEmphasis('binding-identity')(b.bindingId)}${targetTag(b)}`);
 
     if (b.bindingKind === 'loop') {
       if (b.latestEvaluate) {
@@ -42,8 +49,6 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
         const filename = s.artifactPath.split('/').pop();
         const meta = terminalEmphasis('supporting')(`[${s.agent} / ${s.model}, effort: ${b.latestEvaluate.effortStr}, session: ${b.latestEvaluate.sessionStr}]`);
         lines.push(`    evaluate: ${filename} (${dec}) ${meta}`);
-      } else {
-        lines.push(`    evaluate: ${terminalEmphasis('placeholder')('(none)')}`);
       }
       if (b.latestRepair) {
         const s = b.latestRepair.step;
@@ -52,8 +57,6 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
         const filename = s.artifactPath.split('/').pop();
         const meta = terminalEmphasis('supporting')(`[${s.agent} / ${s.model}, effort: ${b.latestRepair.effortStr}, session: ${b.latestRepair.sessionStr}]`);
         lines.push(`    repair: ${filename} (${out}) ${meta}`);
-      } else {
-        lines.push(`    repair: ${terminalEmphasis('placeholder')('(none)')}`);
       }
     } else {
       if (b.latestTask) {
@@ -63,8 +66,6 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
         const filename = s.artifactPath.split('/').pop();
         const meta = terminalEmphasis('supporting')(`[${s.agent} / ${s.model}, effort: ${b.latestTask.effortStr}, session: ${b.latestTask.sessionStr}]`);
         lines.push(`    task: ${filename} (${dec}) ${meta}`);
-      } else {
-        lines.push(`    task: ${terminalEmphasis('placeholder')('(none)')}`);
       }
     }
 
@@ -72,8 +73,10 @@ export function renderCompactSnapshot(view: ProjectSnapshotView): string {
       lines.push(`    ${terminalAvailability('missing-inputs')(`Missing inputs: ${b.missingInputs.join(', ')}`)}`);
     }
 
-    const unclassStr = terminalUnclassified(b.unclassifiedCount)(`unclassified count: ${b.unclassifiedCount}`);
-    lines.push(`    ${unclassStr}`);
+    if (b.unclassifiedCount > 0) {
+      const unclassStr = terminalUnclassified(b.unclassifiedCount)(`unclassified count: ${b.unclassifiedCount}`);
+      lines.push(`    ${unclassStr}`);
+    }
   }
 
   return lines.join('\n');
@@ -143,7 +146,11 @@ export function renderDetailedSnapshot(view: ProjectSnapshotView, opts?: { showF
 
   lines.push('Bindings:');
   for (const binding of view.bindings) {
-    const targetInfo = binding.targetPath ? ` -> ${binding.targetPath}` : '';
+    const targetInfo = binding.targetPath
+      ? binding.targetStatus === 'missing'
+        ? ` -> ${terminalAvailability('missing-inputs')(`${binding.targetPath} - missing`)}`
+        : ` -> ${terminalEmphasis('target')(binding.targetPath)}`
+      : '';
     lines.push(`  [${binding.bindingKind}] ${terminalEmphasis('binding-identity')(binding.bindingId)}${targetInfo}`);
 
     if (binding.missingInputs.length > 0) {

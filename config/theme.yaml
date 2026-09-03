@@ -92,6 +92,10 @@ defaults:
   emphasis.placeholder: { fg: gray }
   emphasis.recommended: { fg: green }
   emphasis.warning: { fg: orange }
+  #      target           the binding target path in snapshot binding rows;
+  #                       green when the file exists. A missing target renders
+  #                       via availability.missing-inputs instead.
+  emphasis.target: { fg: green }
 
   # ---- Unclassified artifact counts ("Unclassified: N file(s)" in the
   #      snapshot). attention when N > 0 (something failed provenance or

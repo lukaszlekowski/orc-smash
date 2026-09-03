@@ -19,6 +19,7 @@ export interface BindingSnapshotView {
   bindingId: string;
   bindingKind: 'loop' | 'task';
   targetPath: string;
+  targetStatus: 'available' | 'missing';
   latestEvaluate?: LatestStepSummary;
   latestRepair?: LatestStepSummary;
   latestTask?: LatestStepSummary;
@@ -416,6 +417,7 @@ export function buildProjectSnapshotView(
       bindingId: loopId,
       bindingKind: 'loop',
       targetPath: loopSpec.target.path,
+      targetStatus: snapshot.inputAvailability.get(loopId)?.target ?? 'available',
       latestEvaluate: latestEval ? summarizeStep(latestEval) : undefined,
       latestRepair: latestRep ? summarizeStep(latestRep) : undefined,
       latestSteps: validSteps,
@@ -440,6 +442,7 @@ export function buildProjectSnapshotView(
       bindingId: taskId,
       bindingKind: 'task',
       targetPath: taskSpec.target.path,
+      targetStatus: snapshot.inputAvailability.get(taskId)?.target ?? 'available',
       latestTask: latestT ? summarizeStep(latestT) : undefined,
       latestSteps: validSteps,
       missingInputs: missing,

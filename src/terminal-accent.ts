@@ -70,7 +70,8 @@ export type EmphasisState =
   | 'supporting'
   | 'placeholder'
   | 'recommended'
-  | 'warning';
+  | 'warning'
+  | 'target';
 
 export function toResultState(value?: string | null): ResultState {
   if (!value) return 'valid';
