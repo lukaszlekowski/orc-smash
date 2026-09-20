@@ -9,6 +9,7 @@ describe('provider catalogue configuration', () => {
   it('loads only the committed package registry', () => {
     expect(loadModelRegistry('/a/project')).toEqual(DEFAULT_REGISTRY);
     expect(DEFAULT_REGISTRY.providers.codex.models).toEqual([
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna'
@@ -57,11 +58,12 @@ describe('provider catalogue configuration', () => {
   });
 
   it('loads the committed provider defaults', () => {
-    expect(DEFAULT_REGISTRY.providers.claude.defaultModel).toBe('glm-5.3[1m]');
+    expect(DEFAULT_REGISTRY.providers.claude.defaultModel).toBe('glm-5.3-flash');
     expect(DEFAULT_REGISTRY.providers.codex.defaultModel).toBe('gpt-5.6-luna');
     expect(DEFAULT_REGISTRY.providers.opencode.defaultModel).toBe('opencode-go/deepseek-v4-flash');
-    expect(DEFAULT_REGISTRY.providers.agy.defaultModel).toBe('gemini-3.7-flash');
+    expect(DEFAULT_REGISTRY.providers.agy.defaultModel).toBe('gemini-3.8-flash');
     expect(DEFAULT_REGISTRY.providers.agy.models).toEqual([
+      'gemini-3.8-flash',
       'gemini-3.7-flash',
       'gemini-3.6-flash',
       'gemini-3.5-flash',
@@ -71,6 +73,7 @@ describe('provider catalogue configuration', () => {
       'gpt-oss-120b-medium',
     ]);
     expect(DEFAULT_REGISTRY.providers.agy.modelEfforts).toEqual({
+      'gemini-3.8-flash': ['low', 'medium', 'high'],
       'gemini-3.7-flash': ['low', 'medium', 'high'],
       'gemini-3.6-flash': ['low', 'medium', 'high'],
       'gemini-3.5-flash': ['low', 'medium', 'high'],
