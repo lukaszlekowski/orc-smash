@@ -40,7 +40,11 @@ describe('Project Snapshot View and Renderer (Slice 3)', () => {
     expect(compactText).toContain('Suggested loop: research');
     expect(compactText).toContain('Bindings:');
     expect(compactText).toContain('[loop] plan');
-    expect(compactText).toContain('evaluate: (none)');
+    // Empty phases and zero unclassified counts are auto-hidden in the compact view.
+    expect(compactText).not.toContain('evaluate: (none)');
+    expect(compactText).not.toContain('repair: (none)');
+    expect(compactText).not.toContain('task: (none)');
+    expect(compactText).not.toContain('unclassified count:');
 
     const detailedText = renderDetailedSnapshot(view);
     expect(detailedText).toContain('Project Snapshot');
@@ -96,7 +100,7 @@ describe('Project Snapshot View and Renderer (Slice 3)', () => {
     const compactText = renderCompactSnapshot(view);
     expect(compactText).toContain('evaluate: plan-audit-v1-opencode.md (retry) [opencode / opencode-model, effort: requested: high, session: fresh-per-invocation / fresh (sess-eval-123)]');
     expect(compactText).toContain('repair: plan-followup-v1-codex.md (completed) [codex / codex-model, effort: requested: provider default, session: resume-per-skill / resumed (sess-rep-456)]');
-    expect(compactText).toContain('unclassified count: 0');
+    expect(compactText).not.toContain('unclassified count: 0');
 
     const detailedText = renderDetailedSnapshot(view);
     expect(detailedText).toContain('Configured Pipelines:');

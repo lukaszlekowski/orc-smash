@@ -8,6 +8,12 @@ provider runtime or calls a model API. The active design contract is
 [`docs/dev/spec.md`](../dev/spec.md) (acceptance contract); the `plan` approval
 loop audits both as one set through the named `specPath` file input while
 keeping `plan.md` as its target.
+The pair is iteration-scoped: create or update it before each new feature or
+implementation cycle. If no cycle is active, the files may be absent; completed
+or superseded pairs may be deleted. The `docs/dev/archived/` directory is historical
+storage outside the normal agent workflow and its files are likely outdated. Do not
+search it or use any of its context in implementation decisions, analysis, ideas,
+proposals, plans, or other LLM output.
 [`AGENTS.md`](../../AGENTS.md) preserves
 the safety and supervisor invariants that apply during the migration.
 

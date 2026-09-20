@@ -298,6 +298,14 @@ itself.
 
 ## 6. Plan before implementation; verify every real provider path
 
+- The spec/plan pair is iteration-scoped. For every new feature or implementation
+  cycle, create or update `docs/dev/spec.md` and `docs/dev/plan.md` before provider
+  work begins; future agents use that pair as the current source of acceptance and
+  delivery truth. If the repository has no active implementation cycle, the pair may
+  be absent. When a cycle is superseded or closed, its documents may be deleted;
+  `docs/dev/archived/` is a historical dump outside the normal agent workflow.
+  Its files are likely outdated: do not search them or use any of their context in
+  implementation decisions, analysis, ideas, proposals, plans, or other LLM output.
 - `docs/dev/spec.md` is the acceptance contract (objective, acceptance
   criteria, constraints, non-goals, research-derived requirements) and
   `docs/dev/plan.md` is the delivery and closeout source (architecture,

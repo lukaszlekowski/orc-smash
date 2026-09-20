@@ -206,6 +206,15 @@ pipelines:                   # ordered stages referencing loops/tasks
 
 **Pipelines.** The packaged `default` pipeline is `plan → implement → review`. The optional `research-first` pipeline prepends `research → create-plan`. Research is never a prerequisite for the default pipeline, and every stage transition remains operator-confirmed.
 
+**Development planning.** Each active feature or implementation cycle has one
+paired `docs/dev/spec.md` and `docs/dev/plan.md`: the spec defines acceptance and
+the plan defines delivery and closeout. Create or update the pair before provider
+work begins. A repository with no active implementation cycle may have no pair;
+completed or superseded pairs may be deleted. The `docs/dev/archived/` directory is
+historical storage outside the normal agent workflow; its files are likely outdated.
+Do not search it or use any of its context in implementation decisions, analysis,
+ideas, proposals, plans, or other LLM output.
+
 **Contracts (summary).** Decision artifacts normalize configured tokens to `accepted`, `retry`, or `unknown`; `unknown` is terminal and repair runs only after a concrete `retry`. Completion artifacts require exactly one `## Outcome` section whose first non-blank line is `COMPLETED` or `BLOCKED`. The implementation-ledger validator distinguishes `valid`, structurally `blocked` (with bounded diagnostics), and malformed `unknown`; blocked ledgers are durable evidence but never unlock a successor.
 
 > Artifact lineage, fingerprint semantics, target-drift / stale-evidence reasons, second-opinion chains, and the qualified-decision correction flow are specified in [AGENTS.md](./AGENTS.md) and [docs/architecture/overview.md](./docs/architecture/overview.md).
