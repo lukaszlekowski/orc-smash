@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-21
+
+### Added
+- Add GPT-6 Astra to the Codex model catalogue with its supported effort
+  levels.
+- Add the current OpenCode Go model catalogue, including new DeepSeek, GLM,
+  Grok, Kimi, LongCat, MiMo, MiniMax, Muse Spark, Qwen, and Hy models.
+- Add tag-triggered npm publishing through GitHub Actions Trusted Publishing
+  with OIDC and a tag-to-package-version check.
+
+### Changed
+- Refresh provider defaults: AGY uses `gemini-3.8-flash`, Claude uses
+  `glm-5.3-flash`, Codex defaults to `xhigh` effort, and follow-up skills use
+  Claude.
+- Update project snapshots to color target availability and hide empty phase
+  rows and zero unclassified counts in compact output.
+- Clarify the iteration-scoped spec/plan lifecycle and exclude the historical
+  `docs/dev/archived/` dump from normal agent context.
+
 ## [1.1.1] - 2026-08-25
 
 ### Fixed
