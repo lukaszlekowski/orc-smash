@@ -351,8 +351,10 @@ function authorizeIdentity(target: KillTarget, deps: GateDeps): GateDecision {
 }
 
 /**
- * Gate a group signal. Signal 0 is an observation used for a separate
- * group-absence check; terminating signals always require identity authority.
+ * Gate a group signal. Fresh signal-0 checks are structural observations used
+ * for group-absence checks; durable signal-0 checks also require identity
+ * authority because persisted leaders may have disappeared or been recycled.
+ * Terminating signals always require identity authority.
  */
 export function killProcessGroupGated(
   target: KillTarget,
@@ -365,7 +367,7 @@ export function killProcessGroupGated(
     return rejected(target, signal, forbidden ? 'structural' : 'self-unresolvable', structural);
   }
 
-  const decision = signal === 0
+  const decision = signal === 0 && target.source === 'fresh'
     ? ({
         outcome: 'authorized',
         source: target.source,
