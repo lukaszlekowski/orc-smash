@@ -15,6 +15,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Enforce docs/dev privacy
+        run: |
+          if [ -n "$(git ls-files docs/dev)" ]; then
+            echo "::error::docs/dev is local-only and must never be tracked"
+            git ls-files docs/dev
+            exit 1
+          fi
+
       - name: Install pnpm
         uses: pnpm/action-setup@v6
 

@@ -29,11 +29,8 @@ coverage/
 *.lcov
 .nyc_output/
 
-# Local docs / scratch
+# Local docs / scratch (docs/dev is strictly local-only, never tracked)
 /docs/dev/*
-!/docs/dev/plan.md
-!/docs/dev/research.md
-!/docs/dev/spec.md
 /temp-*
 .orc-smash/
 

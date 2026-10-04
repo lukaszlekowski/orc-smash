@@ -306,6 +306,10 @@ itself.
   `docs/dev/archived/` is a historical dump outside the normal agent workflow.
   Its files are likely outdated: do not search them or use any of their context in
   implementation decisions, analysis, ideas, proposals, plans, or other LLM output.
+- **`docs/dev/` is strictly local-only**: it is never committed or pushed. The
+  `.gitignore` rules are absolute (no tracked exceptions), and a CI privacy
+  guard fails any branch that tracks a `docs/dev` path. Never use `git add -f`
+  on it; never reintroduce negation rules for it.
 - `docs/dev/spec.md` is the acceptance contract (objective, acceptance
   criteria, constraints, non-goals, research-derived requirements) and
   `docs/dev/plan.md` is the delivery and closeout source (architecture,
